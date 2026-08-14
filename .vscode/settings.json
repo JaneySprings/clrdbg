@@ -1,0 +1,13 @@
+{
+    "dotrush.roslyn.projectOrSolutionFiles": [
+        "clrdbg.slnx"
+    ],
+    "files.exclude": {
+        "**/bin": true,
+        "**/obj": true,
+        ".config": true,
+        ".editorconfig": true,
+        ".gitignore": true,
+        ".gitmodules": true
+    }
+}

@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <Import Project="$(MSBuildThisFileDirectory)..\Common.Build.props" />
+    
+    <PropertyGroup>
+        <OutputType>Library</OutputType>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="NLog" />
+    </ItemGroup>
+</Project>
