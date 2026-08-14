@@ -86,8 +86,7 @@ internal sealed class DebuggingAssemblyResolver(List<string> modulePaths) : IAss
         // If this is a full public key (not already a token), hash it down to an 8-byte token.
         if ((assemblyDef.Flags & System.Reflection.AssemblyFlags.PublicKey) != 0 &&
             publicKeyOrToken.Length > 8) {
-            using var sha1 = System.Security.Cryptography.SHA1.Create();
-            var hash = sha1.ComputeHash(publicKeyOrToken);
+            var hash = System.Security.Cryptography.SHA1.HashData(publicKeyOrToken);
             // Public key token = last 8 bytes of SHA-1 hash, reversed
             var token = new byte[8];
             for (int i = 0; i < 8; i++)

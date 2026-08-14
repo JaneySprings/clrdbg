@@ -19,10 +19,12 @@ public class ExceptionTests : BaseDebugTestFixture {
         """;
     }
 
+    private static readonly string[] filters = new[] { "all" };
+
     [Test]
     public void BreakOnAllExceptionsTest() {
         Launch();
-        SetExceptionBreakpoints(new[] { "all" }, ("all", null));
+        SetExceptionBreakpoints(filters, ("all", null));
         ConfigurationDone();
 
         var stopped = WaitForStopped(StoppedEvent.ReasonValue.Exception);
@@ -33,10 +35,12 @@ public class ExceptionTests : BaseDebugTestFixture {
         Assert.That(exceptionInfo.Details?.Message, Is.EqualTo("comparer boom"));
     }
 
+    private static readonly string[] filters = new[] { "userUnhandled" };
+
     [Test]
     public void UserUnhandledExceptionTest() {
         Launch();
-        SetExceptionBreakpoints(new[] { "userUnhandled" }, ("userUnhandled", null));
+        SetExceptionBreakpoints(filters, ("userUnhandled", null));
         ConfigurationDone();
 
         var stopped = WaitForStopped(StoppedEvent.ReasonValue.Exception);

@@ -72,6 +72,10 @@ public class VariableTests : BaseDebugTestFixture {
         Assert.That(thirdPage[^1].Name, Is.EqualTo("[59] [int]"));
     }
 
+    private static readonly string[] expected = new[] {
+            "PrivateProperty [int]", "PublicField [int]", "PublicProperty [int]", "privateField [int]", "Static members"
+        };
+
     [Test]
     public void UserTypeMembersAreFlatTest() {
         var threadId = StopAtMarker();
@@ -79,9 +83,7 @@ public class VariableTests : BaseDebugTestFixture {
 
         var members = GetVariables(item.VariablesReference);
         var names = members.Select(it => it.Name).ToList();
-        Assert.That(names, Is.EqualTo(new[] {
-            "PrivateProperty [int]", "PublicField [int]", "PublicProperty [int]", "privateField [int]", "Static members"
-        }), "User code types show all members inline in ordinal order");
+        Assert.That(names, Is.EqualTo(expected), "User code types show all members inline in ordinal order");
     }
 
     [Test]
