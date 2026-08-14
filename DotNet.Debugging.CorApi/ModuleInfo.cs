@@ -1,0 +1,74 @@
+using ICorDebugSharp;
+
+namespace DotNet.Debugging.CorApi;
+
+/// <summary>
+/// Tracks information about a loaded module including its symbol reader
+/// </summary>
+public class ModuleInfo : IDisposable {
+    /// <summary>
+    /// The ICorDebugModule for this module
+    /// </summary>
+    public ICorDebugModule Module { get; }
+
+    /// <summary>
+    /// Full path to the module on disk (if available)
+    /// </summary>
+    public string ModulePath { get; }
+
+    /// <summary>
+    /// Module name (typically the filename without path)
+    /// </summary>
+    public string ModuleName { get; }
+
+    /// <summary>
+    /// Symbol reader for this module (null if no PDB available)
+    /// </summary>
+    public ModuleMetadataReader MetadataReader { get; }
+    public bool SymbolsFromDecompiled { get; set; }
+
+    /// <summary>
+    /// Base address of the module in memory
+    /// </summary>
+    public CORDB_ADDRESS BaseAddress { get; }
+    public bool IsUserCode { get; }
+
+    public ModuleInfo(ICorDebugModule module, string modulePath, ModuleMetadataReader metadataReader, bool isUserCode) {
+        Module = module;
+        ModulePath = modulePath;
+        IsUserCode = isUserCode;
+        ModuleName = Path.GetFileName(modulePath);
+        MetadataReader = metadataReader;
+        BaseAddress = module.BaseAddress;
+    }
+
+    /// <summary>
+    /// Check if this module contains the given source file
+    /// </summary>
+    public bool ContainsSourceFile(string sourceFilePath) {
+        if (MetadataReader.HasSymbols is false)
+            return false;
+
+        var normalizedPath = sourceFilePath.Replace('\\', '/');
+        var fileName = Path.GetFileName(normalizedPath);
+
+        foreach (var docPath in MetadataReader.GetSourceFiles()) {
+            var normalizedDocPath = docPath.Replace('\\', '/');
+
+            // Try exact match
+            if (string.Equals(normalizedPath, normalizedDocPath, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            // Try filename match
+            var docFileName = Path.GetFileName(normalizedDocPath);
+            if (string.Equals(fileName, docFileName, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    public void Dispose() {
+        MetadataReader.Dispose();
+    }
+}
