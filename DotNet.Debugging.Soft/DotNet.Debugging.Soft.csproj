@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+	<Import Project="..\Common.Build.props" />
+
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<AssemblyName>clrdbg</AssemblyName>
+		<OutputPath>$(AssetsPath)</OutputPath>
+		<SelfContained>true</SelfContained>
+		<SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+		<InvariantGlobalization>true</InvariantGlobalization>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Microsoft.VisualStudio.Shared.VSCodeDebugProtocol" />
+		<ProjectReference Include="..\DotNet.Debugging.Common\DotNet.Debugging.Common.csproj" />
+		<ProjectReference Include="..\DotNet.Debugging.CorApi\DotNet.Debugging.CorApi.csproj" />
+	</ItemGroup>
+</Project>
