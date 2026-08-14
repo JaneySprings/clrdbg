@@ -3,10 +3,10 @@ using NLog.Config;
 using NLog.Targets;
 using NLog.Targets.Wrappers;
 
-namespace DotNet.Debugging.Common;
+namespace DotNet.Debugging.Common.Logging;
 
 public static class LogConfig {
-    private static readonly string _logDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logs");
+    private static readonly string _logDir = Path.Combine(AppContext.BaseDirectory, "logs");
     public static readonly string ErrorLogFile = Path.Combine(_logDir, "Error.log");
     public static readonly string DebugLogFile = Path.Combine(_logDir, "Debug.log");
 
@@ -26,7 +26,7 @@ public static class LogConfig {
         var errorTarget = new FileTarget() {
             FileName = ErrorLogFile,
             DeleteOldFileOnStartup = true,
-            Layout = "${longdate}|${message}${newline}at ${stacktrace:format=Flat:separator= at :reverse=true}${newline}${callsite-filename}[${callsite-linenumber}]",
+            Layout = "${longdate}|${message}",
             MaxArchiveFiles = 1,
             ArchiveAboveSize = 1 * 1024 * 1024, //MB
         };

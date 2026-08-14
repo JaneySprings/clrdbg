@@ -1,5 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
-    <Import Project="$(MSBuildThisFileDirectory)..\Common.Build.props" />
+    <Import Project="..\Common.Build.props" />
     
     <PropertyGroup>
         <OutputType>Library</OutputType>
