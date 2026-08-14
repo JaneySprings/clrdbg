@@ -5,6 +5,7 @@
 		<OutputType>Exe</OutputType>
 		<AssemblyName>clrdbg</AssemblyName>
 		<OutputPath>$(AssetsPath)</OutputPath>
+		<PublishDir>$(OutputPath)</PublishDir>
 		<SelfContained>true</SelfContained>
 		<SatelliteResourceLanguages>en</SatelliteResourceLanguages>
 		<InvariantGlobalization>true</InvariantGlobalization>
