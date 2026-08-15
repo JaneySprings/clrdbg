@@ -42,22 +42,14 @@ public static partial class DebuggerExtensions {
             return threadName;
         return "<No Name>";
     }
-    public static string ToProcessName(this int processId) {
-        try {
-            return System.Diagnostics.Process.GetProcessById(processId).ProcessName;
-        }
-        catch {
-            return "dotnet";
-        }
-    }
     public static string ToLoadedAssemblyMessage(this ModuleLoadedInfo moduleInfo, string processName, bool justMyCode) {
-        var symbolStatus = "Cannot find or open the PDB file.";
+        var symbolStatus = Resources.MessageCannotFindPdb;
         if (moduleInfo.SymbolsLoaded)
-            symbolStatus = "Symbols loaded.";
+            symbolStatus = Resources.MessagePdbLoaded;
         else if (moduleInfo.IsOptimized && justMyCode)
-            symbolStatus = "Skipped loading symbols. Module is optimized and the debugger option 'Just My Code' is enabled.";
+            symbolStatus = Resources.MessagePdfSkipped;
 
-        return $"{processName} ({moduleInfo.ProcessId}): Loaded '{moduleInfo.ModulePath}'. {symbolStatus}";
+        return $"dotnet ({moduleInfo.ProcessId}): Loaded '{moduleInfo.ModulePath}'. {symbolStatus}";
     }
     public static string ToInterpolatedLogMessage(this ManagedDebugger debugger, string message, int threadId) {
         var result = LogpointExpressionRegex().Replace(message, match => {

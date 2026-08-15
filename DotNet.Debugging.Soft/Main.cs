@@ -2,11 +2,12 @@ namespace DotNet.Debugging.Soft;
 
 public class Program {
     private static void Main(string[] args) {
-        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("METEOR_DEBUG_WAIT"))) {
-            while (!System.Diagnostics.Debugger.IsAttached) {
+#if DEBUG
+        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WAIT_FOR_DEBUGGER"))) {
+            while (!System.Diagnostics.Debugger.IsAttached)
                 Thread.Sleep(500);
-            }
         }
+#endif
 
         var debugSession = new DebugSession(Console.OpenStandardInput(), Console.OpenStandardOutput());
         debugSession.Start();

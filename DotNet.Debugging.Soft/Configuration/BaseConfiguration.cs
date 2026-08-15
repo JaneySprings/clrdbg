@@ -20,6 +20,7 @@ public abstract class BaseConfiguration {
         EnableStepFiltering = properties.TryGetValue("enableStepFiltering").ToValue<bool>(false);
     }
 
-    public abstract IDebugAgent CreateDebugAgent();
+    public abstract IDebugAgent CreateDebugAgent(DebugSession debugSession);
+    public abstract string GetApplicationName();
     public abstract void VerifyMissingProperties();
 }

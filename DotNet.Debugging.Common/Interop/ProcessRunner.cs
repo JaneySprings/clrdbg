@@ -7,20 +7,15 @@ public class ProcessRunner {
     private List<string> standardError = null!;
     private readonly Process process;
 
-    public ProcessRunner(FileInfo executable, ProcessArgumentBuilder? builder = null, IProcessLogger? logger = null) {
-        process = new Process();
-        process.StartInfo.Arguments = builder?.ToString();
-        process.StartInfo.FileName = executable.FullName;
-        process.StartInfo.WorkingDirectory = executable.DirectoryName;
-
-        SetupProcessLogging(logger);
+    public ProcessRunner(FileInfo executable, ProcessArgumentBuilder? builder = null, IProcessLogger? logger = null) : this(executable.FullName, builder, logger) {
+        SetWorkingDirectory(executable.DirectoryName);
     }
-    public ProcessRunner(string command, ProcessArgumentBuilder? builder = null) {
+    public ProcessRunner(string command, ProcessArgumentBuilder? builder = null, IProcessLogger? logger = null) {
         process = new Process();
         process.StartInfo.Arguments = builder?.ToString();
         process.StartInfo.FileName = command;
 
-        SetupProcessLogging(null);
+        SetupProcessLogging(logger);
     }
 
     private void SetupProcessLogging(IProcessLogger? logger = null) {
@@ -49,6 +44,10 @@ public class ProcessRunner {
 
     public void SetEnvironmentVariable(string key, string value) {
         process.StartInfo.EnvironmentVariables[key] = value;
+    }
+    public void SetWorkingDirectory(string? directoryPath) {
+        if (!string.IsNullOrEmpty(directoryPath) && Directory.Exists(directoryPath))
+            process.StartInfo.WorkingDirectory = directoryPath;
     }
 
     public void Kill() {

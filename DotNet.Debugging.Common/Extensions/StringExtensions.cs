@@ -26,7 +26,10 @@ public static class StringExtensions {
         return source?.Equals(value, StringComparison.OrdinalIgnoreCase) == true;
     }
 
-    public static string ToPlatformPath(this string path) {
+    public static string ToPlatformPath(this string? path) {
+        if (string.IsNullOrEmpty(path))
+            return string.Empty;
+
         return path
             .Replace('\\', System.IO.Path.DirectorySeparatorChar)
             .Replace('/', System.IO.Path.DirectorySeparatorChar)

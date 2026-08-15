@@ -5,28 +5,25 @@ namespace DotNet.Debugging.Soft;
 
 public interface IDebugAgent : IDisposable {
     public BaseConfiguration Configuration { get; }
-
-    public void PrepareTarget(DebugSession debugSession);
     public void Connect(ManagedDebugger debugger);
 }
 
 public abstract class BaseDebugAgent<TConfiguration> : IDebugAgent where TConfiguration : BaseConfiguration {
-    protected List<Action> Disposables { get; }
     protected CurrentClassLogger Logger { get; }
+    protected List<Action> Disposables { get; }
+    protected DebugSession DebugSession { get; }
 
     public TConfiguration Configuration { get; }
+    BaseConfiguration IDebugAgent.Configuration => Configuration;
 
-    protected BaseDebugAgent(TConfiguration configuration) {
+    protected BaseDebugAgent(TConfiguration configuration, DebugSession debugSession) {
         Logger = new CurrentClassLogger(nameof(IDebugAgent));
         Disposables = new List<Action>();
         Configuration = configuration;
+        DebugSession = debugSession;
     }
 
-    public abstract void PrepareTarget(DebugSession debugSession);
     public abstract void Connect(ManagedDebugger debugger);
-
-    BaseConfiguration IDebugAgent.Configuration => Configuration;
-
     public void Dispose() {
         foreach (var disposable in Disposables) {
             try {

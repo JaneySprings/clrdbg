@@ -4,9 +4,9 @@ using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
 namespace DotNet.Debugging.Soft;
 
 public class AttachDebugAgent : BaseDebugAgent<AttachConfiguration> {
-    public AttachDebugAgent(AttachConfiguration configuration) : base(configuration) { }
+    public AttachDebugAgent(AttachConfiguration configuration, DebugSession debugSession) : base(configuration, debugSession) { }
 
-    public override void PrepareTarget(DebugSession debugSession) {
+    public override void Connect(ManagedDebugger debugger) {
         // ICorDebug does not report the exit of a process it did not launch itself - watch the process explicitly
         var watchdog = new System.Timers.Timer(1000);
         watchdog.Elapsed += (_, _) => {
@@ -14,12 +14,11 @@ public class AttachDebugAgent : BaseDebugAgent<AttachConfiguration> {
                 return;
 
             watchdog.Stop();
-            debugSession.Protocol.SendEvent(new TerminatedEvent());
+            DebugSession.Protocol.SendEvent(new TerminatedEvent());
         };
         watchdog.Start();
         Disposables.Add(() => watchdog.Dispose());
-    }
-    public override void Connect(ManagedDebugger debugger) {
+
         debugger.Attach(Configuration.ProcessId, Configuration.JustMyCode);
     }
 
