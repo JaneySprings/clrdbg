@@ -34,3 +34,13 @@ public partial class DebugSession {
         });
     }
 }
+
+public class PagedVariablesReference {
+    public int VariablesReference { get; }
+    public int Offset { get; }
+
+    public PagedVariablesReference(int variablesReference, int offset) {
+        VariablesReference = variablesReference;
+        Offset = offset;
+    }
+}

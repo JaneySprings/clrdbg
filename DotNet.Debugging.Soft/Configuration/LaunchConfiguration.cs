@@ -55,15 +55,15 @@ public class LaunchConfiguration : BaseConfiguration {
     }
     public override void VerifyMissingProperties() {
         if (string.IsNullOrEmpty(Program) || (!File.Exists(Program) && !Directory.Exists(Program)))
-            throw ServerExtensions.GetProtocolException(string.Format(Resources.MessageInvalidProgram, Program));
+            throw Session.GetProtocolException(string.Format(Resources.MessageInvalidProgram, Program));
 
         if (MobileOptions != null) {
             if (string.IsNullOrEmpty(MobileOptions.Platform))
-                throw ServerExtensions.GetProtocolException("The launch configuration 'platform' is required for mobile debugging (e.g. 'ios' or 'maccatalyst').");
+                throw Session.GetProtocolException("The launch configuration 'platform' is required for mobile debugging (e.g. 'ios' or 'maccatalyst').");
             if (string.IsNullOrEmpty(MobileOptions.RuntimeIdentifier))
-                throw ServerExtensions.GetProtocolException("The launch configuration 'runtimeIdentifier' is required for mobile debugging (e.g. 'maccatalyst-arm64').");
+                throw Session.GetProtocolException("The launch configuration 'runtimeIdentifier' is required for mobile debugging (e.g. 'maccatalyst-arm64').");
             if (MobileOptions.IsSimulator && string.IsNullOrEmpty(MobileOptions.Device))
-                throw ServerExtensions.GetProtocolException("The launch configuration 'device' (simulator UDID) is required to debug on the iOS simulator.");
+                throw Session.GetProtocolException("The launch configuration 'device' (simulator UDID) is required to debug on the iOS simulator.");
         }
     }
 

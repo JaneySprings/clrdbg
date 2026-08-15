@@ -44,4 +44,8 @@ public abstract class Session : DebugAdapterBase, IProcessLogger {
         logger.Error(args.Exception);
         OnUnhandledException(args.Exception);
     }
+
+    public static ProtocolException GetProtocolException(string message) {
+        return new ProtocolException(message, 0, message, url: $"file://{LogConfig.DebugLogFile}");
+    }
 }

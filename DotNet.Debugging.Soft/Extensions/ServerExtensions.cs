@@ -6,9 +6,6 @@ using DebugProtocol = Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages
 namespace DotNet.Debugging.Soft.Extensions;
 
 public static class ServerExtensions {
-    public static ProtocolException GetProtocolException(string message) {
-        return new ProtocolException(message, 0, message, url: $"file://{LogConfig.DebugLogFile}");
-    }
     public static string? TrimExpression(this DebugProtocol.EvaluateArguments args) {
         return args.Expression?.TrimEnd(';');
     }
@@ -30,7 +27,7 @@ public static class ServerExtensions {
             if (ex is ProtocolException)
                 throw;
             CurrentSessionLogger.Error($"[Handled] {ex.ToString()}");
-            throw GetProtocolException(ex.Message);
+            throw Session.GetProtocolException(ex.Message);
         }
     }
 

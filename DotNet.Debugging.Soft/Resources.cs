@@ -2,7 +2,8 @@ namespace DotNet.Debugging.Soft;
 
 public static class Resources {
     public const string MessageMissingProcess = "Must specify either processId or processName.";
-    public const string MessageInvalidProcess = "Failed to attach to process {0}.";
+    public const string MessageNoRunningProcesses = "No process with the specified name is currently running.";
+    public const string MessageMultipleProcesses = "Multiple processes were found matching the process name. Attach by process id instead.";
     public const string MessageInvalidProgram = "launch: program '{0}' does not exist.";
 
     public const string MessageCannotFindPdb = "Cannot find or open the PDB file.";

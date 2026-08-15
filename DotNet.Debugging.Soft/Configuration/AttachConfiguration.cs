@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using DotNet.Debugging.Common.Extensions;
 using DotNet.Debugging.Soft.Extensions;
 using Newtonsoft.Json.Linq;
@@ -23,6 +24,20 @@ public class AttachConfiguration : BaseConfiguration {
     }
     public override void VerifyMissingProperties() {
         if (string.IsNullOrEmpty(ProcessName) && ProcessId <= 0)
-            throw ServerExtensions.GetProtocolException(Resources.MessageMissingProcess);
+            throw Session.GetProtocolException(Resources.MessageMissingProcess);
+    }
+
+    public int GetProcessId() {
+        if (ProcessId > 0)
+            return ProcessId;
+
+        ArgumentNullException.ThrowIfNullOrEmpty(ProcessName);
+        var processes = Process.GetProcessesByName(ProcessName);
+        if (processes == null || processes.Length == 0)
+            throw Session.GetProtocolException(Resources.MessageNoRunningProcesses);
+        if (processes.Length > 1)
+            throw Session.GetProtocolException(Resources.MessageMultipleProcesses);
+
+        return processes[0].Id;
     }
 }

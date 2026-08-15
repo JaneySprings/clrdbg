@@ -24,3 +24,13 @@ public partial class DebugSession {
         });
     }
 }
+
+public class SourceLocation {
+    public string FileName { get; }
+    public int Line { get; }
+
+    public SourceLocation(string fileName, int line) {
+        FileName = fileName;
+        Line = line;
+    }
+}
