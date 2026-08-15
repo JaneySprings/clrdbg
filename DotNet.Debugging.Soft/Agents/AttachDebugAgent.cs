@@ -3,10 +3,10 @@ using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
 
 namespace DotNet.Debugging.Soft;
 
-public class AttachLaunchAgent : BaseLaunchAgent {
-    public AttachLaunchAgent(LaunchConfiguration configuration) : base(configuration) { }
+public class AttachDebugAgent : BaseDebugAgent<AttachConfiguration> {
+    public AttachDebugAgent(AttachConfiguration configuration) : base(configuration) { }
 
-    public override void Launch(DebugSession debugSession) {
+    public override void PrepareTarget(DebugSession debugSession) {
         // ICorDebug does not report the exit of a process it did not launch itself - watch the process explicitly
         var watchdog = new System.Timers.Timer(1000);
         watchdog.Elapsed += (_, _) => {

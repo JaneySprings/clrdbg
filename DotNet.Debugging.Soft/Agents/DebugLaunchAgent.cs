@@ -1,18 +1,14 @@
 using DotNet.Debugging.CorApi;
-using DotNet.Debugging.CorApi.Models;
 
 namespace DotNet.Debugging.Soft;
 
-public class DebugLaunchAgent : BaseLaunchAgent {
-    private readonly LaunchInfo launchInfo;
+public class LaunchDebugAgent : BaseDebugAgent<LaunchConfiguration> {
+    public LaunchDebugAgent(LaunchConfiguration configuration) : base(configuration) { }
 
-    public DebugLaunchAgent(LaunchConfiguration configuration) : base(configuration) {
-        launchInfo = configuration.GetLaunchInfo();
-    }
-    public override void Launch(DebugSession debugSession) {
+    public override void PrepareTarget(DebugSession debugSession) {
         // ICorDebug launches the debuggee itself when the debugger connects (see ManagedDebugger.ConfigurationDone)
     }
     public override void Connect(ManagedDebugger debugger) {
-        debugger.Launch(launchInfo, Configuration.JustMyCode);
+        debugger.Launch(Configuration.GetLaunchInfo(), Configuration.JustMyCode);
     }
 }

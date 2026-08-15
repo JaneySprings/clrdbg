@@ -14,21 +14,20 @@ public partial class ManagedDebugger {
     private void HandleProcessExited(object? sender, ExitProcessCorDebugManagedCallbackEventArgs exitProcessCorDebugManagedCallbackEventArgs) {
         _logger?.Invoke($"Process exited");
         OnExited?.Invoke();
-        OnTerminated?.Invoke();
     }
 
     private void HandleThreadCreated(object? sender, CreateThreadCorDebugManagedCallbackEventArgs createThreadCorDebugManagedCallbackEventArgs) {
         var corThread = createThreadCorDebugManagedCallbackEventArgs.Thread;
         _mainThreadId ??= corThread.Id;
         _threads[corThread.Id] = corThread;
-        OnThreadStarted?.Invoke(corThread.Id, $"Thread {corThread.Id}");
+        OnThreadStarted?.Invoke(corThread.Id);
         Continue();
     }
 
     private void HandleThreadExited(object? sender, ExitThreadCorDebugManagedCallbackEventArgs exitThreadCorDebugManagedCallbackEventArgs) {
         var corThread = exitThreadCorDebugManagedCallbackEventArgs.Thread;
         _threads.Remove(corThread.Id);
-        OnThreadExited?.Invoke(corThread.Id, $"Thread {corThread.Id}");
+        OnThreadExited?.Invoke(corThread.Id);
         Continue();
     }
 
@@ -86,7 +85,7 @@ public partial class ManagedDebugger {
         }
 
         // Fire the module loaded event
-        OnModuleLoaded?.Invoke(modulePath, Path.GetFileName(modulePath), modulePath);
+        OnModuleLoaded?.Invoke(modulePath, Path.GetFileName(modulePath), modulePath, isUserCode);
         OnModuleLoadedVerbose?.Invoke(new ModuleLoadedInfo(modulePath, _process?.Id ?? 0, metadataReader.HasSymbols, isUserCode is false));
 
         // Try to bind any pending breakpoints now that we have a new module with symbols

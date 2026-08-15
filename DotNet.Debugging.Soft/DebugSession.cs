@@ -14,19 +14,15 @@ public class DebugSession : Session {
     // Far above any reference number issued by the debugger's variable and frame managers
     private const int PagingHandlesStart = 1_000_000_000;
 
-    private BaseLaunchAgent launchAgent = null!;
-
     private readonly Handles<SourceLocation> gotoHandles = new Handles<SourceLocation>();
     private readonly Handles<PagedVariablesReference> pagingHandles = new Handles<PagedVariablesReference>(PagingHandlesStart);
     private readonly Dictionary<int, string> logpointMessages = new Dictionary<int, string>();
     private readonly Dictionary<string, List<int>> logpointIdsByFile = new Dictionary<string, List<int>>();
-    private readonly ManagedDebugger session;
-
     private readonly ExceptionFilterOptions allExceptionsFilter = new ExceptionFilterOptions();
     private readonly ExceptionFilterOptions userUnhandledExceptionsFilter = new ExceptionFilterOptions();
+    private readonly ManagedDebugger session;
 
-    private bool justMyCode = true;
-    private string? debuggeeProcessName;
+    private IDebugAgent debugAgent = null!;
 
     public DebugSession(Stream input, Stream output) : base(input, output) {
         session = new ManagedDebugger(message => CurrentSessionLogger.Debug($"[CorDebug] {message}"));
@@ -34,9 +30,7 @@ public class DebugSession : Session {
         session.OnStopped += TargetStopped;
         session.OnStopped2 += TargetStoppedAtSource;
         session.OnExceptionThrown += TargetExceptionThrown;
-        session.OnContinued += TargetContinued;
         session.OnExited += TargetExited;
-        session.OnTerminated += TargetTerminated;
         session.OnThreadStarted += TargetThreadStarted;
         session.OnThreadExited += TargetThreadStopped;
         session.OnModuleLoaded += AssemblyLoaded;
@@ -46,7 +40,7 @@ public class DebugSession : Session {
         session.SendRunInTerminalRequest += RunInTerminal;
     }
 
-    protected override void OnUnhandledException(Exception ex) => launchAgent?.Dispose();
+    protected override void OnUnhandledException(Exception ex) => debugAgent?.Dispose();
 
     #region Initialize
     protected override InitializeResponse HandleInitializeRequest(InitializeArguments arguments) {
@@ -74,10 +68,11 @@ public class DebugSession : Session {
     protected override LaunchResponse HandleLaunchRequest(LaunchArguments arguments) {
         return ServerExtensions.DoSafe(() => {
             var configuration = new LaunchConfiguration(arguments.ConfigurationProperties);
-            justMyCode = configuration.JustMyCode;
-            launchAgent = configuration.GetLaunchAgent();
-            launchAgent.Launch(this);
-            InvokeDebugger(() => launchAgent.Connect(session));
+            configuration.VerifyMissingProperties();
+
+            debugAgent = configuration.CreateDebugAgent();
+            debugAgent.PrepareTarget(this);
+            InvokeDebugger(() => debugAgent.Connect(session));
             // Breakpoints arrive after this event and the launch itself is deferred until 'ConfigurationDone'
             Protocol.SendEvent(new InitializedEvent());
             return new LaunchResponse();
@@ -87,14 +82,12 @@ public class DebugSession : Session {
     #region Attach
     protected override AttachResponse HandleAttachRequest(AttachArguments arguments) {
         return ServerExtensions.DoSafe(() => {
-            var configuration = new LaunchConfiguration(arguments.ConfigurationProperties);
-            if (configuration.ProcessId == 0)
-                throw new ProtocolException("Missing process ID");
+            var configuration = new AttachConfiguration(arguments.ConfigurationProperties);
+            configuration.VerifyMissingProperties();
 
-            justMyCode = configuration.JustMyCode;
-            launchAgent = configuration.GetLaunchAgent();
-            launchAgent.Launch(this);
-            InvokeDebugger(() => launchAgent.Connect(session));
+            debugAgent = configuration.CreateDebugAgent();
+            debugAgent.PrepareTarget(this);
+            InvokeDebugger(() => debugAgent.Connect(session));
             // Breakpoints arrive after this event and the attach itself is deferred until 'ConfigurationDone'
             Protocol.SendEvent(new InitializedEvent());
             return new AttachResponse();
@@ -112,14 +105,14 @@ public class DebugSession : Session {
     #region Terminate
     protected override TerminateResponse HandleTerminateRequest(TerminateArguments arguments) {
         try {
-            if (launchAgent is DebugLaunchAgent or AttachLaunchAgent)
+            if (debugAgent is LaunchDebugAgent or AttachDebugAgent)
                 InvokeDebugger(() => session.Terminate());
         }
         catch (Exception ex) {
             CurrentSessionLogger.Error($"[Handled] Failed to terminate the debuggee {ex}");
         }
         finally {
-            launchAgent?.Dispose();
+            debugAgent?.Dispose();
             // The debugger detaches on 'Terminate' and can no longer deliver the exit event itself
             Protocol.SendEvent(new TerminatedEvent());
         }
@@ -129,9 +122,9 @@ public class DebugSession : Session {
     #region Disconnect
     protected override DisconnectResponse HandleDisconnectRequest(DisconnectArguments arguments) {
         try {
-            if (launchAgent is DebugLaunchAgent or AttachLaunchAgent) {
+            if (debugAgent is LaunchDebugAgent or AttachDebugAgent) {
                 // Per the protocol, a launched debuggee is terminated by default while an attached one is left running
-                var terminateDebuggee = arguments.TerminateDebuggee ?? launchAgent is DebugLaunchAgent;
+                var terminateDebuggee = arguments.TerminateDebuggee ?? debugAgent is LaunchDebugAgent;
                 InvokeDebugger(() => session.Disconnect(terminateDebuggee));
             }
         }
@@ -139,7 +132,7 @@ public class DebugSession : Session {
             CurrentSessionLogger.Error($"[Handled] Failed to disconnect from the debuggee {ex}");
         }
         finally {
-            launchAgent?.Dispose();
+            debugAgent?.Dispose();
         }
         return new DisconnectResponse();
     }
@@ -243,15 +236,7 @@ public class DebugSession : Session {
     protected override SetFunctionBreakpointsResponse HandleSetFunctionBreakpointsRequest(SetFunctionBreakpointsArguments arguments) {
         return ServerExtensions.DoSafe(() => {
             var breakpointsInfos = arguments.Breakpoints ?? new List<FunctionBreakpoint>();
-            var requests = breakpointsInfos.Select(it => {
-                var functionName = it.Name;
-                var functionParts = it.Name.Split('!');
-                if (functionParts.Length == 2)
-                    functionName = functionParts[1];
-
-                return new FunctionBreakpointRequest(functionName, it.Condition, it.HitCondition);
-            }).ToArray();
-
+            var requests = breakpointsInfos.Select(it => new FunctionBreakpointRequest(it.Name, it.Condition, it.HitCondition)).ToArray();
             var breakpoints = InvokeDebugger(() => session.SetFunctionBreakpoints(requests));
             return new SetFunctionBreakpointsResponse(breakpoints.Select(it => it.ToBreakpoint()).ToList());
         });
@@ -425,34 +410,25 @@ public class DebugSession : Session {
             AllThreadsStopped = true,
         });
     }
-    private void TargetContinued(int threadId) {
-        Protocol.SendEvent(new ContinuedEvent() {
-            ThreadId = threadId,
-            AllThreadsContinued = true,
-        });
-    }
     private void TargetExited() {
         Protocol.SendEvent(new ExitedEvent(0));
-    }
-    private void TargetTerminated() {
         Protocol.SendEvent(new TerminatedEvent());
     }
-    private void TargetThreadStarted(int threadId, string name) {
+    private void TargetThreadStarted(int threadId) {
         Protocol.SendEvent(new ThreadEvent(ThreadEvent.ReasonValue.Started, threadId));
     }
-    private void TargetThreadStopped(int threadId, string name) {
+    private void TargetThreadStopped(int threadId) {
         Protocol.SendEvent(new ThreadEvent(ThreadEvent.ReasonValue.Exited, threadId));
     }
-    private void AssemblyLoaded(string id, string name, string path) {
+    private void AssemblyLoaded(string id, string name, string path, bool isUserCode) {
         Protocol.SendEvent(new ModuleEvent(ModuleEvent.ReasonValue.New, new Module {
-            Id = id,
-            Name = name,
-            Path = path,
+            Id = id, Name = name, Path = path, IsUserCode = isUserCode
         }));
     }
+    private string? debuggeeProcessName;
     private void AssemblyLoadedVerbose(ModuleLoadedInfo moduleInfo) {
         debuggeeProcessName ??= moduleInfo.ProcessId.ToProcessName();
-        OnDebugDataReceived(moduleInfo.ToLoadedAssemblyMessage(debuggeeProcessName, justMyCode));
+        OnDebugDataReceived(moduleInfo.ToLoadedAssemblyMessage(debuggeeProcessName, debugAgent.Configuration.JustMyCode));
     }
     private void BreakpointStatusChanged(BreakpointManager.BreakpointInfo breakpoint) {
         Protocol.SendEvent(new BreakpointEvent(BreakpointEvent.ReasonValue.Changed, breakpoint.ToBreakpoint()));

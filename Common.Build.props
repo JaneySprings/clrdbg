@@ -5,10 +5,9 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
-		<AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
         <SelfContained>false</SelfContained>
         <PublishTrimmed>false</PublishTrimmed>
-        <NoWarn>$(NoWarn);NUnit2045;SYSLIB1045</NoWarn>
+        <NoWarn>$(NoWarn);NUnit2045;SYSLIB1045;CA1863</NoWarn>
         <AssetsPath>$(MSBuildThisFileDirectory)\out</AssetsPath>
         <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
         <WarningsAsErrors>$(WarningsAsErrors);NU1903;NU1904</WarningsAsErrors>

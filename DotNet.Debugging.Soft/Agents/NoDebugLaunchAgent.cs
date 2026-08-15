@@ -5,10 +5,10 @@ using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
 
 namespace DotNet.Debugging.Soft;
 
-public class NoDebugLaunchAgent : BaseLaunchAgent {
-    public NoDebugLaunchAgent(LaunchConfiguration configuration) : base(configuration) { }
+public class SkipDebugAgent : BaseDebugAgent<LaunchConfiguration> {
+    public SkipDebugAgent(LaunchConfiguration configuration) : base(configuration) { }
 
-    public override void Launch(DebugSession debugSession) {
+    public override void PrepareTarget(DebugSession debugSession) {
         var launchInfo = Configuration.GetLaunchInfo();
         var processStartInfo = new ProcessStartInfo {
             FileName = launchInfo.Program,
@@ -25,7 +25,7 @@ public class NoDebugLaunchAgent : BaseLaunchAgent {
 
         var process = Process.Start(processStartInfo);
         if (process == null)
-            throw ServerExtensions.GetProtocolException($"Failed to start the application: '{Configuration.ProgramPath}'");
+            throw ServerExtensions.GetProtocolException($"Failed to start the application: '{Configuration.Program}'");
 
         process.OutputDataReceived += (_, e) => {
             if (e.Data != null)
