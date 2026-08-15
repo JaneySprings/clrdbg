@@ -13,7 +13,12 @@ public partial class ManagedDebugger {
 
     private void HandleProcessExited(object? sender, ExitProcessCorDebugManagedCallbackEventArgs exitProcessCorDebugManagedCallbackEventArgs) {
         _logger?.Invoke($"Process exited");
-        OnExited?.Invoke();
+
+        var exitCode = 0;
+        if (_debuggeeProcess != null && _debuggeeProcess.HasExited)
+            exitCode = _debuggeeProcess.ExitCode;
+
+        OnExited?.Invoke(exitCode);
     }
 
     private void HandleThreadCreated(object? sender, CreateThreadCorDebugManagedCallbackEventArgs createThreadCorDebugManagedCallbackEventArgs) {

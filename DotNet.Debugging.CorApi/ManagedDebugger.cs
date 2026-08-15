@@ -35,7 +35,7 @@ public partial class ManagedDebugger {
     public event Action<int, string>? OnStopped;
     // ThreadId, FilePath, Line, Column, Reason, HitBreakpointIds, DecompiledSourceInfo
     public event Action<int, string, int, int, string, List<int>?, DecompiledSourceInfo?>? OnStopped2;
-    public event Action? OnExited;
+    public event Action<int>? OnExited;
     public event Action<int>? OnThreadStarted;
     public event Action<int>? OnThreadExited;
     public event Action<string, string, string, bool>? OnModuleLoaded;
