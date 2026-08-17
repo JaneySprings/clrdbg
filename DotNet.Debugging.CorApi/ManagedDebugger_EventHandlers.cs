@@ -8,6 +8,13 @@ namespace DotNet.Debugging.CorApi;
 public partial class ManagedDebugger {
     private void HandleProcessCreated(object? sender, CreateProcessCorDebugManagedCallbackEventArgs createProcessCorDebugManagedCallbackEventArgs) {
         _logger?.Invoke("Process created event");
+        // For a remote (mobile) attach there is no local process to attach to - the ICorDebugProcess is only
+        // available once the on-device runtime connects back and raises this callback.
+        if (_process is null && _isRemoteAttach) {
+            _process = createProcessCorDebugManagedCallbackEventArgs.Process;
+            _isAttached = true;
+            _logger?.Invoke($"Remote debuggee established connection to debugger, PID: {_process.Id}");
+        }
         Continue();
     }
 

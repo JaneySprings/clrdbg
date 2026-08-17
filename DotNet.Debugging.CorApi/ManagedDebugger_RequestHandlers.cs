@@ -14,6 +14,9 @@ public record FunctionBreakpointRequest(string Name, string? Condition = null, s
 public partial class ManagedDebugger {
     // Store launch info for deferred attach in ConfigurationDone
     private LaunchInfo? _pendingLaunchInfo;
+    // Store remote (mobile) attach info for deferred attach in ConfigurationDone
+    private RemoteAttachInfo? _pendingRemoteAttachInfo;
+    private Action? _onRemoteListenerReady;
 
     /// <summary>
     /// Stores the launch request info for use in handling ConfigurationDone
@@ -119,6 +122,19 @@ public partial class ManagedDebugger {
     }
 
     /// <summary>
+    /// Store remote (mobile/maccatalyst) attach info for use in handling ConfigurationDone. <paramref name="onListenerReady"/>
+    /// is invoked once the debugger's remote transport is listening, which is when the on-device app should be launched
+    /// so it can connect back to the debugger.
+    /// </summary>
+    public void AttachRemote(RemoteAttachInfo remoteAttachInfo, bool justMyCode, Action? onListenerReady = null) {
+        _logger?.Invoke($"Storing remote attach target: {remoteAttachInfo.Address}:{remoteAttachInfo.Port}");
+        _justMyCode = justMyCode;
+        _isRemoteAttach = true;
+        _pendingRemoteAttachInfo = remoteAttachInfo;
+        _onRemoteListenerReady = onListenerReady;
+    }
+
+    /// <summary>
     /// Called when DAP configuration is complete - performs deferred launch or attach
     /// </summary>
     public async Task ConfigurationDone() {
@@ -130,6 +146,14 @@ public partial class ManagedDebugger {
             _pendingLaunchInfo = null;
             PerformAttach(launchedProcessId);
             await DiagnosticClientHelper.DiagnosticClientResumeRuntime(launchedProcessId);
+        }
+        else if (_pendingRemoteAttachInfo is not null) // Remote (mobile/maccatalyst) attach
+        {
+            var remoteAttachInfo = _pendingRemoteAttachInfo;
+            var onListenerReady = _onRemoteListenerReady;
+            _pendingRemoteAttachInfo = null;
+            _onRemoteListenerReady = null;
+            PerformRemoteAttach(remoteAttachInfo, onListenerReady);
         }
         else if (_pendingLaunchInfo is not null) // If we have a pending launch, perform it
         {

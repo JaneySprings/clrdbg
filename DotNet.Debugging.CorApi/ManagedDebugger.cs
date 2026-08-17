@@ -25,6 +25,7 @@ public partial class ManagedDebugger {
     /// </summary>
     internal int ModuleSet_Version { get; private set; }
     private bool _isAttached;
+    private bool _isRemoteAttach;
     private int? _pendingAttachProcessId;
     private bool _justMyCode;
     private AsyncStepper? _asyncStepper;
@@ -161,6 +162,31 @@ public partial class ManagedDebugger {
             _logger?.Invoke($"Attached to process: {processId}");
             SendAllBreakpointEvents();
         });
+    }
+
+    /// <summary>
+    /// Attach to a remote CoreCLR target (mobile/maccatalyst). The debugger builds an ICorDebug whose transport
+    /// listens/connects per <see cref="RemoteAttachInfo.IsServer"/>; the on-device runtime then connects and its
+    /// process is surfaced asynchronously via the CreateProcess callback (see HandleProcessCreated).
+    /// </summary>
+    private void PerformRemoteAttach(RemoteAttachInfo remoteAttachInfo, Action? onListenerReady) {
+        _logger?.Invoke($"Attaching to remote target on {remoteAttachInfo.Address}:{remoteAttachInfo.Port} ({remoteAttachInfo.Platform})");
+
+        _corDebug = ClrDebugExtensions.Mobile(remoteAttachInfo);
+        _corDebug.SetManagedHandler(_callbacks);
+        // The transport is ready: launch the on-device app so it can connect back before we initiate the attach.
+        onListenerReady?.Invoke();
+        try {
+            // In the remote scenario this is not expected to return an ICorDebugProcess - the process arrives via the
+            // CreateProcess callback instead. ClrDebug throws because it does not expect the null pointer that comes back.
+            _ = _corDebug.DebugActiveProcess(0, false);
+        }
+        catch (Exception ex) {
+            _logger?.Invoke($"DebugActiveProcess(0) threw as expected for remote attach: {ex.Message}");
+        }
+
+        _logger?.Invoke($"Debugger listening on port {remoteAttachInfo.Port}, awaiting connection from the debuggee");
+        _ = Task.Run(SendAllBreakpointEvents);
     }
 
     private void SendAllBreakpointEvents() {

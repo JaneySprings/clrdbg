@@ -1,12 +1,35 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.Marshalling;
+using DotNet.Debugging.CorApi.Models;
 using ICorDebugSharp;
 
 namespace DotNet.Debugging.CorApi;
 
 // Originally based on https://github.com/lordmilko/ClrDebug/blob/5f46218f4b840ab8a94920623dc263b5f2334138/Samples/NetCore/Program.cs
 public static class ClrDebugExtensions {
+    /// <summary>
+    /// Builds an <see cref="ICorDebug"/> for a remote CoreCLR target (mobile/maccatalyst). Unlike the local
+    /// <see cref="Automatic"/> path there is no runtime-startup callback: the returned ICorDebug already has its
+    /// remote transport set up (listening or connecting per <see cref="RemoteAttachInfo.IsServer"/>), and the
+    /// target's <c>ICorDebugProcess</c> is delivered later through the CreateProcess managed callback once the
+    /// on-device runtime attaches.
+    /// </summary>
+    public static ICorDebug Mobile(RemoteAttachInfo remoteAttachInfo) {
+        var result = DbgShim.RegisterForRuntimeStartupRemotePort(
+            remoteAttachInfo.Address,
+            checked((uint)remoteAttachInfo.Port),
+            remoteAttachInfo.Platform,
+            remoteAttachInfo.IsServer,
+            remoteAttachInfo.MscordbiPath,
+            remoteAttachInfo.AssembliesPath,
+            out var corDebug);
+        Marshal.ThrowExceptionForHR(result);
+
+        if (corDebug is null) throw new InvalidOperationException("RegisterForRuntimeStartupRemotePort returned a null ICorDebug");
+        return corDebug;
+    }
+
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     public static unsafe void OnRuntimeStartup(void* pCorDebug, void* parameter, int hr) {
         var corDebug = ComInterfaceMarshaller<ICorDebug>.ConvertToManaged(pCorDebug);
