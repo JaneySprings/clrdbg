@@ -5,7 +5,7 @@ namespace DotNet.Debugging.Soft;
 
 public partial class DebugSession {
     protected override SetVariableResponse HandleSetVariableRequest(SetVariableArguments arguments) {
-        return ServerExtensions.DoSafe(() => {
+        return Invoke(() => {
             var variablesReference = arguments.VariablesReference;
             if (pagingHandles.TryGet(variablesReference, out var page) && page != null)
                 variablesReference = page.VariablesReference;

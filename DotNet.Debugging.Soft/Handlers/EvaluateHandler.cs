@@ -7,8 +7,8 @@ namespace DotNet.Debugging.Soft;
 
 public partial class DebugSession {
     protected override EvaluateResponse HandleEvaluateRequest(EvaluateArguments arguments) {
-        return ServerExtensions.DoSafe(() => {
-            var expression = arguments.TrimExpression();
+        return Invoke(() => {
+            var expression = arguments.Expression?.TrimEnd(';');
             if (string.IsNullOrEmpty(expression))
                 throw new ProtocolException("Expression is empty");
 

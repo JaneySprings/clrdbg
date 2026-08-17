@@ -21,6 +21,18 @@ public abstract class Session : DebugAdapterBase, IProcessLogger {
         Protocol.DispatcherError += LogError;
         Protocol.Run();
     }
+    public T Invoke<T>(Func<T> handler) {
+        try {
+            return handler.Invoke();
+        }
+        catch (Exception ex) {
+            if (ex is ProtocolException)
+                throw;
+            CurrentSessionLogger.Error($"[Handled] {ex.ToString()}");
+            throw Session.GetProtocolException(ex.Message);
+        }
+    }
+
     public void OnOutputDataReceived(string stdout) {
         SendMessageEvent(OutputEvent.CategoryValue.Stdout, stdout);
     }

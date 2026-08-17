@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Text.RegularExpressions;
 using DotNet.Debugging.Common.Interop;
 
 namespace DotNet.Debugging.Common.Android;
@@ -28,29 +27,7 @@ public static class AndroidDebugBridge {
 
         return result;
     }
-    public static List<string> Devices() {
-        var adb = AndroidSdkLocator.AdbTool();
-        ProcessResult result = new ProcessRunner(adb, new ProcessArgumentBuilder()
-            .Append("devices")
-            .Append("-l"))
-            .WaitForExit(5000);
 
-        if (!result.Success)
-            throw new InvalidOperationException(string.Join(Environment.NewLine, result.StandardError));
-
-        string regex = @"^(?<serial>\S+?)(\s+?)\s+(?<state>\S+)";
-        var devices = new List<string>();
-
-        foreach (string line in result.StandardOutput) {
-            MatchCollection matches = Regex.Matches(line, regex, RegexOptions.Singleline);
-            if (matches.Count == 0)
-                continue;
-
-            devices.Add(matches.First().Groups["serial"].Value);
-        }
-
-        return devices;
-    }
     public static string Forward(string serial, int port) {
         var adb = AndroidSdkLocator.AdbTool();
         var result = new ProcessRunner(adb, new ProcessArgumentBuilder()
@@ -99,6 +76,7 @@ public static class AndroidDebugBridge {
 
         return string.Join(Environment.NewLine, result.StandardOutput);
     }
+
     public static void Install(string serial, string apk, IProcessLogger? logger = null) {
         var adb = AndroidSdkLocator.AdbTool();
         var arguments = new ProcessArgumentBuilder()
@@ -124,6 +102,18 @@ public static class AndroidDebugBridge {
         string result = Shell(serial, "am", "start", $"{pkg}/$(cmd package resolve-activity -c android.intent.category.LAUNCHER {pkg} | sed -n '/name=/s/^.*name=//p')");
         logger?.OnOutputDataReceived(result);
     }
+    public static void Push(string serial, string source, string destination, IProcessLogger? logger = null) {
+        var adb = AndroidSdkLocator.AdbTool();
+        var arguments = new ProcessArgumentBuilder()
+            .Append("-s", serial)
+            .Append("push")
+            .AppendQuoted(source)
+            .AppendQuoted(destination);
+        var result = new ProcessRunner(adb, arguments, logger).WaitForExit();
+        if (!result.Success)
+            throw new InvalidOperationException(string.Join(Environment.NewLine, result.StandardError));
+    }
+
     public static void Flush(string serial) {
         var adb = AndroidSdkLocator.AdbTool();
         _ = new ProcessRunner(adb, new ProcessArgumentBuilder()
@@ -164,37 +154,5 @@ public static class AndroidDebugBridge {
             .Append("--pid", applicationProcessId)
             .Append("-v", "tag");
         return new ProcessRunner(adb, arguments, logger).Start();
-    }
-    public static void Push(string serial, string source, string destination, IProcessLogger? logger = null) {
-        var adb = AndroidSdkLocator.AdbTool();
-        var arguments = new ProcessArgumentBuilder()
-            .Append("-s", serial)
-            .Append("push")
-            .AppendQuoted(source)
-            .AppendQuoted(destination);
-        var result = new ProcessRunner(adb, arguments, logger).WaitForExit();
-        if (!result.Success)
-            throw new InvalidOperationException(string.Join(Environment.NewLine, result.StandardError));
-    }
-
-    public static string EmuName(string serial) {
-        var adb = AndroidSdkLocator.AdbTool();
-        ProcessResult result = new ProcessRunner(adb, new ProcessArgumentBuilder()
-            .Append("-s", serial)
-            .Append("emu", "avd", "name"))
-            .WaitForExit(5000);
-
-        if (!result.Success)
-            return string.Empty;
-
-        return result.StandardOutput.FirstOrDefault() ?? string.Empty;
-    }
-    public static bool StartServer() {
-        var adb = AndroidSdkLocator.AdbTool();
-        ProcessResult result = new ProcessRunner(adb, new ProcessArgumentBuilder()
-            .Append("start-server"))
-            .WaitForExit();
-
-        return result.Success;
     }
 }

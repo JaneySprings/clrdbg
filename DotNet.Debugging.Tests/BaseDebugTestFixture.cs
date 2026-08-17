@@ -44,6 +44,7 @@ public abstract class BaseDebugTestFixture {
                 <TargetFramework>net10.0</TargetFramework>
                 <Nullable>enable</Nullable>
                 <ImplicitUsings>enable</ImplicitUsings>
+                <RollForward>major</RollForward>
                 <NoWarn>$(NoWarn);CS0414;CS0169;CS0219</NoWarn>
             </PropertyGroup>
         </Project>

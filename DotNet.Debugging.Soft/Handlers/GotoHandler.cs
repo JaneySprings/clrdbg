@@ -10,7 +10,7 @@ public partial class DebugSession {
         return arguments.ToJumpToCursorTarget(targetId);
     }
     protected override GotoResponse HandleGotoRequest(GotoArguments arguments) {
-        return ServerExtensions.DoSafe(() => {
+        return Invoke(() => {
             var target = gotoHandles.Get(arguments.TargetId, null);
             if (target == null)
                 throw new ProtocolException("GotoTarget not found");

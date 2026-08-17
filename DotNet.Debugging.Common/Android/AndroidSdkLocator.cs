@@ -32,13 +32,6 @@ public static class AndroidSdkLocator {
 
         return string.Empty;
     }
-    public static string AvdLocation() {
-        var path = Environment.GetEnvironmentVariable("ANDROID_AVD_HOME");
-        if (!string.IsNullOrEmpty(path) && Directory.Exists(path))
-            return path;
-
-        return Path.Combine(RuntimeInfo.HomeDirectory, ".android", "avd");
-    }
 
     public static FileInfo AdbTool() {
         string sdk = AndroidSdkLocator.SdkLocation();
@@ -57,26 +50,5 @@ public static class AndroidSdkLocator {
             throw new FileNotFoundException("Could not find emulator tool");
 
         return new FileInfo(path);
-    }
-    public static FileInfo AvdTool() {
-        string sdk = AndroidSdkLocator.SdkLocation();
-        string tools = Path.Combine(sdk, "cmdline-tools");
-        FileInfo? newestTool = null;
-
-        foreach (string directory in Directory.GetDirectories(tools)) {
-            string avdPath = Path.Combine(directory, "bin", "avdmanager" + RuntimeInfo.ExecExtension);
-
-            if (File.Exists(avdPath)) {
-                var tool = new FileInfo(avdPath);
-
-                if (newestTool == null || tool.CreationTime > newestTool.CreationTime)
-                    newestTool = tool;
-            }
-        }
-
-        if (newestTool == null || !newestTool.Exists)
-            throw new FileNotFoundException("Could not find avdmanager tool");
-
-        return newestTool;
     }
 }

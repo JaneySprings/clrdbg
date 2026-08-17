@@ -6,7 +6,7 @@ namespace DotNet.Debugging.Soft;
 
 public partial class DebugSession {
     protected override SetFunctionBreakpointsResponse HandleSetFunctionBreakpointsRequest(SetFunctionBreakpointsArguments arguments) {
-        return ServerExtensions.DoSafe(() => {
+        return Invoke(() => {
             var breakpointsInfos = arguments.Breakpoints ?? new List<FunctionBreakpoint>();
             var requests = breakpointsInfos.Select(it => new FunctionBreakpointRequest(it.Name, it.Condition, it.HitCondition)).ToArray();
             var breakpoints = InvokeDebugger(() => session.SetFunctionBreakpoints(requests));

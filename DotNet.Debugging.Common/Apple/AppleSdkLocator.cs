@@ -1,31 +1,8 @@
 using System.Diagnostics;
-using DotNet.Debugging.Common.Interop;
 
 namespace DotNet.Debugging.Common.Apple;
 
 public static class AppleSdkLocator {
-    public static string XCodePath() {
-        var selector = new FileInfo(Path.Combine("/usr", "bin", "xcode-select"));
-        var result = new ProcessRunner(selector, new ProcessArgumentBuilder()
-            .Append("-p"))
-            .WaitForExit();
-
-        var path = string.Join(Environment.NewLine, result.StandardOutput)?.Trim();
-
-        if (string.IsNullOrEmpty(path))
-            throw new InvalidOperationException("Could not find XCode path");
-
-        return path;
-    }
-    public static string SimulatorsLocation() {
-        var home = Environment.GetEnvironmentVariable("HOME")!;
-        var path = Path.Combine(home, "Library", "Developer", "CoreSimulator", "Devices");
-
-        if (string.IsNullOrEmpty(path))
-            throw new InvalidOperationException("Could not find simulator path");
-
-        return path;
-    }
     public static string IDeviceLocation() {
         var ideviceDirectory = Environment.GetEnvironmentVariable("IDEVICE_DIR");
         if (Directory.Exists(ideviceDirectory))
@@ -35,7 +12,7 @@ public static class AppleSdkLocator {
             return Path.Combine("/usr", "bin"); // There is no 'Microsoft.iOS.Linux.Sdk' workload
 
         var sdkPath = string.Empty;
-        var dotnetPacksPath = Path.Combine(MSBuildLocator.GetRootLocation(), "packs");
+        var dotnetPacksPath = Path.Combine(MSBuildLocator.GetRootDirectory(), "packs");
         var sdkPaths = Directory.GetDirectories(dotnetPacksPath, "Microsoft.iOS.Windows.Sdk.net*");
 
         if (sdkPaths.Length > 0)
@@ -64,22 +41,13 @@ public static class AppleSdkLocator {
         return process.Length > 0;
     }
 
-    public static FileInfo SystemProfilerTool() {
-        string path = Path.Combine("/usr", "sbin", "system_profiler");
-        var tool = new FileInfo(path);
-
-        if (!tool.Exists)
-            throw new InvalidOperationException("Could not find system_profiler path");
-
-        return tool;
-    }
     public static FileInfo MLaunchTool() {
         var mlaunchToolPath = Environment.GetEnvironmentVariable("MLAUNCH_PATH");
         if (File.Exists(mlaunchToolPath))
             return new FileInfo(mlaunchToolPath);
 
         var sdkPath = string.Empty;
-        var dotnetPacksPath = Path.Combine(MSBuildLocator.GetRootLocation(), "packs");
+        var dotnetPacksPath = Path.Combine(MSBuildLocator.GetRootDirectory(), "packs");
         var sdkPaths = Directory.GetDirectories(dotnetPacksPath, "Microsoft.iOS.Sdk.net*");
 
         if (sdkPaths.Length > 0)

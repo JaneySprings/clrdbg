@@ -16,27 +16,6 @@ public static class IDeviceTool {
         if (!result.Success)
             throw new InvalidOperationException(string.Join(Environment.NewLine, result.StandardError));
     }
-    public static IEnumerable<DeviceData> Info() {
-        var tool = new FileInfo(Path.Combine(AppleSdkLocator.IDeviceLocation(), "ideviceinfo" + RuntimeInfo.ExecExtension));
-        var result = new ProcessRunner(tool).WaitForExit();
-
-        if (!result.Success)
-            return Enumerable.Empty<DeviceData>();
-
-        return new List<DeviceData> {
-            new DeviceData {
-                Name = FindValue(result.StandardOutput, "DeviceName"),
-                Serial = FindValue(result.StandardOutput, "UniqueDeviceID"),
-                OSVersion = "iOS " + FindValue(result.StandardOutput, "ProductVersion"),
-                RuntimeId = Runtimes.iOSArm64,
-                Detail = Details.iOSDevice,
-                Platform = Platforms.iOS,
-                IsEmulator = false,
-                IsRunning = true,
-                IsMobile = true
-            }
-        };
-    }
     public static Process Proxy(string serial, int port, IProcessLogger? logger = null) {
         var tool = new FileInfo(Path.Combine(AppleSdkLocator.IDeviceLocation(), "iproxy" + RuntimeInfo.ExecExtension));
         return RuntimeInfo.IsWindows
@@ -48,13 +27,5 @@ public static class IDeviceTool {
                 .Append($"{port}:{port}")
                 .Append("-u", serial), logger)
                 .Start();
-    }
-
-
-    private static string FindValue(List<string> records, string key) {
-        return records
-            .Find(x => x.StartsWith($"{key}:"))?
-            .Replace($"{key}:", "")
-            .Trim() ?? string.Empty;
     }
 }

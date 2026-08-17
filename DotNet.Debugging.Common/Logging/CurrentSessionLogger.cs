@@ -4,7 +4,7 @@ namespace DotNet.Debugging.Common.Logging;
 
 public static class CurrentSessionLogger {
     private static readonly Logger logger = LogManager.GetCurrentClassLogger();
-    private static readonly bool traceDebugMessages = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DOTRUSH_TRACE_SERVER"));
+    private static readonly bool traceDebugMessages = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CLRDBG_TRACE_SERVER"));
 
     static CurrentSessionLogger() {
         LogConfig.InitializeLog();

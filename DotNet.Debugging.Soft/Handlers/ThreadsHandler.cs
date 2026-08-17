@@ -6,7 +6,7 @@ namespace DotNet.Debugging.Soft;
 
 public partial class DebugSession {
     protected override ThreadsResponse HandleThreadsRequest(ThreadsArguments arguments) {
-        return ServerExtensions.DoSafe(() => {
+        return Invoke(() => {
             var threads = InvokeDebugger(() => session.GetThreads());
             return new ThreadsResponse(threads.Select(it => new DebugProtocol.Thread(it.id, it.name.ToThreadName(it.id))).ToList());
         });

@@ -7,7 +7,7 @@ namespace DotNet.Debugging.Soft;
 
 public partial class DebugSession {
     protected override SetBreakpointsResponse HandleSetBreakpointsRequest(SetBreakpointsArguments arguments) {
-        return ServerExtensions.DoSafe(() => {
+        return Invoke(() => {
             var sourcePath = arguments.Source?.Path;
             if (string.IsNullOrEmpty(sourcePath))
                 throw new ProtocolException("No source available for the breakpoint");

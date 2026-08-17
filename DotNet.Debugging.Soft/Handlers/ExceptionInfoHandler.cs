@@ -6,7 +6,7 @@ namespace DotNet.Debugging.Soft;
 
 public partial class DebugSession {
     protected override ExceptionInfoResponse HandleExceptionInfoRequest(ExceptionInfoArguments arguments) {
-        return ServerExtensions.DoSafe(() => {
+        return Invoke(() => {
             var exception = InvokeDebugger(() => session.ExceptionInfo(new ThreadId(arguments.ThreadId)));
             return exception.ToExceptionInfoResponse();
         });

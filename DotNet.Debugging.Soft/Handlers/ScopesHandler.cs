@@ -5,7 +5,7 @@ namespace DotNet.Debugging.Soft;
 
 public partial class DebugSession {
     protected override ScopesResponse HandleScopesRequest(ScopesArguments arguments) {
-        return ServerExtensions.DoSafe(() => {
+        return Invoke(() => {
             var scopes = InvokeDebugger(() => session.GetScopes(arguments.FrameId));
             return new ScopesResponse(scopes.Select(it => it.ToScope()).ToList());
         });
