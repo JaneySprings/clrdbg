@@ -1,0 +1,136 @@
+using System.Reflection.PortableExecutable;
+using DotNet.Debugging.Engine.Decompilation;
+using DotNet.Debugging.CorApi;
+using ICSharpCode.Decompiler;
+using ICSharpCode.Decompiler.Metadata;
+using ICSharpCode.Decompiler.TypeSystem;
+
+namespace DotNet.Debugging.Engine;
+
+public readonly record struct SourceInfo(string FilePath, int StartLine, int StartColumn, DecompiledSourceInfo? DecompiledSourceInfo);
+public class DecompiledSourceInfo {
+    public required string TypeFullName { get; init; }
+    public required AssemblyPathAndMvid Assembly { get; init; }
+    public required string CallingUserCodeAssemblyPath { get; init; }
+}
+public record struct AssemblyPathAndMvid(string AssemblyPath, Guid Mvid);
+public partial class ManagedDebugger {
+    /// This appears to be 1 based, ie requires no adjustment when returned to the user
+    private SourceInfo? GetSourceInfoAtFrame(ICorDebugFrame frame) {
+        if (frame is not ICorDebugILFrame ilFrame)
+            throw new InvalidOperationException("Active frame is not an IL frame");
+        var function = ilFrame.GetFunction();
+        var module = _modules[function.GetModule().GetBaseAddress()];
+        if (module.MetadataReader.HasSymbols is false && _justMyCode is false) {
+            if (module.IsUserCode) throw new InvalidOperationException("The module we are decompiling is user code - this should never happen, we should only be decompiling non user code modules");
+            // No PDB on disk — generate one via decompilation and update the module entry
+            if (GetCachedOrGeneratePdb(module)) {
+                module.SymbolsFromDecompiled = true;
+            }
+        }
+
+        if (module.MetadataReader.HasSymbols) {
+            var ilOffset = ilFrame.GetIP().pnOffset;
+            var methodToken = function.GetToken();
+            var sourceInfo = module.MetadataReader.GetSourceLocationForOffset(methodToken, ilOffset);
+            if (sourceInfo is not null) {
+                DecompiledSourceInfo? decompiledSourceInfo = null;
+                if (module.SymbolsFromDecompiled) {
+                    var metadataImport = module.Module.GetMetaDataInterface<IMetaDataImport>();
+                    var mvid = metadataImport.GetScopeProps().pmvid;
+                    var containingTypeDef = metadataImport.GetMethodProps(methodToken).pClass;
+                    var typeProps = metadataImport.GetTypeDefProps(containingTypeDef);
+                    var typeName = typeProps.szTypeDef;
+
+                    string? callingUserCodeAssemblyPath = null;
+                    var caller = frame.GetCaller();
+                    while (callingUserCodeAssemblyPath is null) {
+                        if (caller is null) break;
+
+                        if (caller is ICorDebugILFrame callerIlFrame) {
+                            var callerFunction = callerIlFrame.GetFunction();
+                            var callerModule = _modules[callerFunction.GetModule().GetBaseAddress()];
+                            if (callerModule.IsUserCode) {
+                                callingUserCodeAssemblyPath = callerModule.ModulePath;
+                                break;
+                            }
+                        }
+
+                        caller = caller.GetCaller();
+                    }
+
+                    decompiledSourceInfo = new DecompiledSourceInfo {
+                        TypeFullName = typeName,
+                        Assembly = new AssemblyPathAndMvid(module.ModulePath, mvid),
+                        CallingUserCodeAssemblyPath = callingUserCodeAssemblyPath ?? throw new InvalidOperationException("Could not find a user code caller in the call stack")
+                    };
+                }
+
+                return new SourceInfo(sourceInfo.Value.sourceFilePath, sourceInfo.Value.startLine, sourceInfo.Value.startColumn, decompiledSourceInfo);
+            }
+        }
+
+        return null;
+    }
+
+    private bool GetCachedOrGeneratePdb(ModuleInfo moduleInfo) {
+        var sharpIdeSymbolCachePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Temp", "SharpIdeSymbolCache");
+        var metadataImport = moduleInfo.Module.GetMetaDataInterface<IMetaDataImport>();
+        var mvid = metadataImport.GetScopeProps().pmvid;
+        var assemblyName = Path.GetFileNameWithoutExtension(moduleInfo.ModuleName);
+        var pdbPath = Path.Combine(sharpIdeSymbolCachePath, assemblyName, mvid.ToString(), $"{assemblyName}.decompiled.pdb");
+        if (File.Exists(pdbPath)) {
+            if (!moduleInfo.MetadataReader.TryLoadSymbols(pdbPath)) {
+                _logger?.Invoke($"GetCachedOrGeneratePdb: could not load cached PDB '{pdbPath}'");
+                return false;
+            }
+            return true;
+        }
+        return GeneratePdb(moduleInfo, pdbPath);
+    }
+
+
+    private bool GeneratePdb(ModuleInfo moduleInfo, string pdbPathToWriteTo) {
+        var assemblyPath = moduleInfo.ModulePath;
+        if (!File.Exists(assemblyPath)) return false;
+
+        var allModulePaths = _modules.Values.Select(m => m.ModulePath).Where(p => !string.IsNullOrEmpty(p)).ToList();
+        var resolver = new DebuggingAssemblyResolver(allModulePaths);
+
+        PEFile file;
+        try {
+            file = new PEFile(assemblyPath, PEStreamOptions.PrefetchEntireImage);
+        }
+        catch (Exception ex) {
+            _logger?.Invoke($"GeneratePdb: failed to open PE file '{assemblyPath}': {ex.Message}");
+            return false;
+        }
+
+        using (file) {
+            var decompilerSettings = new DecompilerSettings();
+            var decompilerTypeSystem = new DecompilerTypeSystem(file, resolver, decompilerSettings);
+
+            _logger?.Invoke($"GeneratePdb: writing PDB to '{pdbPathToWriteTo}' for '{assemblyPath}'");
+            try {
+                var pdbDirectory = Path.GetDirectoryName(pdbPathToWriteTo)!;
+                if (!Directory.Exists(pdbDirectory)) Directory.CreateDirectory(pdbDirectory);
+                using var pdbStream = File.Create(pdbPathToWriteTo);
+                var portablePdbWriter2 = new PortablePdbWriter2 { NoLogo = true };
+                portablePdbWriter2.WritePdb(file, decompilerTypeSystem, decompilerSettings, pdbStream);
+            }
+            catch (Exception ex) {
+                _logger?.Invoke($"GeneratePdb: exception writing PDB: {ex}");
+                File.Delete(pdbPathToWriteTo);
+                return false;
+            }
+
+            if (!moduleInfo.MetadataReader.TryLoadSymbols(pdbPathToWriteTo)) {
+                _logger?.Invoke($"GeneratePdb: could not load generated PDB '{pdbPathToWriteTo}'");
+                return false;
+            }
+
+            _logger?.Invoke($"GeneratePdb: successfully loaded generated PDB for '{Path.GetFileName(assemblyPath)}'");
+            return true;
+        }
+    }
+}

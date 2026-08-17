@@ -1,0 +1,453 @@
+using System.Diagnostics;
+using System.Threading.Channels;
+using DotNet.Debugging.Engine.ExpressionEvaluator.Cil;
+using DotNet.Debugging.Engine.Models;
+using DotNet.Debugging.CorApi;
+using NeoSmart.AsyncLock;
+
+namespace DotNet.Debugging.Engine;
+
+// v1 of this class was AI generated, and could definitely do with some cleaning up
+public partial class ManagedDebugger {
+    private ICorDebug? _corDebug;
+    private ICorDebugProcess? _process;
+    private readonly CorDebugManagedCallback _callbacks;
+    private readonly BreakpointManager _breakpointManager;
+    private readonly VariableManager _variableManager;
+    private readonly FrameReferenceManager _frameReferenceManager;
+    private readonly Action<string>? _logger;
+    private readonly Dictionary<int, ICorDebugThread> _threads = new();
+    private readonly Dictionary<CordbAddress, ModuleInfo> _modules = new();
+    /// <summary>
+    /// Monotonically increasing version of the set of loaded debuggee modules. Incremented whenever a module
+    /// is loaded, so anything derived from <see cref="AllModules"/> (the expression compile cache and the
+    /// metadata-blocks cache) can detect staleness and rebuild.
+    /// </summary>
+    internal int ModuleSet_Version { get; private set; }
+    private bool _isAttached;
+    private bool _isRemoteAttach;
+    private int? _pendingAttachProcessId;
+    private bool _justMyCode;
+    private AsyncStepper? _asyncStepper;
+    private CilExpressionEvaluator _expressionEvaluator = null!;
+
+    private Process? _debuggeeProcess;
+
+    public event Action<int, string>? OnStopped;
+    // ThreadId, FilePath, Line, Column, Reason, HitBreakpointIds, DecompiledSourceInfo
+    public event Action<int, string, int, int, string, List<int>?, DecompiledSourceInfo?>? OnStopped2;
+    public event Action<int>? OnExited;
+    public event Action<int>? OnThreadStarted;
+    public event Action<int>? OnThreadExited;
+    public event Action<string, string, string, bool>? OnModuleLoaded;
+    // Output text, isError (true for stderr, false for stdout)
+    public event Action<string, bool>? OnOutput;
+    public event Action<BreakpointManager.BreakpointInfo>? OnBreakpointChanged;
+    public event Func<LaunchInfo, int> SendRunInTerminalRequest = null!;
+
+    public EvalStatus EvalStatus { get; }
+
+    private Task? _runtimeEventCallbackProcessing;
+    private readonly Channel<CorDebugManagedCallbackEventArgs> _runtimeEventChannel;
+    public readonly AsyncLock DapRequestAndRuntimeEventLock = new();
+
+    public ManagedDebugger(Action<string>? logger = null) {
+        _logger = logger;
+        _breakpointManager = new BreakpointManager();
+        _variableManager = new VariableManager();
+        _frameReferenceManager = new FrameReferenceManager();
+        _callbacks = new CorDebugManagedCallback();
+        EvalStatus = new EvalStatus();
+        _asyncStepper = new AsyncStepper(_modules, this);
+        _runtimeEventChannel = Channel.CreateUnbounded<CorDebugManagedCallbackEventArgs>(new UnboundedChannelOptions {
+            SingleReader = false,
+            SingleWriter = true
+        });
+        _callbacks.OnAnyEvent += QueueEvent;
+        _runtimeEventCallbackProcessing = Task.Run(ProcessRuntimeEventQueue);
+    }
+
+    private void QueueEvent(object? sender, CorDebugManagedCallbackEventArgs e) {
+        _runtimeEventChannel.Writer.TryWrite(e);
+    }
+
+    public async Task DrainRuntimeEventQueue() {
+        // Caller should have obtained this lock, and we are re-entrant here
+        using (await DapRequestAndRuntimeEventLock.LockAsync()) {
+            var reader = _runtimeEventChannel.Reader;
+            // Process all immediately available events
+            while (reader.TryRead(out var callbackEvent)) {
+                await OnAnyEvent(this, callbackEvent).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private async Task ProcessRuntimeEventQueue() {
+        try {
+            var reader = _runtimeEventChannel.Reader;
+            while (await reader.WaitToReadAsync()) {
+                // If a Dap request has obtained the lock, we will pause here. It will drain runtime events, and our TryRead may return false, which is fine
+                using (await DapRequestAndRuntimeEventLock.LockAsync()) {
+                    if (reader.TryRead(out var callbackEvent) is false) continue;
+                    await OnAnyEvent(this, callbackEvent).ConfigureAwait(false);
+                }
+            }
+        }
+        catch (Exception e) {
+            _logger?.Invoke($"Critical failure processing runtime event queue, no further events will be processed: {e}");
+            throw;
+        }
+    }
+
+    internal async Task<CorDebugManagedCallbackEventArgs> ProcessRuntimeEventsUntilEvalEvent() {
+        var reader = _runtimeEventChannel.Reader;
+        while (await reader.WaitToReadAsync()) {
+            if (reader.TryRead(out var callbackEvent) is false) throw new InvalidOperationException("Expected to read an event from the runtime event queue, but none was available");
+            await OnAnyEvent(this, callbackEvent).ConfigureAwait(false);
+            if (callbackEvent is EvalCompleteCorDebugManagedCallbackEventArgs or EvalExceptionCorDebugManagedCallbackEventArgs) {
+                return callbackEvent;
+            }
+        }
+        throw new InvalidOperationException("Expected to read an eval event from the runtime event queue, but Channel completed unexpectedly");
+    }
+
+    private async Task OnAnyEvent(object? sender, CorDebugManagedCallbackEventArgs e) {
+        try {
+            _logger?.Invoke($"Event: {e.GetType().Name}");
+            switch (e) {
+                case LogMessageCorDebugManagedCallbackEventArgs a: HandleLogMessage(sender, a); break;
+                case CreateProcessCorDebugManagedCallbackEventArgs a: HandleProcessCreated(sender, a); break;
+                case ExitProcessCorDebugManagedCallbackEventArgs a: HandleProcessExited(sender, a); break;
+                case CreateThreadCorDebugManagedCallbackEventArgs a: HandleThreadCreated(sender, a); break;
+                case ExitThreadCorDebugManagedCallbackEventArgs a: HandleThreadExited(sender, a); break;
+                case LoadModuleCorDebugManagedCallbackEventArgs a: HandleModuleLoaded(sender, a); break;
+                case BreakpointCorDebugManagedCallbackEventArgs a: await HandleBreakpoint(sender, a).ConfigureAwait(false); break;
+                case StepCompleteCorDebugManagedCallbackEventArgs a: HandleStepComplete(sender, a); break;
+                case BreakCorDebugManagedCallbackEventArgs a: HandleBreak(sender, a); break;
+                case ExceptionCorDebugManagedCallbackEventArgs a: HandleException(sender, a); break;
+                case Exception2CorDebugManagedCallbackEventArgs a: HandleException2(sender, a); break;
+                case EvalCompleteCorDebugManagedCallbackEventArgs or EvalExceptionCorDebugManagedCallbackEventArgs: break; // don't continue on these, as they are being used for expression evaluation
+                default: _process?.Continue(false); break;
+            }
+        }
+        catch (Exception ex) {
+            _logger?.Invoke($"Error handling event {e.GetType().Name}: {ex}");
+            if (_process is not null && _process.TryIsRunning(out var isRunning) is Cor.S_OK && isRunning is false) {
+                Continue();
+            }
+        }
+    }
+
+    private void HandleLogMessage(object? sender, LogMessageCorDebugManagedCallbackEventArgs logMessageEvent) {
+        _logger?.Invoke($"Log: {logMessageEvent.Message}");
+        Continue();
+    }
+
+    /// <summary>
+    /// Actually attach to an existing process
+    /// </summary>
+    private void PerformAttach(int processId) {
+        _logger?.Invoke($"Attaching to process: {processId}");
+
+        // Initialize the debugger
+        _ = Task.Run(async () => {
+            _corDebug = await ClrDebugExtensions.Automatic(processId);
+            _corDebug.Initialize();
+            _corDebug.SetManagedHandler(_callbacks);
+
+            // Attach to the process
+            _process = _corDebug.DebugActiveProcess(processId, false);
+            _isAttached = true;
+
+            _logger?.Invoke($"Attached to process: {processId}");
+            SendAllBreakpointEvents();
+        });
+    }
+
+    /// <summary>
+    /// Attach to a remote CoreCLR target (mobile/maccatalyst). The debugger builds an ICorDebug whose transport
+    /// listens/connects per <see cref="RemoteAttachInfo.IsServer"/>; the on-device runtime then connects and its
+    /// process is surfaced asynchronously via the CreateProcess callback (see HandleProcessCreated).
+    /// </summary>
+    private void PerformRemoteAttach(RemoteAttachInfo remoteAttachInfo, Action? onListenerReady) {
+        _logger?.Invoke($"Attaching to remote target on {remoteAttachInfo.Address}:{remoteAttachInfo.Port} ({remoteAttachInfo.Platform})");
+
+        _corDebug = ClrDebugExtensions.Mobile(remoteAttachInfo);
+        _corDebug.SetManagedHandler(_callbacks);
+        // The transport is ready: launch the on-device app so it can connect back before we initiate the attach.
+        onListenerReady?.Invoke();
+        try {
+            // In the remote scenario this is not expected to return an ICorDebugProcess - the process arrives via the
+            // CreateProcess callback instead. ClrDebug throws because it does not expect the null pointer that comes back.
+            _ = _corDebug.DebugActiveProcess(0, false);
+        }
+        catch (Exception ex) {
+            _logger?.Invoke($"DebugActiveProcess(0) threw as expected for remote attach: {ex.Message}");
+        }
+
+        _logger?.Invoke($"Debugger listening on port {remoteAttachInfo.Port}, awaiting connection from the debuggee");
+        _ = Task.Run(SendAllBreakpointEvents);
+    }
+
+    private void SendAllBreakpointEvents() {
+        // Send a breakpoint changed event with verified false for every breakpoint, so the IDE can mark the BP as unverified, until it receives our later BP events when we bind them
+        foreach (var bp in _breakpointManager.GetAllBreakpoints()) {
+            OnBreakpointChanged?.Invoke(bp);
+        }
+    }
+
+    private void Continue() {
+        ArgumentNullException.ThrowIfNull(_process);
+        _process.Continue(false);
+    }
+
+    private ICorDebugStepper? _stepper;
+
+    /// <summary>
+    /// Setup a stepper without continuing execution
+    /// </summary>
+    internal ICorDebugStepper SetupStepper(ICorDebugThread thread, AsyncStepper.StepType stepType) {
+        var frame = thread.GetActiveFrame();
+        if (frame is not ICorDebugILFrame ilFrame) throw new InvalidOperationException("Active frame is not an IL frame");
+        if (_stepper is not null) throw new InvalidOperationException("A step operation is already in progress");
+
+        ICorDebugStepper stepper = frame.CreateStepper();
+        stepper.SetInterceptMask(CorDebugIntercept.INTERCEPT_ALL & ~(CorDebugIntercept.INTERCEPT_SECURITY | CorDebugIntercept.INTERCEPT_CLASS_INIT));
+        stepper.SetUnmappedStopMask(CorDebugUnmappedStop.STOP_NONE);
+        if (_justMyCode) stepper.SetJMC(true);
+
+        if (stepType == AsyncStepper.StepType.StepOut) {
+            stepper.StepOut();
+        }
+        else // StepIn or StepOver
+        {
+            var metadataReader = _modules[frame.GetFunction().GetModule().GetBaseAddress()].MetadataReader;
+
+            var currentIlOffset = ilFrame.GetIP().pnOffset;
+            var nullableResult = metadataReader.GetStartAndEndSequencePointIlOffsetsForIlOffset(frame.GetFunction().GetToken(), currentIlOffset);
+            if (nullableResult is var (startIlOffset, endIlOffset)) {
+                if (startIlOffset == endIlOffset) {
+                    endIlOffset = frame.GetFunction().GetILCode().GetSize();
+                }
+                var stepRange = new CorDebugStepRange {
+                    startOffset = checked((uint)startIlOffset),
+                    endOffset = checked((uint)endIlOffset)
+                };
+                var stepIn = stepType is AsyncStepper.StepType.StepIn;
+                stepper.StepRange(stepIn, [stepRange], 1);
+            }
+            else {
+                var stepIn = stepType is AsyncStepper.StepType.StepIn;
+                stepper.Step(stepIn);
+            }
+        }
+
+        _stepper = stepper;
+        return stepper;
+    }
+
+    /// <summary>
+    /// Try to bind a breakpoint to the actual code using symbol information
+    /// </summary>
+    private bool TryBindBreakpoint(BreakpointManager.BreakpointInfo bp) {
+        try {
+            if (_process is null) return false;
+
+            // Find a module that contains the source file
+            ModuleInfo? targetModule = null;
+            ModuleMetadataReader.ResolvedBreakpoint? resolved = null;
+
+            foreach (var moduleInfo in _modules.Values) {
+                if (moduleInfo.MetadataReader.HasSymbols is false)
+                    continue;
+
+                resolved = moduleInfo.MetadataReader.ResolveBreakpoint(bp.FilePath, bp.Line, bp.Column);
+                if (resolved is not null) {
+                    targetModule = moduleInfo;
+                    break;
+                }
+            }
+
+            if (targetModule is null || resolved is null) {
+                // No module found with symbols for this file
+                bp.Verified = false;
+                bp.Message = "The breakpoint will not currently be hit. No symbols have been loaded for this document.";
+                _logger?.Invoke($"Breakpoint at {bp.FilePath}:{bp.Line} - no symbols found");
+                return false;
+            }
+
+            // Get the function from the method token
+            var function = targetModule.Module.GetFunctionFromToken(resolved.MethodToken);
+            var ilCode = function.GetILCode();
+
+            // Create a breakpoint at the resolved IL offset
+            var corBreakpoint = ilCode.CreateBreakpoint(resolved.ILOffset);
+            corBreakpoint.Activate(true);
+
+            // Update breakpoint info
+            bp.CorBreakpoint = corBreakpoint;
+            bp.Verified = true;
+            bp.Line = resolved.StartLine;
+            bp.Column = resolved.StartColumn;
+            bp.EndLine = resolved.EndLine;
+            bp.EndColumn = resolved.EndColumn;
+            bp.ResolvedBreakpointFromPdb = resolved;
+            bp.ModuleBaseAddress = targetModule.BaseAddress;
+            bp.Message = null;
+
+            _logger?.Invoke($"Breakpoint bound at {bp.FilePath}:{bp.Line} -> resolved to line {resolved.StartLine}, IL offset {resolved.ILOffset} in method 0x{resolved.MethodToken:X}");
+            return true;
+        }
+        catch (Exception ex) {
+            _logger?.Invoke($"Error binding breakpoint at {bp.FilePath}:{bp.Line}: {ex.Message}");
+            bp.Verified = false;
+            bp.Message = $"Error binding breakpoint: {ex.Message}";
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Try to bind all pending breakpoints (called when a new module is loaded)
+    /// </summary>
+    private void TryBindPendingBreakpoints() {
+        var pendingBreakpoints = _breakpointManager.GetPendingBreakpoints().Where(bp => !bp.IsFunctionBreakpoint);
+
+        foreach (var bp in pendingBreakpoints) {
+            if (TryBindBreakpoint(bp)) {
+                // Notify that the breakpoint changed (became verified)
+                OnBreakpointChanged?.Invoke(bp);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Binds all matching functions in a module and returns true only when the BreakpointInfo becomes verified.
+    /// </summary>
+    private bool TryBindFunctionBreakpoint(BreakpointManager.BreakpointInfo bp, ModuleInfo module) {
+        if (module.MetadataReader.HasSymbols is false || bp.FunctionName is null) return false;
+        var wasVerified = bp.Verified;
+        try {
+            var pattern = FunctionBreakpointPattern.Parse(bp.FunctionName);
+            foreach (var resolved in FunctionBreakpointMetadataResolver.Resolve(module.MetadataReader, pattern)) {
+                if (bp.FunctionBindings.Any(binding => binding.ModuleBaseAddress == module.BaseAddress && binding.MethodToken == resolved.MethodToken)) {
+                    continue;
+                }
+                var function = module.Module.GetFunctionFromToken(resolved.MethodToken);
+                var corBreakpoint = function.GetILCode().CreateBreakpoint(resolved.Source.ILOffset);
+                corBreakpoint.Activate(true);
+                bp.FunctionBindings.Add(new BreakpointManager.FunctionBreakpointBinding(corBreakpoint, module.BaseAddress, resolved.MethodToken, resolved.Source));
+                bp.Verified = true;
+                bp.Message = null;
+            }
+        }
+        catch (Exception ex) {
+            _logger?.Invoke($"Error binding function breakpoint '{bp.FunctionName}' in {module.ModuleName}: {ex.Message}");
+            if (!bp.Verified) bp.Message = $"Error binding function breakpoint: {ex.Message}";
+        }
+        return wasVerified is false && bp.Verified;
+    }
+
+    internal ICorDebugILFrame GetIlFrameForThreadIdAndStackDepth(ThreadId threadId, FrameStackDepth stackDepth) {
+        var frame = GetFrameForThreadIdAndStackDepth(threadId, stackDepth);
+        if (frame is not ICorDebugILFrame ilFrame) throw new InvalidOperationException("Frame is not an IL frame");
+        return ilFrame;
+    }
+
+    internal ICorDebugFrame GetFrameForThreadIdAndStackDepth(ThreadId threadId, FrameStackDepth stackDepth) {
+        // We need to re-obtain the frame in case it has been neutered
+        var thread = _process!.GetThread(threadId.Value);
+        var frame = EnumerateFramesForThread(thread).ElementAt(stackDepth.Value);
+        return frame;
+    }
+
+    private static IEnumerable<ICorDebugFrame> EnumerateFramesForThread(ICorDebugThread thread) {
+        foreach (var chain in thread.EnumerateChains()) {
+            if (chain.IsManaged() is false) continue;
+            foreach (var frame in chain.EnumerateFrames()) {
+                yield return frame;
+            }
+        }
+    }
+
+    internal IReadOnlyCollection<ModuleInfo> AllModules => _modules.Values;
+    internal ModuleInfo GetModuleInfoForModule(ICorDebugModule module) => _modules[module.GetBaseAddress()];
+
+    internal ICorDebugValue? GetCurrentException(ThreadId threadId) {
+        var thread = _process?.GetThread(threadId.Value);
+        if (thread is null) return null;
+        thread.TryGetCurrentException(out var currentException);
+        return currentException;
+    }
+
+    private static string GetFunctionFormattedName(ICorDebugFunction function) {
+        try {
+            var token = function.GetToken();
+            var module = function.GetModule();
+            var metadataImport = module.GetMetaDataInterface<IMetaDataImport>();
+            var methodName = metadataImport.GetMethodProps(token).szMethod;
+
+            var @class = function.GetClass();
+            var classToken = @class.GetToken();
+            var className = metadataImport.GetTypeDefProps(classToken).szTypeDef;
+
+            return $"{Path.GetFileName(module.GetName())}!{className}.{methodName}()";
+        }
+        catch {
+            return "Unknown";
+        }
+    }
+
+    // Not intended to implement IDisposable - it is intended that this is called via Disconnect()
+    private void Dispose() {
+        // Dispose modules, which releases PDB files
+        foreach (var moduleInfo in _modules.Values) {
+            moduleInfo.Dispose();
+        }
+        _modules.Clear();
+
+        // Deactivate all breakpoints
+        foreach (var bp in _breakpointManager.GetAllBreakpoints().Where(b => (b.CorBreakpoint is not null && b.IsFunctionBreakpoint is false) || b.IsFunctionBreakpoint)) {
+            var corBreakpoints = bp.IsFunctionBreakpoint ? bp.FunctionBindings.Select(binding => binding.CorBreakpoint) : [bp.CorBreakpoint!];
+            foreach (var corBreakpoint in corBreakpoints) {
+                var hResult = corBreakpoint.TryActivate(false);
+                if (hResult is Cor.CORDBG_E_PROCESS_TERMINATED) break;
+                if (hResult is not Cor.S_OK) _logger?.Invoke($"Failed to deactivate breakpoint {bp.Id}: {hResult}");
+            }
+        }
+        _breakpointManager.Clear();
+
+        ClearEntryPointBreakpoint();
+        _stopAtEntryPending = false;
+        _exceptionPassedThroughUserCode.Clear();
+
+        _asyncStepper?.Dispose();
+        _asyncStepper = null;
+        _stepper = null!;
+        _threads.Clear();
+        _variableManager.ClearAndTryDisposeHandleValues();
+        _frameReferenceManager.Clear();
+
+        // Unsubscribe from callbacks to avoid any further event dispatch
+        _callbacks.OnAnyEvent -= QueueEvent;
+        _runtimeEventChannel.Writer.Complete();
+        // ProcessRuntimeEventQueue is blocked on DapRequestAndRuntimeEventLock (which we hold) and would
+        // never complete if we waited on it here — that is the deadlock. Read and discard remaining events ourselves,
+        // then let the processor exit once the lock is released.
+        while (_runtimeEventChannel.Reader.TryRead(out _)) { }
+
+        // Detach from the process
+        _process?.TryDetach();
+
+        _isAttached = false;
+        _process = null;
+        _corDebug = null;
+
+        _debuggeeProcess?.Kill();
+        _debuggeeProcess?.Dispose();
+        _debuggeeProcess = null;
+    }
+}
+
+public class EvalStatus {
+    public bool IsRunning { get; set; }
+}

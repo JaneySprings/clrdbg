@@ -1,6 +1,7 @@
 <Solution>
   <Project Path="DotNet.Debugging.Common/DotNet.Debugging.Common.csproj" />
-  <Project Path="DotNet.Debugging.CorApi/DotNet.Debugging.CorApi.csproj" />
-  <Project Path="DotNet.Debugging.Soft/DotNet.Debugging.Soft.csproj" />
+  <Project Path="DotNet.Debugging.Engine/DotNet.Debugging.Engine.csproj" />
+  <Project Path="DotNet.Debugging.Adapter/DotNet.Debugging.Adapter.csproj" />
   <Project Path="DotNet.Debugging.Tests/DotNet.Debugging.Tests.csproj" />
+  <Project Path="DotNet.Debugging.CorApi/DotNet.Debugging.CorApi.csproj" />
 </Solution>

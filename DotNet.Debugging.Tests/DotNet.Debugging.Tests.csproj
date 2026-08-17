@@ -2,7 +2,7 @@
 	<Import Project="..\Common.Build.props" />
 
 	<ItemGroup>
-		<ProjectReference Include="..\DotNet.Debugging.Soft\DotNet.Debugging.Soft.csproj" />
+		<ProjectReference Include="..\DotNet.Debugging.Adapter\DotNet.Debugging.Adapter.csproj" />
 		<PackageReference Include="Microsoft.NET.Test.Sdk" />
 		<PackageReference Include="NUnit" />
 		<PackageReference Include="NUnit.Analyzers" />

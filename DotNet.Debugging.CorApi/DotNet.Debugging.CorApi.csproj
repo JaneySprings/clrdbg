@@ -1,4 +1,3 @@
-<!-- ICorDebug-based managed debugger engine. Based on SharpDbg (https://github.com/MattParkerDev/sharpdbg, MIT), see ATTRIBUTION.md -->
 <Project Sdk="Microsoft.NET.Sdk">
 	<Import Project="..\Common.Build.props" />
 
@@ -8,25 +7,6 @@
 	</PropertyGroup>
 
 	<ItemGroup>
-		<!-- The Roslyn expression compiler and decompiler internals used by the expression evaluator -->
-		<Publicize IncludeCompilerGeneratedMembers="false" Include="Microsoft.CodeAnalysis" />
-		<Publicize IncludeCompilerGeneratedMembers="false" Include="Microsoft.CodeAnalysis.CSharp" />
-		<Publicize IncludeCompilerGeneratedMembers="false" Include="Microsoft.CodeAnalysis.ExpressionEvaluator.ExpressionCompiler" />
-		<Publicize IncludeCompilerGeneratedMembers="false" Include="Microsoft.CodeAnalysis.CSharp.ExpressionEvaluator.ExpressionCompiler" />
-		<Publicize IncludeCompilerGeneratedMembers="false" Include="ICSharpCode.Decompiler" MemberPattern="^ICSharpCode\.Decompiler\.(CSharp\.Transforms\.RemoveEmbeddedAttributes|DebugInfo)\..*" />
-	</ItemGroup>
-
-	<ItemGroup>
-		<PackageReference Include="Krafs.Publicizer">
-			<PrivateAssets>all</PrivateAssets>
-			<IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-		</PackageReference>
-		<PackageReference Include="ICorDebugSharp" />
-		<PackageReference Include="ICSharpCode.Decompiler" />
-		<PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
-		<PackageReference Include="MP.Microsoft.CodeAnalysis.CSharp.ExpressionEvaluator.ExpressionCompiler" />
-		<PackageReference Include="Microsoft.Diagnostics.NETCore.Client" />
-		<PackageReference Include="Microsoft.Diagnostics.DbgShim" />
-		<PackageReference Include="NeoSmart.AsyncLock" />
+		<AssemblyAttribute Include="System.Runtime.CompilerServices.DisableRuntimeMarshallingAttribute" />
 	</ItemGroup>
 </Project>

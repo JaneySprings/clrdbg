@@ -1,7 +1,7 @@
-using DotNet.Debugging.Soft.Extensions;
+using DotNet.Debugging.Adapter.Extensions;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
 using NUnit.Framework;
-using ExceptionFilterOptions = DotNet.Debugging.Soft.ExceptionFilterOptions;
+using ExceptionFilterOptions = DotNet.Debugging.Adapter.ExceptionFilterOptions;
 
 namespace DotNet.Debugging.Tests;
 
