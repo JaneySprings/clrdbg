@@ -83,6 +83,9 @@ public partial class ManagedDebugger {
         _isAttached = true;
 
         _logger?.Invoke($"Successfully attached to process: {processId}");
+        // Raised here rather than at Process.Start: until the attach lands there is nothing a client
+        // could do with the pid, and a launch that fails on the way should name no process at all.
+        OnProcessStarted?.Invoke(processId);
         SendAllBreakpointEvents();
         return;
 
@@ -146,6 +149,16 @@ public partial class ManagedDebugger {
             _pendingLaunchInfo = null;
             PerformAttach(launchedProcessId);
             await DiagnosticClientHelper.DiagnosticClientResumeRuntime(launchedProcessId);
+            // The client started this one and told us its pid, so it is a launch like any other as far
+            // as the event is concerned - and answering only for the internal console would leave two
+            // accepted launch shapes reporting differently.
+            //
+            // Sent once the attach has been started rather than once it has landed, which is the one
+            // way this differs from the internal console path above: PerformAttach hands its work to a
+            // fire-and-forget task, so there is nothing here to await without changing when
+            // ConfigurationDone returns. The difference costs a client nothing, since it started the
+            // process itself and already holds the pid.
+            OnProcessStarted?.Invoke(launchedProcessId);
         }
         else if (_pendingRemoteAttachInfo is not null) // Remote (mobile/maccatalyst) attach
         {

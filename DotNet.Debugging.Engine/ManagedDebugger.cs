@@ -37,6 +37,9 @@ public partial class ManagedDebugger {
     // ThreadId, FilePath, Line, Column, Reason, HitBreakpointIds, DecompiledSourceInfo
     public event Action<int, string, int, int, string, List<int>?, DecompiledSourceInfo?>? OnStopped2;
     public event Action<int>? OnExited;
+    // ProcessId of a process this debugger started, raised from ConfigurationDone's launch branches.
+    // The name belongs to the adapter: what the client asked to run is not what gets executed here.
+    public event Action<int>? OnProcessStarted;
     public event Action<int>? OnThreadStarted;
     public event Action<int>? OnThreadExited;
     public event Action<string, string, string, bool>? OnModuleLoaded;

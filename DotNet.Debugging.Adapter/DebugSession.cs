@@ -29,6 +29,7 @@ public partial class DebugSession : Session {
         session.OnStopped2 += TargetStoppedAtSource;
         session.OnExceptionThrown += TargetExceptionThrown;
         session.OnExited += TargetExited;
+        session.OnProcessStarted += SendProcessEvent;
         session.OnThreadStarted += TargetThreadStarted;
         session.OnThreadExited += TargetThreadStopped;
         session.OnModuleLoaded += AssemblyLoaded;
@@ -84,6 +85,32 @@ public partial class DebugSession : Session {
             Text = exceptionType ?? "Exception",
             ThreadId = threadId,
             AllThreadsStopped = true,
+        });
+    }
+    /// <summary>
+    /// Tells the client which process it is debugging. Without it a launched program's pid never reaches
+    /// the client, which leaves it nothing to show, to log, or to kill if the session goes wrong.
+    ///
+    /// Sent for every shape of launch: the internal console and the two terminal ones raise it through
+    /// the debugger, and a skipDebug run has no debugger so SkipDebugAgent calls this itself.
+    ///
+    /// An attach sends none, because the client named the process itself. A remote attach sends none
+    /// either, and that is a limit of this engine rather than of the protocol - DAP describes a remote
+    /// process with IsLocalProcess=false - because the remote path never learns a device-side pid it
+    /// could report.
+    /// </summary>
+    internal void SendProcessEvent(int processId) {
+        // The name is what the client asked to run, not what was executed: a managed dll is started
+        // through the muxer, so the process's own executable is 'dotnet' and would say nothing about
+        // which program is being debugged. Only a launch reaches here, so the configuration is a launch
+        // one and its program has been verified present.
+        var configuration = (LaunchConfiguration)debugAgent.Configuration;
+        ArgumentNullException.ThrowIfNull(configuration.Program);
+
+        Protocol.SendEvent(new ProcessEvent(configuration.Program) {
+            SystemProcessId = processId,
+            StartMethod = ProcessEvent.StartMethodValue.Launch,
+            IsLocalProcess = true,
         });
     }
     private void TargetExited(int exitCode) {

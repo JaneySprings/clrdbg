@@ -21,6 +21,11 @@ public class SkipDebugAgent : BaseDebugAgent<LaunchConfiguration> {
             runner.SetEnvironmentVariable(kvp.Key, kvp.Value);
 
         var process = runner.Start();
+
+        // Nothing else can report this one: there is no debugger in a skipDebug run to raise the
+        // engine's event, and no attach for the client to have named the process in
+        DebugSession.SendProcessEvent(process.Id);
+
         process.EnableRaisingEvents = true;
         process.Exited += (_, _) => {
             DebugSession.Protocol.TrySendEvent(new TerminatedEvent());
