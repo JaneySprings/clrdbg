@@ -147,6 +147,86 @@ public abstract class BaseDebugTestFixture {
         };
         Host.SendRequestSync(launchRequest);
     }
+    /// <summary>
+    /// Attaches to a process started outside the debugger. The attach itself is deferred until
+    /// 'ConfigurationDone', the same as a launch.
+    /// </summary>
+    protected void Attach(int processId, bool justMyCode = true) {
+        var attachRequest = new AttachRequest();
+        attachRequest.ConfigurationProperties = new Dictionary<string, JToken> {
+            ["processId"] = processId,
+            ["justMyCode"] = justMyCode,
+        };
+        Host.SendRequestSync(attachRequest);
+    }
+    /// <summary>
+    /// Starts the debuggee outside the debugger, for the attach tests, and counts what it prints. Only
+    /// a launched program has its streams redirected into the adapter, so an attached one's output
+    /// arrives here rather than as OutputEvents - which is what lets a test tell a process that is
+    /// really suspended from one that is only reported as such.
+    /// </summary>
+    protected Debuggee StartDebuggee() {
+        var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("dotnet", ProgramPath) {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        });
+        Assert.That(process, Is.Not.Null);
+
+        var debuggee = new Debuggee(process!);
+        debuggee.BeginReading();
+        return debuggee;
+    }
+
+    protected sealed class Debuggee : IDisposable {
+        private readonly System.Diagnostics.Process process;
+        private int printedLines;
+
+        public Debuggee(System.Diagnostics.Process process) {
+            this.process = process;
+        }
+
+        public int Id => process.Id;
+        public int PrintedLines => System.Threading.Volatile.Read(ref printedLines);
+
+        public void BeginReading() {
+            // Drained continuously: a full pipe would block the debuggee, which looks exactly like a
+            // process suspended by the debugger
+            process.OutputDataReceived += (_, args) => {
+                if (args.Data != null)
+                    System.Threading.Interlocked.Increment(ref printedLines);
+            };
+            process.ErrorDataReceived += (_, _) => { };
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            while (PrintedLines == 0) {
+                if (DateTime.UtcNow >= deadline)
+                    throw new TimeoutException("The debuggee printed nothing, so it never got going");
+                System.Threading.Thread.Sleep(25);
+            }
+        }
+
+        /// <summary>How many lines the debuggee printed during the given window. Zero means suspended.</summary>
+        public int CountPrintedDuring(TimeSpan window) {
+            var before = PrintedLines;
+            System.Threading.Thread.Sleep(window);
+            return PrintedLines - before;
+        }
+
+        public void Dispose() {
+            try {
+                if (!process.HasExited)
+                    process.Kill(entireProcessTree: true);
+                process.WaitForExit(5000);
+            }
+            catch { /* already gone */ }
+            finally {
+                process.Dispose();
+            }
+        }
+    }
+
     protected List<Breakpoint> SetBreakpoints(params SourceBreakpoint[] breakpoints) {
         var response = Host.SendRequestSync(new SetBreakpointsRequest() {
             Source = new Source() { Path = ProgramFilePath },

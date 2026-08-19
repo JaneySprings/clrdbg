@@ -201,16 +201,30 @@ public partial class ManagedDebugger {
     }
 
     /// <summary>
-    /// Pause execution
+    /// Pause execution. Refused when the process is not in a state it can be stopped from, rather than
+    /// skipped: the caller is told the program stopped, so it has to have stopped.
+    ///
+    /// For a short while after an attach has landed, ICorDebug reports the process as not running while
+    /// the debuggee is plainly still executing - it is working through the synthetic attach events
+    /// rather than sitting at a stop. Skipping the stop there left a client believing a running program
+    /// had halted, with no way to find out: over DAP a running process and a stopped one answer a stack
+    /// trace alike. The state clears in a moment, so a client that wants the pause can ask again.
     /// </summary>
     public void Pause() {
         _logger?.Invoke("Pause");
         ArgumentNullException.ThrowIfNull(_process);
-        if (_process.IsRunning()) {
-            _process.Stop(0);
-            _asyncStepper?.Disable();
-        }
+        if (!IsRunning)
+            throw new InvalidOperationException("The program is not running, so it cannot be paused: it has either stopped already or has not finished starting");
+
+        _process.Stop(0);
+        _asyncStepper?.Disable();
     }
+
+    /// <summary>
+    /// Whether ICorDebug reports the debuggee as executing, which is the one state <see cref="Pause"/>
+    /// can stop it from.
+    /// </summary>
+    public bool IsRunning => _process?.IsRunning() ?? false;
 
     /// <summary>
     /// Step to the next line
