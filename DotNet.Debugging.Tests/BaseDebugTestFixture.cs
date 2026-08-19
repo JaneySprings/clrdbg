@@ -138,10 +138,7 @@ public abstract class BaseDebugTestFixture {
         }
     }
 
-    /// <summary>
-    /// Launches the program. 'skipDebug' runs it without a debugger at all, which is the DAP noDebug
-    /// case and a different agent inside the adapter.
-    /// </summary>
+    /// <summary>Launches the program. 'skipDebug' runs it without a debugger at all.</summary>
     protected void Launch(bool stopAtEntry = false, bool justMyCode = true, bool skipDebug = false) {
         var launchRequest = new LaunchRequest();
         launchRequest.ConfigurationProperties = new Dictionary<string, JToken> {

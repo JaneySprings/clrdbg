@@ -16,12 +16,6 @@ public class ProcessEventTests : BaseDebugTestFixture {
         """;
     }
 
-    /// <summary>
-    /// A launched program's pid reaches the client through the DAP 'process' event and nowhere else,
-    /// which leaves a client that launches nothing to show, to log, or to kill if the session goes
-    /// wrong. The number has to name the process actually being debugged, and the only witness to that
-    /// is the program itself, so it prints its own and the two are compared.
-    /// </summary>
     [Test]
     public void LaunchReportsTheProcessItStartedTest() {
         Launch();
@@ -37,11 +31,6 @@ public class ProcessEventTests : BaseDebugTestFixture {
         Assert.That(reported.Name, Is.EqualTo(ProgramPath));
     }
 
-    /// <summary>
-    /// A skipDebug run has no debugger in it, so nothing else could report the pid: there is no engine
-    /// event to raise and no attach for the client to have named the process in. The program still runs
-    /// and still prints, so the same comparison holds.
-    /// </summary>
     [Test]
     public void SkipDebugLaunchReportsTheProcessItStartedTest() {
         Launch(skipDebug: true);
@@ -54,10 +43,8 @@ public class ProcessEventTests : BaseDebugTestFixture {
         Assert.That(reported.Name, Is.EqualTo(ProgramPath));
     }
 
-    /// <summary>
-    /// Read from the retained events rather than the queue: what the program prints and the event
-    /// naming it arrive in either order, and taking one off the queue would discard the other.
-    /// </summary>
+    // Read from the retained events rather than the queue: what the program prints and the event
+    // naming it arrive in either order
     private int PrintedProcessId() {
         var deadline = DateTime.UtcNow.AddSeconds(30);
         while (DateTime.UtcNow < deadline) {
