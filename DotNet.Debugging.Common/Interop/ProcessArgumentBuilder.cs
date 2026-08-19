@@ -7,9 +7,13 @@ public class ProcessArgumentBuilder {
         this.args.Add(arg);
         return this;
     }
-
     public ProcessArgumentBuilder Append(params string[] args) {
         this.args.AddRange(args);
+        return this;
+    }
+    public ProcessArgumentBuilder Append<TItem>(IEnumerable<TItem> collection, Func<TItem, string> getArg) {
+        foreach (var item in collection)
+            this.args.Add(getArg.Invoke(item));
         return this;
     }
 

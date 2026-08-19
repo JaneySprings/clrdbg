@@ -1,7 +1,7 @@
 using System.Text.Json;
+using DotNet.Debugging.Adapter.Extensions;
 using DotNet.Debugging.Common.Extensions;
 using DotNet.Debugging.Engine.Models;
-using DotNet.Debugging.Adapter.Extensions;
 using Newtonsoft.Json.Linq;
 
 namespace DotNet.Debugging.Adapter;
@@ -12,11 +12,14 @@ public class LaunchConfiguration : BaseConfiguration {
     public List<string> Arguments { get; private set; }
     public Dictionary<string, string> EnvironmentVariables { get; private set; }
     public LaunchRequestConsoleType Console { get; }
+    public DebugTarget Platform { get; }
     public bool SuppressJITOptimizations { get; }
     public bool StopAtEntry { get; }
     public string? LaunchSettingsFilePath { get; }
     public string? LaunchSettingsProfile { get; }
     public CoreClrMobileDebuggerOptions? MobileOptions { get; }
+    public string? RemoteHostDirectory { get; }
+    public string? RemoteTargetDirectory { get; }
     // TODO: implement
     public object? PipeTransport { get; }
 
@@ -26,11 +29,14 @@ public class LaunchConfiguration : BaseConfiguration {
         Arguments = properties.TryGetValue("args").ToClass<List<string>>() ?? new List<string>();
         EnvironmentVariables = properties.TryGetValue("env").ToClass<Dictionary<string, string>>() ?? new Dictionary<string, string>();
         Console = properties.TryGetValue("console").ToValue<LaunchRequestConsoleType>(LaunchRequestConsoleType.InternalConsole);
+        Platform = properties.TryGetValue("platform").ToValue<DebugTarget>(DebugTarget.CoreClr);
         SuppressJITOptimizations = properties.TryGetValue("suppressJITOptimizations").ToValue<bool>(false);
         StopAtEntry = properties.TryGetValue("stopAtEntry").ToValue<bool>(false);
         LaunchSettingsFilePath = properties.TryGetValue("launchSettingsFilePath").ToClass<string>().ToPlatformPath();
         LaunchSettingsProfile = properties.TryGetValue("launchSettingsProfile").ToClass<string>();
         MobileOptions = properties.TryGetValue("coreClrMobileDebuggerOptions").ToClass<CoreClrMobileDebuggerOptions>();
+        RemoteHostDirectory = properties.TryGetValue("remoteCoreclrHost").ToClass<string>().ToPlatformPath();
+        RemoteTargetDirectory = properties.TryGetValue("remoteCoreclrTarget").ToClass<string>().ToPlatformPath();
 
         if (string.IsNullOrEmpty(WorkingDirectory))
             WorkingDirectory = Path.GetDirectoryName(Path.GetFullPath(Program));
@@ -55,15 +61,15 @@ public class LaunchConfiguration : BaseConfiguration {
     }
     public override void VerifyMissingProperties() {
         if (string.IsNullOrEmpty(Program) || (!File.Exists(Program) && !Directory.Exists(Program)))
-            throw Session.GetProtocolException(string.Format(Resources.MessageInvalidProgram, Program));
+            throw new ArgumentException(string.Format(Resources.MsgInvalidProgram, Program));
 
         if (MobileOptions != null) {
-            if (string.IsNullOrEmpty(MobileOptions.Platform))
-                throw Session.GetProtocolException("The launch configuration 'platform' is required for mobile debugging (e.g. 'ios' or 'maccatalyst').");
-            if (string.IsNullOrEmpty(MobileOptions.RuntimeIdentifier))
-                throw Session.GetProtocolException("The launch configuration 'runtimeIdentifier' is required for mobile debugging (e.g. 'maccatalyst-arm64').");
-            if (MobileOptions.IsSimulator && string.IsNullOrEmpty(MobileOptions.Device))
-                throw Session.GetProtocolException("The launch configuration 'device' (simulator UDID) is required to debug on the iOS simulator.");
+            if (string.IsNullOrEmpty(MobileOptions.AssetsPath))
+                throw new ArgumentException(Resources.MsgMissingAssets);
+            if (string.IsNullOrEmpty(RemoteHostDirectory) || !Directory.Exists(RemoteHostDirectory))
+                throw new ArgumentException(Resources.MsgMissingCoreclrHost);
+            if (string.IsNullOrEmpty(RemoteTargetDirectory) || !Directory.Exists(RemoteTargetDirectory))
+                throw new ArgumentException(Resources.MsgMissingCoreclrTarget);
         }
     }
 

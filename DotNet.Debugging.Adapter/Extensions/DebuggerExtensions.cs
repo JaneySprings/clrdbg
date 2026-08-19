@@ -1,6 +1,8 @@
 using System.Text.RegularExpressions;
+using DotNet.Debugging.Common.Extensions;
 using DotNet.Debugging.Common.Logging;
 using DotNet.Debugging.Engine;
+using DotNet.Debugging.Engine.Models;
 
 namespace DotNet.Debugging.Adapter.Extensions;
 
@@ -40,11 +42,11 @@ public static partial class DebuggerExtensions {
         return "<No Name>";
     }
     public static string ToLoadedAssemblyMessage(this ModuleLoadedInfo moduleInfo, string processName, bool justMyCode) {
-        var symbolStatus = Resources.MessageCannotFindPdb;
+        var symbolStatus = Resources.MsgCannotFindPdb;
         if (moduleInfo.SymbolsLoaded)
-            symbolStatus = Resources.MessagePdbLoaded;
+            symbolStatus = Resources.MsgPdbLoaded;
         else if (moduleInfo.IsOptimized && justMyCode)
-            symbolStatus = Resources.MessagePdfSkipped;
+            symbolStatus = Resources.MsgPdfSkipped;
 
         return $"dotnet ({moduleInfo.ProcessId}): Loaded '{moduleInfo.ModulePath}'. {symbolStatus}";
     }

@@ -17,7 +17,7 @@ public class AttachDebugAgent : BaseDebugAgent<AttachConfiguration> {
                 return;
 
             watchdog.Stop();
-            DebugSession.Protocol.SendEvent(new TerminatedEvent());
+            Protocol.SendEvent(new TerminatedEvent());
         };
         watchdog.Start();
         Disposables.Add(() => watchdog.Dispose());

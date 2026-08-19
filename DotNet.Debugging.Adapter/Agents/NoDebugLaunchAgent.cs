@@ -1,6 +1,7 @@
+using DotNet.Debugging.Adapter.Extensions;
+using DotNet.Debugging.Common;
 using DotNet.Debugging.Common.Interop;
 using DotNet.Debugging.Engine;
-using DotNet.Debugging.Adapter.Extensions;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
 
 namespace DotNet.Debugging.Adapter;
@@ -15,20 +16,13 @@ public class SkipDebugAgent : BaseDebugAgent<LaunchConfiguration> {
         foreach (var argument in launchInfo.Arguments)
             arguments.Append(argument);
 
-        var runner = new ProcessRunner(launchInfo.Program, arguments, DebugSession);
+        var runner = new ProcessRunner(launchInfo.Program, arguments, ProcessLogger);
         runner.SetWorkingDirectory(launchInfo.Cwd);
         foreach (var kvp in launchInfo.Env)
             runner.SetEnvironmentVariable(kvp.Key, kvp.Value);
 
         var process = runner.Start();
-        process.EnableRaisingEvents = true;
-        process.Exited += (_, _) => {
-            DebugSession.Protocol.TrySendEvent(new TerminatedEvent());
-        };
-
-        Disposables.Add(() => {
-            if (!process.HasExited)
-                process.Kill();
-        });
+        process.AddFinalizer(() => Protocol.TrySendEvent(new TerminatedEvent()));
+        Disposables.Add(() => process.Terminate());
     }
 }

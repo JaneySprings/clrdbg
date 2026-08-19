@@ -3,16 +3,13 @@ using DotNet.Debugging.Common.Interop;
 namespace DotNet.Debugging.Common;
 
 public static class MSBuildLocator {
-    public static FileInfo DotNetTool {
-        get {
-            var path = Path.Combine(MSBuildLocator.GetRootDirectory(), "dotnet" + RuntimeInfo.ExecExtension);
-            if (!File.Exists(path))
-                throw new FileNotFoundException("Could not find 'dotnet' tool");
+    public static string GetMuxerPath() {
+        var path = Path.Combine(MSBuildLocator.GetRootDirectory(), "dotnet" + RuntimeInfo.ExecExtension);
+        if (!File.Exists(path))
+            throw new FileNotFoundException("Could not find 'dotnet' tool");
 
-            return new FileInfo(path);
-        }
+        return path;
     }
-
     public static string GetRootDirectory() {
         var dotnetRoot = Environment.GetEnvironmentVariable("DOTNET_ROOT");
         if (!string.IsNullOrEmpty(dotnetRoot) && Directory.Exists(dotnetRoot))
@@ -39,7 +36,7 @@ public static class MSBuildLocator {
     }
     public static string GetLatestSdkDirectory() {
         var sdkPath = Path.Combine(GetRootDirectory(), "sdk");
-        var result = new ProcessRunner(DotNetTool, new ProcessArgumentBuilder()
+        var result = new ProcessRunner(GetMuxerPath(), new ProcessArgumentBuilder()
            .Append("--version")).WaitForExit();
         if (result.Success)
             return Path.Combine(sdkPath, string.Concat(result.StandardOutput).Trim());

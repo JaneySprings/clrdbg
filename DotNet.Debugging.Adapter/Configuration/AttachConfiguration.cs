@@ -1,6 +1,6 @@
 using System.Diagnostics;
-using DotNet.Debugging.Common.Extensions;
 using DotNet.Debugging.Adapter.Extensions;
+using DotNet.Debugging.Common.Extensions;
 using Newtonsoft.Json.Linq;
 
 namespace DotNet.Debugging.Adapter;
@@ -24,7 +24,7 @@ public class AttachConfiguration : BaseConfiguration {
     }
     public override void VerifyMissingProperties() {
         if (string.IsNullOrEmpty(ProcessName) && ProcessId <= 0)
-            throw Session.GetProtocolException(Resources.MessageMissingProcess);
+            throw new ArgumentException(Resources.MsgMissingProcess);
     }
 
     public int GetProcessId() {
@@ -34,9 +34,9 @@ public class AttachConfiguration : BaseConfiguration {
         ArgumentNullException.ThrowIfNullOrEmpty(ProcessName);
         var processes = Process.GetProcessesByName(ProcessName);
         if (processes == null || processes.Length == 0)
-            throw Session.GetProtocolException(Resources.MessageNoRunningProcesses);
+            throw Session.GetProtocolException(Resources.MsgNoRunningProcesses);
         if (processes.Length > 1)
-            throw Session.GetProtocolException(Resources.MessageMultipleProcesses);
+            throw Session.GetProtocolException(Resources.MsgMultipleProcesses);
 
         return processes[0].Id;
     }
