@@ -1,66 +1,106 @@
+using DotNet.Debugging.Common;
+using DotNet.Debugging.Common.Apple;
+using DotNet.Debugging.Common.Extensions;
+using DotNet.Debugging.Common.Interop;
 using DotNet.Debugging.Engine;
+using DotNet.Debugging.Engine.Models;
+using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
 
 namespace DotNet.Debugging.Adapter;
 
-/// <summary>
-/// Drives a CoreCLR mobile (iOS simulator / maccatalyst) debug session. Unlike a local launch, the app is started
-/// out-of-process on the target and connects back to the debugger's remote transport, so ordering matters:
-/// the debugger must be listening before the app is launched. That is arranged via the <c>onListenerReady</c>
-/// callback passed to <see cref="ManagedDebugger.AttachRemote"/>.
-/// </summary>
 public class MobileDebugAgent : BaseDebugAgent<LaunchConfiguration> {
-    // private CoreClrMobileTarget? _target;
-    // private int _debuggerPort;
-
     public MobileDebugAgent(LaunchConfiguration configuration, DebugSession debugSession) : base(configuration, debugSession) { }
 
     public override void Connect(ManagedDebugger debugger) {
-        // ArgumentNullException.ThrowIfNull(Configuration.MobileOptions);
-        // _debuggerPort = RuntimeInfo.GetFreePort();
-        // _target = CoreClrMobileTarget.Resolve(
-        //     Configuration.Program,
-        //     Configuration.MobileOptions.Platform!,
-        //     Configuration.MobileOptions.RuntimeIdentifier!,
-        //     Configuration.MobileOptions.IsSimulator,
-        //     Configuration.MobileOptions.Device,
-        //     Configuration.MobileOptions.VsdbgRemoteResources);
-        // Logger.Debug($"Prepared mobile target {_target.DbgShimPlatform}: bundle={_target.AppBundlePath}, port={_debuggerPort}");
+        ArgumentNullException.ThrowIfNull(Configuration.MobileOptions);
+        debugger.AttachRemote(GetAttachInfo(), Configuration.JustMyCode, onListenerReady: () => {
+            Logger.Debug($"Debugger listening on {Configuration.MobileOptions.Address}:{Configuration.MobileOptions.Port}");
 
-        // var remoteAttachInfo = new RemoteAttachInfo {
-        //     Address = "127.0.0.1",
-        //     Port = _debuggerPort,
-        //     Platform = _target.DbgShimPlatform,
-        //     IsServer = true,
-        //     MscordbiPath = _target.MscordbiPath,
-        //     AssembliesPath = _target.AssembliesPath
-        // };
-        // debugger.AttachRemote(remoteAttachInfo, Configuration.JustMyCode, onListenerReady: PrepareTarget);
+            Configuration.EnvironmentVariables.Add("CORECLR_ENABLE_PROFILING", "1");
+            Configuration.EnvironmentVariables.Add("CORECLR_PROFILER", "{9DC623E8-C88F-4FD5-AD99-77E67E1D9631}");
+            Configuration.EnvironmentVariables.Add("CORECLR_REMOTE_DEBUGGER_IP", Configuration.MobileOptions.Address!);
+            Configuration.EnvironmentVariables.Add("CORECLR_REMOTE_DEBUGGER_PORT", Configuration.MobileOptions.Port.ToString());
+            Configuration.EnvironmentVariables.Add("CORECLR_REMOTE_DEBUGGER_ISSERVER", Configuration.MobileOptions.IsServer ? "0" : "1");
+            Configuration.EnvironmentVariables.Add("DOTNET_MODIFIABLE_ASSEMBLIES", "debug");
+
+            switch (Configuration.Platform) {
+                case DebugTarget.Android:
+                    // LaunchAndroid();
+                    break;
+                case DebugTarget.IOS:
+                    LaunchAppleMobile();
+                    break;
+                case DebugTarget.Maccatalyst:
+                    LaunchMacCatalyst();
+                    break;
+                case DebugTarget.CoreClr:
+                    throw new NotSupportedException();
+            }
+        });
     }
 
-    private void PrepareTarget() {
-        // ArgumentNullException.ThrowIfNull(_target);
-        // Logger.Debug($"Debugger listening on port {_debuggerPort}, launching app on {(_target.IsMacCatalyst ? "maccatalyst" : "iOS simulator")}");
+    private void LaunchMacCatalyst() {
+        var libraryName = "libvsdbgremotecoreclrtarget.dylib";
+        var libraryPath = Path.Combine(Configuration.Program, "Contents", "MonoBundle", libraryName);
+        if (!File.Exists(libraryPath))
+            throw new FileNotFoundException($"File not found: {libraryPath}");
 
-        // // DebugSession is an IProcessLogger, so the app's console is forwarded straight to the debug console.
-        // var debuggeeProcess = CoreClrMobileLauncher.Launch(_target, _debuggerPort, DebugSession);
+        Configuration.EnvironmentVariables.Add("CORECLR_PROFILER_PATH", libraryName);
 
-        // // The remote transport only reports process exit once connected; watch the launcher process too so a
-        // // crash-before-connect (or the simulator/app being closed) still terminates the session cleanly.
-        // try {
-        //     debuggeeProcess.EnableRaisingEvents = true;
-        //     debuggeeProcess.Exited += (_, _) => DebugSession.Protocol.SendEvent(new TerminatedEvent());
-        // }
-        // catch (Exception ex) {
-        //     Logger.Error($"Failed to watch the debuggee process: {ex.Message}");
-        // }
+        var appProcess = new ProcessRunner(AppleSdkLocator.OpenTool(), new ProcessArgumentBuilder()
+            .Append("-n", "-W")
+            .Append(Configuration.EnvironmentVariables, (kvp) => $"--env \"{kvp.Key}={kvp.Value}\"")
+            .AppendQuoted(Configuration.Program), ProcessLogger)
+            .Start();
 
-        // Disposables.Add(() => {
-        //     try {
-        //         if (debuggeeProcess is { HasExited: false }) debuggeeProcess.Kill(entireProcessTree: true);
-        //     }
-        //     catch (Exception ex) {
-        //         Logger.Error($"Failed to kill the debuggee process: {ex.Message}");
-        //     }
-        // });
+        appProcess.AddFinalizer(() => Protocol.SendEvent(new TerminatedEvent()));
+        Disposables.Add(() => SafeExtensions.Invoke(() => appProcess.Terminate(entireProcessTree: true)));
+    }
+    private void LaunchAppleMobile() {
+        var libraryName = "libvsdbgremotecoreclrtarget.dylib";
+        var libraryPath = Path.Combine(Configuration.Program, libraryName);
+        if (!File.Exists(libraryPath))
+            throw new FileNotFoundException($"File not found: {libraryPath}");
+
+        Configuration.EnvironmentVariables.Add("CORECLR_PROFILER_PATH", libraryName);
+
+        ArgumentNullException.ThrowIfNullOrEmpty(Configuration.MobileOptions?.Device);
+        var simProcess = MonoLauncher.LaunchSim(
+            Configuration.MobileOptions.Device, Configuration.Program,
+            Enumerable.Empty<string>(), Configuration.EnvironmentVariables, ProcessLogger
+        ).Start();
+
+        simProcess.AddFinalizer(() => Protocol.SendEvent(new TerminatedEvent()));
+        Disposables.Add(() => SafeExtensions.Invoke(() => simProcess.Terminate(entireProcessTree: true)));
+    }
+
+    private string GetCoreclrHostLibrary() {
+        var runtime = $"{RuntimeInfo.GetOperationSystem()}-{RuntimeInfo.GetArchitecture()}";
+        var libraryName = $"libremotemscordbihost{RuntimeInfo.LibExtension}";
+        var libraryPath = Path.Combine(Configuration.RemoteHostDirectory!, runtime, libraryName);
+        if (!File.Exists(libraryPath))
+            throw new FileNotFoundException($"File not found: {libraryPath}");
+
+        return libraryPath;
+    }
+    private RemoteAttachInfo GetAttachInfo() {
+        ArgumentNullException.ThrowIfNull(Configuration.MobileOptions);
+
+        if (Configuration.MobileOptions.Port <= 0)
+            Configuration.MobileOptions.Port = RuntimeInfo.GetFreePort();
+        if (Configuration.MobileOptions.Address == null)
+            Configuration.MobileOptions.Address = "127.0.0.1";
+        if (Configuration.MobileOptions.RuntimeIdentifier == null)
+            Configuration.MobileOptions.RuntimeIdentifier = string.Empty;
+
+        var mscordbiPath = GetCoreclrHostLibrary();
+        return new RemoteAttachInfo {
+            Address = Configuration.MobileOptions.Address,
+            Port = Configuration.MobileOptions.Port,
+            IsServer = Configuration.MobileOptions.IsServer,
+            AssembliesPath = $"{Configuration.MobileOptions.AssetsPath};{Path.GetDirectoryName(mscordbiPath)}",
+            Platform = Configuration.MobileOptions.RuntimeIdentifier.Replace('-', ';').Replace("iossimulator", "ios"),
+            MscordbiPath = mscordbiPath,
+        };
     }
 }

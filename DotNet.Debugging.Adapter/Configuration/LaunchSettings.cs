@@ -2,6 +2,13 @@ using System.Text.Json.Serialization;
 
 namespace DotNet.Debugging.Adapter;
 
+public enum DebugTarget {
+    CoreClr,
+    Android,
+    IOS,
+    Maccatalyst,
+}
+
 public class LaunchSettings {
     [JsonPropertyName("profiles")]
     public Dictionary<string, LaunchProfile>? Profiles { get; set; }
@@ -31,18 +38,24 @@ public class LaunchProfile {
 }
 
 public class CoreClrMobileDebuggerOptions {
-    [JsonPropertyName("platform")]
-    public string? Platform { get; }
-
     [JsonPropertyName("runtimeIdentifier")]
     public string? RuntimeIdentifier { get; set; }
 
-    [JsonPropertyName("device")] // UDID (iOS) / ADB serial (Android) / null
+    [JsonPropertyName("ip")]
+    public string? Address { get; set; }
+
+    [JsonPropertyName("port")]
+    public int Port { get; set; }
+
+    [JsonPropertyName("isServer")]
+    public bool IsServer { get; set; }
+
+    [JsonPropertyName("assetsPath")]
+    public string? AssetsPath { get; set; }
+
+    [JsonPropertyName("device")]
     public string? Device { get; set; }
 
-    [JsonPropertyName("isSimulator")]
-    public bool IsSimulator { get; set; }
-
-    [JsonPropertyName("vsdbgRemoteResources")] // Optional override for the directory that holds the Microsoft remote-debugging native binaries
-    public string? VsdbgRemoteResources { get; set; }
+    // [JsonPropertyName("isSimulator")]
+    // public bool IsSimulator { get; set; }
 }

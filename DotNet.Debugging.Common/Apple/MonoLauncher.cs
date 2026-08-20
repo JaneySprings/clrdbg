@@ -25,7 +25,7 @@ public static class MonoLauncher {
             .Conditional("--use-device-ctl=false", () => !MonoLauncher.UseDeviceCtl), logger)
             .WaitForExit();
     }
-    private static ProcessRunner LaunchDev(string serial, string bundlePath, IEnumerable<string> arguments, Dictionary<string, string> environment, IProcessLogger? logger = null) {
+    public static ProcessRunner LaunchDev(string serial, string bundlePath, IEnumerable<string> arguments, Dictionary<string, string> environment, IProcessLogger? logger = null) {
         var tool = AppleSdkLocator.MLaunchTool();
         var argumentBuilder = new ProcessArgumentBuilder()
             .Append("--launchdev").AppendQuoted(bundlePath)
@@ -39,41 +39,20 @@ public static class MonoLauncher {
 
         return new ProcessRunner(tool, argumentBuilder, logger);
     }
-    private static ProcessRunner LaunchSim(string serial, string bundlePath, IEnumerable<string> arguments, Dictionary<string, string> environment, IProcessLogger? logger = null) {
+    public static ProcessRunner LaunchSim(string serial, string bundlePath, IEnumerable<string> arguments, Dictionary<string, string> environment, IProcessLogger? logger = null) {
         var tool = AppleSdkLocator.MLaunchTool();
         logger?.OnOutputDataReceived(tool.FullName);
         var argumentBuilder = new ProcessArgumentBuilder()
             .Append("--launchsim").AppendQuoted(bundlePath)
-            .Append($"--device=:v2:udid={serial}");
+            .Append($"--device=:v2:udid={serial}")
+            .Append("-v");
 
         foreach (var arg in arguments)
             argumentBuilder.Append($"--argument={arg}");
         foreach (var env in environment)
             argumentBuilder.Append($"--setenv={env.Key}={env.Value}");
 
+        argumentBuilder.Append("--wait-for-exit:true");
         return new ProcessRunner(tool, argumentBuilder, logger);
-    }
-
-    public static Process DebugDev(string serial, string bundlePath, int port, Dictionary<string, string>? environment = null, IProcessLogger? logger = null) {
-        environment ??= new Dictionary<string, string>();
-        environment.TryAdd("__XAMARIN_DEBUG_PORT__", $"{port}");
-        return MonoLauncher.LaunchDev(serial, bundlePath,
-            arguments: new List<string> {
-                "-monodevelop-port", $"{port}"
-            },
-            environment,
-            logger
-        ).Start();
-    }
-    public static Process DebugSim(string serial, string bundlePath, int port, Dictionary<string, string>? environment = null, IProcessLogger? logger = null) {
-        environment ??= new Dictionary<string, string>();
-        environment.TryAdd("__XAMARIN_DEBUG_PORT__", $"{port}");
-        return MonoLauncher.LaunchSim(serial, bundlePath,
-            arguments: new List<string> {
-                "-monodevelop-port", $"{port}"
-            },
-            environment,
-            logger
-        ).Start();
     }
 }

@@ -1,6 +1,7 @@
+using DotNet.Debugging.Adapter.Extensions;
+using DotNet.Debugging.Common;
 using DotNet.Debugging.Common.Interop;
 using DotNet.Debugging.Engine;
-using DotNet.Debugging.Adapter.Extensions;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
 
 namespace DotNet.Debugging.Adapter;
@@ -15,29 +16,22 @@ public class SkipDebugAgent : BaseDebugAgent<LaunchConfiguration> {
         foreach (var argument in launchInfo.Arguments)
             arguments.Append(argument);
 
-        var runner = new ProcessRunner(launchInfo.Program, arguments, DebugSession);
+        var runner = new ProcessRunner(launchInfo.Program, arguments, ProcessLogger);
         runner.SetWorkingDirectory(launchInfo.Cwd);
         foreach (var kvp in launchInfo.Env)
             runner.SetEnvironmentVariable(kvp.Key, kvp.Value);
 
         var process = runner.Start();
 
-        // Nothing else reports this one: a skipDebug run has no debugger to raise the engine's event.
+        // Nothing else reports this one: a skipDebug run has no debugger to raise the engine event.
         // Program is non-null: GetLaunchInfo above throws otherwise.
-        DebugSession.Protocol.TrySendEvent(new ProcessEvent(Configuration.Program!) {
+        Protocol.TrySendEvent(new ProcessEvent(Configuration.Program!) {
             SystemProcessId = process.Id,
             StartMethod = ProcessEvent.StartMethodValue.Launch,
             IsLocalProcess = true,
         });
 
-        process.EnableRaisingEvents = true;
-        process.Exited += (_, _) => {
-            DebugSession.Protocol.TrySendEvent(new TerminatedEvent());
-        };
-
-        Disposables.Add(() => {
-            if (!process.HasExited)
-                process.Kill();
-        });
+        process.AddFinalizer(() => Protocol.TrySendEvent(new TerminatedEvent()));
+        Disposables.Add(() => process.Terminate());
     }
 }
