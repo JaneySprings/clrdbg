@@ -138,13 +138,16 @@ public abstract class BaseDebugTestFixture {
         }
     }
 
-    protected void Launch(bool stopAtEntry = false, bool justMyCode = true) {
+    /// <summary>Launches the program. 'skipDebug' runs it without a debugger at all.</summary>
+    protected void Launch(bool stopAtEntry = false, bool justMyCode = true, bool skipDebug = false) {
         var launchRequest = new LaunchRequest();
         launchRequest.ConfigurationProperties = new Dictionary<string, JToken> {
             ["program"] = ProgramPath,
             ["stopAtEntry"] = stopAtEntry,
             ["justMyCode"] = justMyCode,
+            ["skipDebug"] = skipDebug,
         };
+
         Host.SendRequestSync(launchRequest);
     }
     /// <summary>

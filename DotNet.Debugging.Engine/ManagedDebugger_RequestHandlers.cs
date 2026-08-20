@@ -83,6 +83,7 @@ public partial class ManagedDebugger {
         _isAttached = true;
 
         _logger?.Invoke($"Successfully attached to process: {processId}");
+        OnProcessStarted?.Invoke(processId);
         SendAllBreakpointEvents();
         return;
 
@@ -146,6 +147,9 @@ public partial class ManagedDebugger {
             _pendingLaunchInfo = null;
             PerformAttach(launchedProcessId);
             await DiagnosticClientHelper.DiagnosticClientResumeRuntime(launchedProcessId);
+            // The client started this one and reported its pid; PerformAttach is fire-and-forget, so
+            // there is nothing to await before saying so
+            OnProcessStarted?.Invoke(launchedProcessId);
         }
         else if (_pendingRemoteAttachInfo is not null) // Remote (mobile/maccatalyst) attach
         {
