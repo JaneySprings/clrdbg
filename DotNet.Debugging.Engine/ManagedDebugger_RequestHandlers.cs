@@ -613,6 +613,14 @@ public partial class ManagedDebugger {
         _logger?.Invoke("Terminate");
         if (_process is not null) {
             try {
+                // Terminate needs the process synchronized. On a running one it fails with
+                // CORDBG_E_PROCESS_NOT_SYNCHRONIZED, and the catch below only logs, so the request
+                // would answer success on a debuggee that is still running.
+                if (_process.TryIsRunning(out var isRunning) is Cor.S_OK && isRunning) {
+                    var hResult = _process.TryStop(0);
+                    if (hResult is not (Cor.S_OK or Cor.CORDBG_E_PROCESS_TERMINATED)) _logger?.Invoke($"Error stopping process before terminating: {hResult}");
+                }
+
                 _process.Terminate(0);
             }
             catch (Exception ex) {
