@@ -29,7 +29,7 @@ public partial class DebugSession : Session {
         session.OnStopped2 += TargetStoppedAtSource;
         session.OnExceptionThrown += TargetExceptionThrown;
         session.OnExited += TargetExited;
-        session.OnProcessStarted += SendProcessEvent;
+        session.OnProcessStarted += TargetProcessStarted;
         session.OnThreadStarted += TargetThreadStarted;
         session.OnThreadExited += TargetThreadStopped;
         session.OnModuleLoaded += AssemblyLoaded;
@@ -90,7 +90,7 @@ public partial class DebugSession : Session {
     // Sent for every launch shape, and for no attach: a client that attached named the process itself.
     // The name is what the client asked to run rather than what ran, since a managed dll goes through
     // the muxer and the process's own executable is 'dotnet'.
-    internal void SendProcessEvent(int processId) {
+    private void TargetProcessStarted(int processId) {
         var configuration = (LaunchConfiguration)debugAgent.Configuration;
         ArgumentNullException.ThrowIfNull(configuration.Program);
 
