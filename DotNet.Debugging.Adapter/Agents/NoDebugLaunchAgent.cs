@@ -23,9 +23,8 @@ public class SkipDebugAgent : BaseDebugAgent<LaunchConfiguration> {
 
         var process = runner.Start();
 
-        // Nothing else reports this one: a skipDebug run has no debugger to raise the engine event.
-        // Program is non-null: GetLaunchInfo above throws otherwise.
-        Protocol.TrySendEvent(new ProcessEvent(Configuration.Program!) {
+        // Nothing else reports this one: a skipDebug run has no debugger to raise the engine event
+        Protocol.TrySendEvent(new ProcessEvent(Configuration.Program) {
             SystemProcessId = process.Id,
             StartMethod = ProcessEvent.StartMethodValue.Launch,
             IsLocalProcess = true,

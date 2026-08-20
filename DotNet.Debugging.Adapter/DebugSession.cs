@@ -92,7 +92,6 @@ public partial class DebugSession : Session {
     // the muxer and the process's own executable is 'dotnet'.
     private void TargetProcessStarted(int processId) {
         var configuration = (LaunchConfiguration)debugAgent.Configuration;
-        ArgumentNullException.ThrowIfNull(configuration.Program);
 
         Protocol.SendEvent(new ProcessEvent(configuration.Program) {
             SystemProcessId = processId,
