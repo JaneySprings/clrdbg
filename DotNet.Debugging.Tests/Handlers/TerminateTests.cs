@@ -51,16 +51,4 @@ public class TerminateTests : BaseDebugTestFixture {
         Assert.That(debuggee.CountPrintedDuring(TimeSpan.FromSeconds(2)), Is.Zero,
             "The debuggee kept printing after a terminate the adapter reported as successful");
     }
-
-    private int WaitForFirstThread() {
-        var deadline = DateTime.UtcNow.AddSeconds(30);
-        while (DateTime.UtcNow < deadline) {
-            var threads = Host.SendRequestSync(new ThreadsRequest()).Threads;
-            if (threads.Count > 0)
-                return threads[0].Id;
-
-            System.Threading.Thread.Sleep(25);
-        }
-        throw new TimeoutException("The attach never produced any threads");
-    }
 }
