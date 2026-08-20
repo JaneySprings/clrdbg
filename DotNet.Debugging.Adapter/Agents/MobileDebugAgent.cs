@@ -63,16 +63,36 @@ public class MobileDebugAgent : BaseDebugAgent<LaunchConfiguration> {
             throw new FileNotFoundException($"File not found: {libraryPath}");
 
         Configuration.EnvironmentVariables.Add("CORECLR_PROFILER_PATH", libraryName);
-
         ArgumentNullException.ThrowIfNullOrEmpty(Configuration.MobileOptions?.Device);
-        var simProcess = MonoLauncher.LaunchSim(
-            Configuration.MobileOptions.Device, Configuration.Program,
-            Enumerable.Empty<string>(), Configuration.EnvironmentVariables, ProcessLogger
-        ).Start();
 
-        simProcess.AddFinalizer(() => Protocol.SendEvent(new TerminatedEvent()));
-        Disposables.Add(() => SafeExtensions.Invoke(() => simProcess.Terminate(entireProcessTree: true)));
+        if (Configuration.MobileOptions.IsDevice) {
+            var forwardedPorts = new List<int>() { Configuration.MobileOptions.Port };
+            if (Configuration.MobileOptions.TcpTunnel != null)
+                forwardedPorts.AddRange(Configuration.MobileOptions.TcpTunnel);
+
+            var proxyProcess = MonoLauncher.TcpTunnel(Configuration.MobileOptions.Device, forwardedPorts, ProcessLogger);
+            Disposables.Add(() => proxyProcess.Terminate());
+
+            MonoLauncher.InstallDev(Configuration.MobileOptions.Device, Configuration.Program, ProcessLogger);
+            var devProcess = MonoLauncher.LaunchDev(
+                Configuration.MobileOptions.Device, Configuration.Program,
+                Configuration.EnvironmentVariables, ProcessLogger
+            ).Start();
+
+            devProcess.AddFinalizer(() => Protocol.SendEvent(new TerminatedEvent()));
+            Disposables.Add(() => SafeExtensions.Invoke(() => devProcess.Terminate()));
+        }
+        else {
+            var simProcess = MonoLauncher.LaunchSim(
+                Configuration.MobileOptions.Device, Configuration.Program,
+                Configuration.EnvironmentVariables, ProcessLogger
+            ).Start();
+
+            simProcess.AddFinalizer(() => Protocol.SendEvent(new TerminatedEvent()));
+            Disposables.Add(() => SafeExtensions.Invoke(() => simProcess.Terminate(entireProcessTree: true)));
+        }
     }
+
 
     private string GetCoreclrHostLibrary() {
         var runtime = $"{RuntimeInfo.GetOperationSystem()}-{RuntimeInfo.GetArchitecture()}";

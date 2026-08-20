@@ -47,6 +47,9 @@ public class CoreClrMobileDebuggerOptions {
     [JsonPropertyName("port")]
     public int Port { get; set; }
 
+    [JsonPropertyName("tcpTunnel")]
+    public int[]? TcpTunnel { get; set; }
+
     [JsonPropertyName("isServer")]
     public bool IsServer { get; set; }
 
@@ -56,6 +59,6 @@ public class CoreClrMobileDebuggerOptions {
     [JsonPropertyName("device")]
     public string? Device { get; set; }
 
-    // [JsonPropertyName("isSimulator")]
-    // public bool IsSimulator { get; set; }
+    [JsonPropertyName("isDevice")]
+    public bool IsDevice { get; set; }
 }
