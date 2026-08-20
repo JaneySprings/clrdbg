@@ -69,6 +69,9 @@ public static class ServerExtensions {
             EvaluateName = details.EvaluateName,
             StackTrace = details.StackTrace,
             InnerException = details.InnerException?.Select(it => it.ToExceptionDetails()).ToList(),
+            FormattedDescription = details.FormattedDescription,
+            HResult = details.HResult,
+            Source = details.Source,
         };
     }
 

@@ -34,6 +34,20 @@ public class ExceptionTests : BaseDebugTestFixture {
     }
 
     [Test]
+    public void ExceptionDetailsAreReportedInFullTest() {
+        Launch();
+        SetExceptionBreakpoints(new[] { "all" }, ("all", null));
+        ConfigurationDone();
+
+        var stopped = WaitForStopped(StoppedEvent.ReasonValue.Exception);
+        var details = Host.SendRequestSync(new ExceptionInfoRequest() { ThreadId = stopped.ThreadId!.Value }).Details;
+
+        Assert.That(details?.HResult, Is.EqualTo(unchecked((int)0x80131509)), "COR_E_INVALIDOPERATION");
+        Assert.That(details?.Source, Is.EqualTo(ProjectName), "The assembly that raised it, not a source file");
+        Assert.That(details?.FormattedDescription, Does.Contain("comparer boom"));
+    }
+
+    [Test]
     public void UserUnhandledExceptionTest() {
         Launch();
         SetExceptionBreakpoints(new[] { "userUnhandled" }, ("userUnhandled", null));
