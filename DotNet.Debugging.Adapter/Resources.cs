@@ -6,9 +6,17 @@ public static class Resources {
     public const string MsgMultipleProcesses = "Multiple processes were found matching the process name. Attach by process id instead.";
     public const string MsgInvalidProgram = "launch: program '{0}' does not exist.";
 
+    public const string MsgLicenseBanner =
+        "------------------------------------------------------------------------------\n" +
+        "You may use the clrdbg .NET debugger with Visual Studio Code, any other editor,\n" +
+        "or no editor at all to help you develop and test your applications.\n" +
+        "Unlike some debuggers, it does not mind which software you run it from.\n" +
+        "------------------------------------------------------------------------------";
+
     public const string MsgCannotFindPdb = "Cannot find or open the PDB file.";
     public const string MsgPdbLoaded = "Symbols loaded.";
     public const string MsgPdfSkipped = "Skipped loading symbols. Module is optimized and the debugger option 'Just My Code' is enabled.";
+    public const string MsgPdbSkippedShort = "Skipped loading symbols.";
 
     // public const string MsgMissingRuntimeId = $"Missing required property: 'runtimeIdentifier'.";
     public const string MsgMissingAssets = "Missing required property: 'assets'.";

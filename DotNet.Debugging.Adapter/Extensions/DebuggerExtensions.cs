@@ -1,45 +1,42 @@
+using System.Text;
 using System.Text.RegularExpressions;
-using DotNet.Debugging.Common.Extensions;
 using DotNet.Debugging.Common.Logging;
 using DotNet.Debugging.Engine;
-using DotNet.Debugging.Engine.Models;
 
 namespace DotNet.Debugging.Adapter.Extensions;
 
 public static partial class DebuggerExtensions {
-    private static readonly HashSet<string> simpleTypeNames = new HashSet<string> {
-        "bool", "byte", "sbyte", "char", "short", "ushort", "int", "uint",
-        "long", "ulong", "float", "double", "decimal", "string", "nint", "nuint"
-    };
-
     public static string ToDisplayName(this string? variableName, string? typeName) {
         if (string.IsNullOrEmpty(variableName) || string.IsNullOrEmpty(typeName))
             return variableName ?? string.Empty;
-        if (!IsSimpleType(typeName))
-            return variableName;
 
-        return $"{variableName} [{typeName}]";
+        return $"{variableName} [{ToShortTypeName(typeName)}]";
     }
     public static string ToVariableName(this string displayName) {
-        // Clients send the display name back in 'SetVariable' requests - strip the '[type]' suffix
-        var suffixIndex = displayName.LastIndexOf(" [", StringComparison.Ordinal);
-        if (suffixIndex <= 0 || !displayName.EndsWith(']'))
+        if (!displayName.EndsWith(']'))
             return displayName;
 
-        var typeName = displayName.Substring(suffixIndex + 2, displayName.Length - suffixIndex - 3);
-        return IsSimpleType(typeName) ? displayName.Substring(0, suffixIndex) : displayName;
+        var suffixIndex = displayName.LastIndexOf(" [", StringComparison.Ordinal);
+        return suffixIndex <= 0 ? displayName : displayName.Substring(0, suffixIndex);
     }
-    private static bool IsSimpleType(string typeName) {
-        // 'int?' is a simple type as well
-        if (typeName.EndsWith('?'))
-            typeName = typeName.Substring(0, typeName.Length - 1);
-        return simpleTypeNames.Contains(typeName);
+    private static string ToShortTypeName(string typeName) {
+        var result = new StringBuilder(typeName.Length);
+        var segmentStart = 0;
+        for (var i = 0; i <= typeName.Length; i++) {
+            if (i < typeName.Length && typeName[i] is not ('<' or '>' or ',' or ' '))
+                continue;
+
+            var segment = typeName.AsSpan(segmentStart, i - segmentStart);
+            result.Append(segment[(segment.LastIndexOf('.') + 1)..]);
+            if (i < typeName.Length)
+                result.Append(typeName[i]);
+            segmentStart = i + 1;
+        }
+        return result.ToString();
     }
 
     public static string ToThreadName(this string? threadName, int threadId) {
-        if (!string.IsNullOrEmpty(threadName))
-            return threadName;
-        return "<No Name>";
+        return string.IsNullOrEmpty(threadName) ? "<No Name>" : threadName;
     }
     public static string ToLoadedAssemblyMessage(this ModuleLoadedInfo moduleInfo, string processName, bool justMyCode) {
         var symbolStatus = Resources.MsgCannotFindPdb;
@@ -48,7 +45,7 @@ public static partial class DebuggerExtensions {
         else if (moduleInfo.IsOptimized && justMyCode)
             symbolStatus = Resources.MsgPdfSkipped;
 
-        return $"dotnet ({moduleInfo.ProcessId}): Loaded '{moduleInfo.ModulePath}'. {symbolStatus}";
+        return $"{processName} ({moduleInfo.ProcessId}): Loaded '{moduleInfo.ModulePath}'. {symbolStatus}";
     }
     public static string ToInterpolatedLogMessage(this ManagedDebugger debugger, string message, int threadId) {
         var result = LogpointExpressionRegex().Replace(message, match => {

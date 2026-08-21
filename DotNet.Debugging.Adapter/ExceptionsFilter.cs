@@ -11,7 +11,7 @@ public static class ExceptionsFilter {
         SupportsCondition = true
     };
     public static ExceptionBreakpointsFilter UserUnhandledExceptions { get; } = new ExceptionBreakpointsFilter {
-        Filter = "userUnhandled",
+        Filter = "user-unhandled",
         Label = "User-Unhandled Exceptions",
         Description = "Break when an exception is caught in non-user code (system code) after having passed through user code. For more information about exception settings, see: https://aka.ms/VSCode-CS-ExceptionSettings",
         ConditionDescription = "Comma-separated list of exception types to break on, or if the list starts with '!', a list of exception types to ignore.",

@@ -24,13 +24,14 @@ public partial class ManagedDebugger {
             if (localVariableName is null) continue; // Compiler generated locals will not be found. E.g. DefaultInterpolatedStringHandler
             await WithFailureHandling(result, localVariableName, async () => {
                 var (friendlyTypeName, value, debuggerProxyInstance, resultIsError) = await GetValueForCorDebugValueAsync(localVariableCorDebugValue, threadId, stackDepth, true);
-                VariablePresentationHint? variablePresentationHint = resultIsError ? new VariablePresentationHint { Attributes = AttributesValue.FailedEvaluation } : null;
+                VariablePresentationHint? variablePresentationHint = resultIsError ? new VariablePresentationHint { Attributes = AttributesValue.FailedEvaluation } : new VariablePresentationHint { Kind = PresentationHintKind.Data };
                 result.Add(new VariableInfo {
                     Name = localVariableName,
                     Value = value,
                     Type = friendlyTypeName,
                     PresentationHint = variablePresentationHint,
-                    VariablesReference = GetVariablesReference(localVariableCorDebugValue, friendlyTypeName, threadId, stackDepth, debuggerProxyInstance)
+                    EvaluateName = localVariableName,
+                    VariablesReference = GetVariablesReference(localVariableCorDebugValue, friendlyTypeName, threadId, stackDepth, debuggerProxyInstance, localVariableName)
                 });
             });
         }
@@ -87,13 +88,14 @@ public partial class ManagedDebugger {
             if (implicitThisValue is not null) {
                 await WithFailureHandling(result, "this", async () => {
                     var (friendlyTypeName, value, debuggerProxyInstance, resultIsError) = await GetValueForCorDebugValueAsync(implicitThisValue, threadId, stackDepth, true);
-                    VariablePresentationHint? variablePresentationHint = resultIsError ? new VariablePresentationHint { Attributes = AttributesValue.FailedEvaluation } : null;
+                    VariablePresentationHint? variablePresentationHint = resultIsError ? new VariablePresentationHint { Attributes = AttributesValue.FailedEvaluation } : new VariablePresentationHint { Kind = PresentationHintKind.Data };
                     result.Add(new VariableInfo {
                         Name = "this", // Hardcoded - 'this' has no metadata
                         Value = value,
                         Type = friendlyTypeName,
                         PresentationHint = variablePresentationHint,
-                        VariablesReference = GetVariablesReference(implicitThisValue, friendlyTypeName, threadId, stackDepth, debuggerProxyInstance)
+                        EvaluateName = "this",
+                        VariablesReference = GetVariablesReference(implicitThisValue, friendlyTypeName, threadId, stackDepth, debuggerProxyInstance, "this")
                     });
                 });
             }
@@ -108,13 +110,14 @@ public partial class ManagedDebugger {
             if (argumentName is null) continue;
             await WithFailureHandling(result, argumentName, async () => {
                 var (friendlyTypeName, value, debuggerProxyInstance, resultIsError) = await GetValueForCorDebugValueAsync(argumentCorDebugValue, threadId, stackDepth, true);
-                VariablePresentationHint? variablePresentationHint = resultIsError ? new VariablePresentationHint { Attributes = AttributesValue.FailedEvaluation } : null;
+                VariablePresentationHint? variablePresentationHint = resultIsError ? new VariablePresentationHint { Attributes = AttributesValue.FailedEvaluation } : new VariablePresentationHint { Kind = PresentationHintKind.Data };
                 result.Add(new VariableInfo {
                     Name = argumentName,
                     Value = value,
                     Type = friendlyTypeName,
                     PresentationHint = variablePresentationHint,
-                    VariablesReference = GetVariablesReference(argumentCorDebugValue, friendlyTypeName, threadId, stackDepth, debuggerProxyInstance)
+                    EvaluateName = argumentName,
+                    VariablesReference = GetVariablesReference(argumentCorDebugValue, friendlyTypeName, threadId, stackDepth, debuggerProxyInstance, argumentName)
                 });
             });
         }
@@ -128,23 +131,24 @@ public partial class ManagedDebugger {
         if (currentException is not null) {
             await WithFailureHandling(result, "$exception", async () => {
                 var (friendlyTypeName, value, debuggerProxyInstance, resultIsError) = await GetValueForCorDebugValueAsync(currentException, threadId, stackDepth, true);
-                VariablePresentationHint? presentationHint = resultIsError ? new VariablePresentationHint { Attributes = AttributesValue.FailedEvaluation } : null;
+                VariablePresentationHint? presentationHint = resultIsError ? new VariablePresentationHint { Attributes = AttributesValue.FailedEvaluation } : new VariablePresentationHint { Kind = PresentationHintKind.Data };
                 result.Add(new VariableInfo {
                     Name = "$exception",
                     Value = value,
                     Type = friendlyTypeName,
                     PresentationHint = presentationHint,
-                    VariablesReference = GetVariablesReference(currentException, friendlyTypeName, threadId, stackDepth, debuggerProxyInstance)
+                    EvaluateName = "$exception",
+                    VariablesReference = GetVariablesReference(currentException, friendlyTypeName, threadId, stackDepth, debuggerProxyInstance, "$exception")
                 });
             });
         }
     }
 
-    private int GetVariablesReference(ICorDebugValue corDebugValue, string friendlyTypeName, ThreadId threadId, FrameStackDepth stackDepth, ICorDebugValue? debuggerProxyInstance) {
+    private int GetVariablesReference(ICorDebugValue corDebugValue, string friendlyTypeName, ThreadId threadId, FrameStackDepth stackDepth, ICorDebugValue? debuggerProxyInstance, string? evaluateName = null) {
         var unwrappedDebugValue = corDebugValue.UnwrapDebugValue();
         if (unwrappedDebugValue is ICorDebugArrayValue arrayValue) {
             if (arrayValue.GetCount() is 0) return 0;
-            return GenerateUniqueVariableReference(corDebugValue, threadId, stackDepth, debuggerProxyInstance);
+            return GenerateUniqueVariableReference(corDebugValue, threadId, stackDepth, debuggerProxyInstance, evaluateName);
         }
         else if (unwrappedDebugValue is ICorDebugObjectValue objectValue) {
             var isNullableStruct = friendlyTypeName.EndsWith('?');
@@ -163,29 +167,29 @@ public partial class ManagedDebugger {
             // a boxed primitive is CorElementType.VALUETYPE but should be displayed as a primitive. They can never be nullable.
             if (friendlyTypeName is "bool" or "byte" or "sbyte" or "char" or "short" or "ushort" or "int" or "uint" or "long" or "ulong" or "float" or "double" or "nint" or "nuint") return 0;
             if (type is CorElementType.CLASS or CorElementType.VALUETYPE or CorElementType.SZARRAY or CorElementType.ARRAY) {
-                return GenerateUniqueVariableReference(corDebugValue, threadId, stackDepth, debuggerProxyInstance);
+                return GenerateUniqueVariableReference(corDebugValue, threadId, stackDepth, debuggerProxyInstance, evaluateName);
             }
         }
         return 0;
     }
 
-    private int GenerateUniqueVariableReference(ICorDebugValue value, ThreadId threadId, FrameStackDepth stackDepth, ICorDebugValue? debuggerProxyInstance) {
-        var variablesReference = new VariablesReference(StoredReferenceKind.StackVariable, value, threadId, stackDepth, debuggerProxyInstance);
+    private int GenerateUniqueVariableReference(ICorDebugValue value, ThreadId threadId, FrameStackDepth stackDepth, ICorDebugValue? debuggerProxyInstance, string? evaluateName) {
+        var variablesReference = new VariablesReference(StoredReferenceKind.StackVariable, value, threadId, stackDepth, debuggerProxyInstance, evaluateName);
         var reference = _variableManager.CreateReference(variablesReference);
         return reference;
     }
 
-    private async Task AddMembersAndStaticPseudoVariable(ICorDebugValue corDebugValue, ICorDebugType corDebugType, ThreadId threadId, FrameStackDepth stackDepth, List<VariableInfo> result, bool includeNonPublicGroup = true) {
+    private async Task AddMembersAndStaticPseudoVariable(ICorDebugValue corDebugValue, ICorDebugType corDebugType, ThreadId threadId, FrameStackDepth stackDepth, List<VariableInfo> result, string? parentEvaluateName, bool includeNonPublicGroup = true) {
         // User code types show all their members inline, only non user (library) types get the 'Non-Public members' group
         var visibility = includeNonPublicGroup && IsUserCodeType(corDebugType) ? MemberVisibility.All : MemberVisibility.Public;
-        var (hasStaticMembers, hasNonPublicMembers) = await AddMembers(corDebugValue, corDebugType, threadId, stackDepth, result, visibility);
+        var (hasStaticMembers, hasNonPublicMembers) = await AddMembers(corDebugValue, corDebugType, threadId, stackDepth, result, visibility, parentEvaluateName);
         if (hasStaticMembers) {
             var variableInfo = new VariableInfo {
                 Name = "Static members",
                 Value = "",
                 Type = "",
                 PresentationHint = new VariablePresentationHint { Kind = PresentationHintKind.Class },
-                VariablesReference = _variableManager.CreateReference(new VariablesReference(StoredReferenceKind.StaticClassVariable, corDebugValue, threadId, stackDepth, null))
+                VariablesReference = _variableManager.CreateReference(new VariablesReference(StoredReferenceKind.StaticClassVariable, corDebugValue, threadId, stackDepth, null, parentEvaluateName))
             };
             result.Add(variableInfo);
         }
@@ -195,14 +199,14 @@ public partial class ManagedDebugger {
                 Value = "",
                 Type = "",
                 PresentationHint = new VariablePresentationHint { Kind = PresentationHintKind.Class },
-                VariablesReference = _variableManager.CreateReference(new VariablesReference(StoredReferenceKind.NonPublicStackVariable, corDebugValue, threadId, stackDepth, null))
+                VariablesReference = _variableManager.CreateReference(new VariablesReference(StoredReferenceKind.NonPublicStackVariable, corDebugValue, threadId, stackDepth, null, parentEvaluateName))
             };
             result.Add(variableInfo);
         }
     }
 
     /// Returns bools indicating if the 'Static members' and 'Non-Public members' pseudo variables are required
-    private async Task<(bool HasStaticMembers, bool HasNonPublicMembers)> AddMembers(ICorDebugValue corDebugValue, ICorDebugType corDebugType, ThreadId threadId, FrameStackDepth stackDepth, List<VariableInfo> result, MemberVisibility visibility = MemberVisibility.All) {
+    private async Task<(bool HasStaticMembers, bool HasNonPublicMembers)> AddMembers(ICorDebugValue corDebugValue, ICorDebugType corDebugType, ThreadId threadId, FrameStackDepth stackDepth, List<VariableInfo> result, MemberVisibility visibility = MemberVisibility.All, string? parentEvaluateName = null) {
         var corDebugClass = corDebugType.GetClass();
         var module = corDebugClass.GetModule();
         var typeToken = corDebugClass.GetToken();
@@ -218,21 +222,21 @@ public partial class ManagedDebugger {
         var visibleFieldDefs = instanceFieldDefs.Where(f => f.MatchesVisibility(metadataImport, visibility)).ToArray();
         var visibleProperties = instanceProperties.Where(p => p.MatchesVisibility(metadataImport, visibility)).ToArray();
 
-        await AddFields(visibleFieldDefs, metadataImport, corDebugType, corDebugValue, result, threadId, stackDepth);
+        await AddFields(visibleFieldDefs, metadataImport, corDebugType, corDebugValue, result, threadId, stackDepth, parentEvaluateName);
         // We need to pass the un-unwrapped reference value here, as we need to invoke CallParameterizedFunction with the correct parameters
-        await AddProperties(visibleProperties, metadataImport, corDebugClass, threadId, stackDepth, corDebugValue, result);
+        await AddProperties(visibleProperties, metadataImport, corDebugType, threadId, stackDepth, corDebugValue, result, parentEvaluateName);
 
         // Handle members on base types recursively
         var baseType = corDebugType.GetBase();
         if (baseType is null) return (hasStaticMembers, hasNonPublicMembers);
         var baseTypeName = GetCorDebugTypeFriendlyName(baseType);
         if (baseTypeName is "System.Object" or "System.ValueType" or "System.Enum") return (hasStaticMembers, hasNonPublicMembers);
-        var baseResult = await AddMembers(corDebugValue, baseType, threadId, stackDepth, result, visibility);
+        var baseResult = await AddMembers(corDebugValue, baseType, threadId, stackDepth, result, visibility, parentEvaluateName);
         return (hasStaticMembers | baseResult.HasStaticMembers, hasNonPublicMembers | baseResult.HasNonPublicMembers);
     }
 
     /// Returns a bool indicating if the 'Non-Public members' pseudo variable is required
-    private async Task<bool> AddStaticMembers(ICorDebugValue corDebugValue, ICorDebugType corDebugType, ThreadId threadId, FrameStackDepth stackDepth, List<VariableInfo> result, MemberVisibility visibility = MemberVisibility.All) {
+    private async Task<bool> AddStaticMembers(ICorDebugValue corDebugValue, ICorDebugType corDebugType, ThreadId threadId, FrameStackDepth stackDepth, List<VariableInfo> result, MemberVisibility visibility = MemberVisibility.All, string? parentEvaluateName = null) {
         var corDebugClass = corDebugType.GetClass();
         var module = corDebugClass.GetModule();
         var typeToken = corDebugClass.GetToken();
@@ -246,16 +250,16 @@ public partial class ManagedDebugger {
         var visibleStaticFieldDefs = staticFieldDefs.Where(f => f.MatchesVisibility(metadataImport, visibility)).ToArray();
         var visibleStaticProperties = staticProperties.Where(p => p.MatchesVisibility(metadataImport, visibility)).ToArray();
 
-        await AddFields(visibleStaticFieldDefs, metadataImport, corDebugType, corDebugValue, result, threadId, stackDepth);
+        await AddFields(visibleStaticFieldDefs, metadataImport, corDebugType, corDebugValue, result, threadId, stackDepth, parentEvaluateName);
         // We need to pass the un-unwrapped reference value here, as we need to invoke CallParameterizedFunction with the correct parameters
-        await AddProperties(visibleStaticProperties, metadataImport, corDebugClass, threadId, stackDepth, corDebugValue, result);
+        await AddProperties(visibleStaticProperties, metadataImport, corDebugType, threadId, stackDepth, corDebugValue, result, parentEvaluateName);
 
         // Handle members on base types recursively
         var baseType = corDebugType.GetBase();
         if (baseType is null) return hasNonPublicMembers;
         var baseTypeName = GetCorDebugTypeFriendlyName(baseType);
         if (baseTypeName is "System.Object" or "System.ValueType" or "System.Enum") return hasNonPublicMembers;
-        return hasNonPublicMembers | await AddStaticMembers(corDebugValue, baseType, threadId, stackDepth, result, visibility);
+        return hasNonPublicMembers | await AddStaticMembers(corDebugValue, baseType, threadId, stackDepth, result, visibility, parentEvaluateName);
     }
 
     private bool IsUserCodeType(ICorDebugType corDebugType) {
@@ -286,7 +290,36 @@ public partial class ManagedDebugger {
         _ => 0
     };
 
-    private async Task AddFields(FieldDefToken[] fieldTokens, IMetaDataImport metadataImport, ICorDebugType corDebugType, ICorDebugValue corDebugValue, List<VariableInfo> result, ThreadId threadId, FrameStackDepth stackDepth) {
+    /// <summary>
+    /// 'parent.Member' for instance members, 'Namespace.Type.Member' for static ones (vsdbg's form), the bare name for hoisted locals
+    /// </summary>
+    private static string GetMemberEvaluateName(string memberName, bool isStatic, string? parentEvaluateName, ICorDebugType declaringType) {
+        if (isStatic) {
+            try {
+                return $"{GetCorDebugTypeFriendlyName(declaringType)}.{memberName}";
+            }
+            catch {
+                // Fall through to the instance form
+            }
+        }
+        return parentEvaluateName is null ? memberName : $"{parentEvaluateName}.{memberName}";
+    }
+
+    private static PresentationHintVisibility GetVisibility(CorFieldAttr attributes) => (attributes & CorFieldAttr.fdFieldAccessMask) switch {
+        CorFieldAttr.fdPublic => PresentationHintVisibility.Public,
+        CorFieldAttr.fdFamily or CorFieldAttr.fdFamORAssem => PresentationHintVisibility.Protected,
+        CorFieldAttr.fdAssembly or CorFieldAttr.fdFamANDAssem => PresentationHintVisibility.Internal,
+        _ => PresentationHintVisibility.Private
+    };
+
+    private static PresentationHintVisibility GetVisibility(CorMethodAttr attributes) => (attributes & CorMethodAttr.mdMemberAccessMask) switch {
+        CorMethodAttr.mdPublic => PresentationHintVisibility.Public,
+        CorMethodAttr.mdFamily or CorMethodAttr.mdFamORAssem => PresentationHintVisibility.Protected,
+        CorMethodAttr.mdAssem or CorMethodAttr.mdFamANDAssem => PresentationHintVisibility.Internal,
+        _ => PresentationHintVisibility.Private
+    };
+
+    private async Task AddFields(FieldDefToken[] fieldTokens, IMetaDataImport metadataImport, ICorDebugType corDebugType, ICorDebugValue corDebugValue, List<VariableInfo> result, ThreadId threadId, FrameStackDepth stackDepth, string? parentEvaluateName) {
         var corDebugClass = corDebugType.GetClass();
         foreach (var fieldToken in fieldTokens) {
             var fieldProps = metadataImport.GetFieldProps(fieldToken);
@@ -305,6 +338,8 @@ public partial class ManagedDebugger {
                 }
                 var isStatic = fieldProps.pdwAttr.IsFdStatic();
                 var isLiteral = fieldProps.pdwAttr.IsFdLiteral();
+                var fieldVisibility = GetVisibility(fieldProps.pdwAttr);
+                var fieldEvaluateName = GetMemberEvaluateName(fieldName, isStatic, parentEvaluateName, corDebugType);
                 var debuggerBrowsableRootHidden = false;
                 var hasDebuggerBrowsableAttribute = metadataImport.TryGetCustomAttributeByName(fieldToken, "System.Diagnostics.DebuggerBrowsableAttribute", out var debuggerBrowsableAttributePointer, out var debuggerBrowsableAttributeSize) is Cor.S_OK;
                 if (hasDebuggerBrowsableAttribute) {
@@ -319,7 +354,8 @@ public partial class ManagedDebugger {
                         Name = fieldName,
                         Value = literalValue.ToString()!,
                         Type = GetFriendlyTypeName(fieldProps.pdwCPlusTypeFlag),
-                        PresentationHint = new VariablePresentationHint { Kind = PresentationHintKind.Data },
+                        PresentationHint = new VariablePresentationHint { Kind = PresentationHintKind.Data, Visibility = fieldVisibility },
+                        EvaluateName = fieldEvaluateName,
                         VariablesReference = 0
                     };
                     result.Add(literalVariableInfo);
@@ -331,21 +367,23 @@ public partial class ManagedDebugger {
                 if (debuggerBrowsableRootHidden) {
                     var unwrappedDebugValue = fieldCorDebugValue.UnwrapDebugValue();
                     if (unwrappedDebugValue is ICorDebugArrayValue arrayValue) {
-                        await AddArrayElements(arrayValue, threadId, stackDepth, result);
+                        await AddArrayElements(arrayValue, threadId, stackDepth, result, fieldEvaluateName);
                         return;
                     }
                 }
                 var (friendlyTypeName, value, debuggerProxyInstance, resultIsError) = await GetValueForCorDebugValueAsync(fieldCorDebugValue, threadId, stackDepth, true);
                 var variablePresentationHint = new VariablePresentationHint {
                     Kind = PresentationHintKind.Data,
-                    Attributes = resultIsError ? AttributesValue.FailedEvaluation : null
+                    Attributes = resultIsError ? AttributesValue.FailedEvaluation : null,
+                    Visibility = fieldVisibility
                 };
                 var variableInfo = new VariableInfo {
                     Name = fieldName,
                     Value = value,
                     Type = friendlyTypeName,
                     PresentationHint = variablePresentationHint,
-                    VariablesReference = GetVariablesReference(fieldCorDebugValue, friendlyTypeName, threadId, stackDepth, debuggerProxyInstance)
+                    EvaluateName = fieldEvaluateName,
+                    VariablesReference = GetVariablesReference(fieldCorDebugValue, friendlyTypeName, threadId, stackDepth, debuggerProxyInstance, fieldEvaluateName)
                 };
                 result.Add(variableInfo);
             });
@@ -353,7 +391,8 @@ public partial class ManagedDebugger {
     }
 
     internal class EvalException(string message) : Exception(message);
-    private async Task AddProperties(PropertyToken[] propertyTokens, IMetaDataImport metadataImport, ICorDebugClass corDebugClass, ThreadId threadId, FrameStackDepth stackDepth, ICorDebugValue corDebugValue, List<VariableInfo> result) {
+    private async Task AddProperties(PropertyToken[] propertyTokens, IMetaDataImport metadataImport, ICorDebugType corDebugType, ThreadId threadId, FrameStackDepth stackDepth, ICorDebugValue corDebugValue, List<VariableInfo> result, string? parentEvaluateName) {
+        var corDebugClass = corDebugType.GetClass();
         foreach (var propertyToken in propertyTokens) {
             var propertyProps = metadataImport.GetPropertyProps(propertyToken);
             var propertyName = propertyProps.szProperty;
@@ -370,6 +409,8 @@ public partial class ManagedDebugger {
                 var getterAttr = getterMethodProps.pdwAttr;
 
                 var isStatic = getterAttr.IsMdStatic();
+                var propertyVisibility = GetVisibility(getterAttr);
+                var propertyEvaluateName = GetMemberEvaluateName(propertyName, isStatic, parentEvaluateName, corDebugType);
 
                 var debuggerBrowsableRootHidden = false;
                 var hasDebuggerBrowsableAttribute = metadataImport.TryGetCustomAttributeByName(propertyToken, "System.Diagnostics.DebuggerBrowsableAttribute", out var debuggerBrowsableAttributePointer, out var debuggerBrowsableAttributeSize) is Cor.S_OK;
@@ -399,21 +440,23 @@ public partial class ManagedDebugger {
                     if (debuggerBrowsableRootHidden) {
                         var unwrappedDebugValue = returnValue.UnwrapDebugValue();
                         if (unwrappedDebugValue is ICorDebugArrayValue arrayValue) {
-                            await AddArrayElements(arrayValue, threadId, stackDepth, result);
+                            await AddArrayElements(arrayValue, threadId, stackDepth, result, propertyEvaluateName);
                             return;
                         }
                     }
                     var (friendlyTypeName, value, debuggerProxyInstance, resultIsError) = await GetValueForCorDebugValueAsync(returnValue, threadId, stackDepth, true);
                     var variablePresentationHint = new VariablePresentationHint {
                         Kind = PresentationHintKind.Property,
-                        Attributes = resultIsError ? AttributesValue.FailedEvaluation : null
+                        Attributes = resultIsError ? AttributesValue.FailedEvaluation : null,
+                        Visibility = propertyVisibility
                     };
-                    var variablesReference = GetVariablesReference(returnValue, friendlyTypeName, threadId, stackDepth, debuggerProxyInstance);
+                    var variablesReference = GetVariablesReference(returnValue, friendlyTypeName, threadId, stackDepth, debuggerProxyInstance, propertyEvaluateName);
                     var variableInfo = new VariableInfo {
                         Name = propertyName,
                         Value = value,
                         Type = friendlyTypeName,
                         PresentationHint = variablePresentationHint,
+                        EvaluateName = propertyEvaluateName,
                         VariablesReference = variablesReference
                     };
                     retainReturnValue = variablesReference != 0;
@@ -426,7 +469,7 @@ public partial class ManagedDebugger {
         }
     }
 
-    private async Task AddArrayElements(ICorDebugArrayValue arrayValue, ThreadId threadId, FrameStackDepth stackDepth, List<VariableInfo> result) {
+    private async Task AddArrayElements(ICorDebugArrayValue arrayValue, ThreadId threadId, FrameStackDepth stackDepth, List<VariableInfo> result, string? parentEvaluateName) {
         var rank = arrayValue.GetRank();
         if (rank > 1) throw new NotImplementedException("Multidimensional arrays not yet supported");
         var itemCount = arrayValue.GetCount();
@@ -435,15 +478,17 @@ public partial class ManagedDebugger {
         var elements = Enumerable.Range(0, itemCount).Select(i => arrayValue.GetElement(1, [checked((uint)i)])).ToArray();
         foreach (var (i, element) in elements.Index()) {
             var name = $"[{i}]";
+            var elementEvaluateName = parentEvaluateName is null ? name : $"{parentEvaluateName}{name}";
             await WithFailureHandling(result, name, async () => {
                 var (friendlyTypeName, value, debuggerProxyInstance, resultIsError) = await GetValueForCorDebugValueAsync(element, threadId, stackDepth, true);
                 VariablePresentationHint? variablePresentationHint = resultIsError ? new VariablePresentationHint { Attributes = AttributesValue.FailedEvaluation } : new VariablePresentationHint { Kind = PresentationHintKind.Data };
-                var variableReference = GetVariablesReference(element, friendlyTypeName, threadId, stackDepth, debuggerProxyInstance);
+                var variableReference = GetVariablesReference(element, friendlyTypeName, threadId, stackDepth, debuggerProxyInstance, elementEvaluateName);
                 var variableInfo = new VariableInfo {
                     Name = name,
                     Type = friendlyTypeName,
                     Value = value,
                     PresentationHint = variablePresentationHint,
+                    EvaluateName = elementEvaluateName,
                     VariablesReference = variableReference
                 };
                 result.Add(variableInfo);

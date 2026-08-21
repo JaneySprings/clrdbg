@@ -10,9 +10,18 @@ public class DebuggerExtensionsTests {
     [TestCase("counter", "int", "counter [int]")]
     [TestCase("value", "double?", "value [double?]")]
     [TestCase("message", "string", "message [string]")]
-    [TestCase("items", "string[]", "items")]
-    [TestCase("item", "SampleClass", "item")]
-    public void ToDisplayNameTest(string name, string type, string expected) {
+    [TestCase("items", "string[]", "items [string[]]")]
+    [TestCase("grid", "int[,]", "grid [int[,]]")]
+    [TestCase("item", "SampleClass", "item [SampleClass]")]
+    [TestCase("item", "SimpleConsole.Class2", "item [Class2]")]
+    [TestCase("item", "My.Namespace.Program.MyType", "item [MyType]")]
+    [TestCase("items", "My.Namespace.MyType[]", "items [MyType[]]")]
+    [TestCase("map", "System.Collections.Generic.Dictionary<string, My.Ns.Foo[]>", "map [Dictionary<string, Foo[]>]")]
+    [TestCase("nested", "System.Collections.Generic.List<System.Collections.Generic.List<int>>", "nested [List<List<int>>]")]
+    [TestCase("[0]", "int", "[0] [int]")]
+    [TestCase("Static members", "", "Static members")]
+    [TestCase("[More]", null, "[More]")]
+    public void ToDisplayNameTest(string name, string? type, string expected) {
         Assert.That(name.ToDisplayName(type), Is.EqualTo(expected));
     }
 
@@ -20,7 +29,11 @@ public class DebuggerExtensionsTests {
     [TestCase("value [double?]", "value")]
     [TestCase("[30] [int]", "[30]")]
     [TestCase("counter", "counter")]
-    [TestCase("item [SampleClass]", "item [SampleClass]")]
+    [TestCase("items [string[]]", "items")]
+    [TestCase("item [SampleClass]", "item")]
+    [TestCase("map [Dictionary<string, Foo[]>]", "map")]
+    [TestCase("[\"key\"] [string]", "[\"key\"]")]
+    [TestCase("[0]", "[0]")]
     public void ToVariableNameTest(string displayName, string expected) {
         Assert.That(displayName.ToVariableName(), Is.EqualTo(expected));
     }

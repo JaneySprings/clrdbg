@@ -26,9 +26,7 @@ public class ProcessEventTests : BaseDebugTestFixture {
         Assert.That(reported.SystemProcessId, Is.EqualTo(PrintedProcessId()));
         Assert.That(reported.StartMethod, Is.EqualTo(ProcessEvent.StartMethodValue.Launch));
         Assert.That(reported.IsLocalProcess, Is.True);
-
-        // The program the request named, rather than the muxer that ran it
-        Assert.That(reported.Name, Is.EqualTo(ProgramPath));
+        Assert.That(reported.Name, Is.EqualTo(Path.GetFileName(ProgramPath)));
     }
 
     [Test]

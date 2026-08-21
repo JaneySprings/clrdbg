@@ -1,4 +1,5 @@
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
+using DebugProtocol = Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
 
 namespace DotNet.Debugging.Adapter;
 
@@ -13,13 +14,14 @@ public partial class DebugSession {
             if (arguments.Filters.Contains(ExceptionsFilter.UserUnhandledExceptions.Filter))
                 userUnhandledExceptionsFilter.Enable();
         }
-        if (arguments.FilterOptions == null || arguments.FilterOptions.Count == 0)
-            return new SetExceptionBreakpointsResponse();
+        foreach (var option in arguments.FilterOptions)
+            GetExceptionFilterOptions(option.FilterId)?.Enable(option.Condition);
 
-        foreach (var option in arguments.FilterOptions) {
-            var filter = GetExceptionFilterOptions(option.FilterId);
-            filter?.Enable(option.Condition);
-        }
-        return new SetExceptionBreakpointsResponse();
+        // One breakpoint per requested filter, in request order: filters first, then filterOptions. Unknown filters stay unverified
+        var breakpoints = (arguments.Filters ?? new List<string>())
+            .Concat((arguments.FilterOptions).Select(it => it.FilterId))
+            .Select(filterId => new DebugProtocol.Breakpoint { Verified = GetExceptionFilterOptions(filterId) != null })
+            .ToList();
+        return new SetExceptionBreakpointsResponse() { Breakpoints = breakpoints };
     }
 }

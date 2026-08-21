@@ -7,6 +7,7 @@ public partial class DebugSession {
         return new InitializeResponse() {
             SupportsConfigurationDoneRequest = true,
             SupportsTerminateRequest = true,
+            SupportTerminateDebuggee = true,
             SupportsEvaluateForHovers = true,
             SupportsExceptionInfoRequest = true,
             SupportsConditionalBreakpoints = true,

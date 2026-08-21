@@ -26,6 +26,7 @@ public partial class DebugSession {
                 response.Variables.Add(new DebugProtocol.Variable {
                     Name = "[More]",
                     Value = string.Empty,
+                    PresentationHint = new DebugProtocol.VariablePresentationHint { Attributes = DebugProtocol.VariablePresentationHint.AttributesValue.ReadOnly },
                     VariablesReference = pagingHandles.Create(new PagedVariablesReference(variablesReference, pageOffset + VariablesPageSize))
                 });
             }

@@ -97,8 +97,10 @@ public partial class ManagedDebugger {
         }
 
         // Fire the module loaded event
-        OnModuleLoaded?.Invoke(modulePath, Path.GetFileName(modulePath), modulePath, isUserCode);
-        OnModuleLoadedVerbose?.Invoke(new ModuleLoadedInfo(modulePath, _process?.GetId() ?? 0, metadataReader.HasSymbols, isUserCode is false));
+        OnModuleLoaded?.Invoke(new ModuleLoadedInfo(
+            modulePath, moduleName, _process?.GetId() ?? 0,
+            SymbolsLoaded: metadataReader.HasSymbols, IsOptimized: isUserCode is false, IsUserCode: isUserCode,
+            Version: GetModuleVersion(modulePath, metadataReader), SymbolFilePath: metadataReader.SymbolFilePath));
 
         // Try to bind any pending breakpoints now that we have a new module with symbols
         if (metadataReader.HasSymbols) {

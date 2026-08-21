@@ -50,7 +50,7 @@ public class ExceptionTests : BaseDebugTestFixture {
     [Test]
     public void UserUnhandledExceptionTest() {
         Launch();
-        SetExceptionBreakpoints(new[] { "userUnhandled" }, ("userUnhandled", null));
+        SetExceptionBreakpoints(new[] { "user-unhandled" }, ("user-unhandled", null));
         ConfigurationDone();
 
         var stopped = WaitForStopped(StoppedEvent.ReasonValue.Exception);
@@ -81,7 +81,7 @@ public class ExceptionTests : BaseDebugTestFixture {
     [Test]
     public void ExceptionIgnoreConditionTest() {
         Launch();
-        SetExceptionBreakpoints(Array.Empty<string>(), ("userUnhandled", "!System.InvalidOperationException"));
+        SetExceptionBreakpoints(Array.Empty<string>(), ("user-unhandled", "!System.InvalidOperationException"));
         ConfigurationDone();
 
         WaitForEvent<TerminatedEvent>();

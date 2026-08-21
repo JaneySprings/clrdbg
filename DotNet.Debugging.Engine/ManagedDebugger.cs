@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
 using System.Threading.Channels;
 using DotNet.Debugging.Engine.ExpressionEvaluator.Cil;
 using DotNet.Debugging.Engine.Models;
@@ -41,7 +43,7 @@ public partial class ManagedDebugger {
     public event Action<int>? OnProcessStarted;
     public event Action<int>? OnThreadStarted;
     public event Action<int>? OnThreadExited;
-    public event Action<string, string, string, bool>? OnModuleLoaded;
+    public event Action<ModuleLoadedInfo>? OnModuleLoaded;
     // Output text, isError (true for stderr, false for stdout)
     public event Action<string, bool>? OnOutput;
     public event Action<BreakpointManager.BreakpointInfo>? OnBreakpointChanged;
@@ -194,6 +196,9 @@ public partial class ManagedDebugger {
     private void SendAllBreakpointEvents() {
         // Send a breakpoint changed event with verified false for every breakpoint, so the IDE can mark the BP as unverified, until it receives our later BP events when we bind them
         foreach (var bp in _breakpointManager.GetAllBreakpoints()) {
+            // The process exists now, so a breakpoint is no longer 'pending until debugging starts'
+            if (!bp.Verified && bp.Message == BreakpointMessages.PendingUntilDebuggingStarts)
+                bp.Message = BreakpointMessages.NotProcessed;
             OnBreakpointChanged?.Invoke(bp);
         }
     }
@@ -295,6 +300,7 @@ public partial class ManagedDebugger {
             bp.EndColumn = resolved.EndColumn;
             bp.ResolvedBreakpointFromPdb = resolved;
             bp.ModuleBaseAddress = targetModule.BaseAddress;
+            bp.SourceChecksum = targetModule.MetadataReader.GetSourceChecksum(resolved.DocumentPath);
             bp.Message = null;
 
             _logger?.Invoke($"Breakpoint bound at {bp.FilePath}:{bp.Line} -> resolved to line {resolved.StartLine}, IL offset {resolved.ILOffset} in method 0x{resolved.MethodToken:X}");
@@ -381,7 +387,10 @@ public partial class ManagedDebugger {
         return currentException;
     }
 
-    private static string GetFunctionFormattedName(ICorDebugFunction function) {
+    /// <summary>
+    /// 'Module.dll!Namespace.Type.Method(ParamType paramName, ...)' - the parameter list is read from the PE metadata when the module is known
+    /// </summary>
+    private static string GetFunctionFormattedName(ICorDebugFunction function, ModuleInfo? moduleInfo = null) {
         try {
             var token = function.GetToken();
             var module = function.GetModule();
@@ -392,10 +401,29 @@ public partial class ManagedDebugger {
             var classToken = @class.GetToken();
             var className = metadataImport.GetTypeDefProps(classToken).szTypeDef;
 
-            return $"{Path.GetFileName(module.GetName())}!{className}.{methodName}()";
+            var parameters = moduleInfo is null ? string.Empty : GetFormattedParameters(moduleInfo.MetadataReader.PeMetadataReader, token);
+            return $"{Path.GetFileName(module.GetName())}!{className}.{methodName}({parameters})";
         }
         catch {
             return "Unknown";
+        }
+    }
+
+    private static string GetFormattedParameters(MetadataReader reader, int methodToken) {
+        try {
+            var methodDefinition = reader.GetMethodDefinition(MetadataTokens.MethodDefinitionHandle(methodToken));
+            var parameterTypes = methodDefinition.DecodeSignature(FrameDisplaySignatureTypeProvider.Instance, null).ParameterTypes;
+            // Sequence 0 is the return value, the rest are 1-based positional parameters
+            var parameterNames = methodDefinition.GetParameters()
+                .Select(reader.GetParameter)
+                .Where(parameter => parameter.SequenceNumber > 0)
+                .OrderBy(parameter => parameter.SequenceNumber)
+                .Select(parameter => reader.GetString(parameter.Name))
+                .ToList();
+            return string.Join(", ", parameterTypes.Select((type, index) => index < parameterNames.Count ? $"{type} {parameterNames[index]}" : type));
+        }
+        catch {
+            return string.Empty;
         }
     }
 

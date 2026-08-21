@@ -32,7 +32,8 @@ public readonly record struct FrameStackDepth {
         Value = value;
     }
 };
-public record struct VariablesReference(StoredReferenceKind ReferenceKind, ICorDebugValue? ObjectValue, ThreadId ThreadId, FrameStackDepth FrameStackDepth, ICorDebugValue? DebuggerProxyInstance);
+/// <param name="EvaluateName">The expression of the value whose children this reference lists, so the children can build their own ('parent.Member', 'parent[0]')</param>
+public record struct VariablesReference(StoredReferenceKind ReferenceKind, ICorDebugValue? ObjectValue, ThreadId ThreadId, FrameStackDepth FrameStackDepth, ICorDebugValue? DebuggerProxyInstance, string? EvaluateName = null);
 /// <summary>
 /// Manages variable references for scopes and variables
 /// </summary>

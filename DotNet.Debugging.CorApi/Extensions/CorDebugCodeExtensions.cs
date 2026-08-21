@@ -8,6 +8,11 @@ public static class CorDebugCodeExtensions {
         return ppBreakpoint;
     }
 
+    public static CordbAddress GetAddress(this ICorDebugCode instance) {
+        Marshal.ThrowExceptionForHR(instance.TryGetAddress(out var pStart));
+        return pStart;
+    }
+
     public static int GetSize(this ICorDebugCode instance) {
         Marshal.ThrowExceptionForHR(instance.TryGetSize(out var pcBytes));
         return checked((int)pcBytes);

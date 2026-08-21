@@ -75,7 +75,7 @@ public partial class ManagedDebugger {
         var typeNameSpan = typeName.AsSpan();
         var elementTypeName = typeNameSpan[..typeNameSpan.LastIndexOf('[')];
         var dimensions = corDebugArrayValue.GetDimensions(corDebugArrayValue.GetRank());
-        var value = $"{elementTypeName}[{string.Join(", ", dimensions)}]";
+        var value = $"{{{elementTypeName}[{string.Join(", ", dimensions)}]}}";
         return new(typeName, value, false, null);
     }
 

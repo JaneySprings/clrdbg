@@ -75,6 +75,39 @@ public static class ServerExtensions {
         };
     }
 
+    public static DebugProtocol.Source? ToSource(this string? filePath, ModuleMetadataReader.SourceChecksum? checksum = null) {
+        if (string.IsNullOrEmpty(filePath))
+            return null;
+
+        // The library pre-populates 'sources' and 'checksums' with empty lists, which vsdbg never sends
+        var source = new DebugProtocol.Source {
+            Name = Path.GetFileName(filePath),
+            Path = filePath,
+            Sources = null,
+            Checksums = null,
+        };
+        if (checksum != null && Enum.TryParse<DebugProtocol.ChecksumAlgorithm>(checksum.Algorithm, out var algorithm))
+            source.Checksums = new List<DebugProtocol.Checksum> { new DebugProtocol.Checksum(algorithm, checksum.Value) };
+        return source;
+    }
+    public static DebugProtocol.Module ToModule(this ModuleLoadedInfo moduleInfo, int moduleId, bool justMyCode) {
+        var symbolStatus = Resources.MsgCannotFindPdb;
+        if (moduleInfo.SymbolsLoaded)
+            symbolStatus = Resources.MsgPdbLoaded;
+        else if (moduleInfo.IsOptimized && justMyCode)
+            symbolStatus = Resources.MsgPdbSkippedShort;
+
+        return new DebugProtocol.Module {
+            Id = moduleId,
+            Name = moduleInfo.ModuleName,
+            Path = moduleInfo.ModulePath,
+            IsOptimized = moduleInfo.IsOptimized,
+            IsUserCode = moduleInfo.IsUserCode,
+            Version = moduleInfo.Version,
+            SymbolStatus = symbolStatus,
+            SymbolFilePath = moduleInfo.SymbolsLoaded ? moduleInfo.SymbolFilePath : null,
+        };
+    }
     public static DebugProtocol.Breakpoint ToBreakpoint(this BreakpointManager.BreakpointInfo breakpoint) {
         return new DebugProtocol.Breakpoint() {
             Id = breakpoint.Id,
@@ -84,28 +117,20 @@ public static class ServerExtensions {
             Column = breakpoint is { IsFunctionBreakpoint: false, Verified: true } ? breakpoint.Column : null,
             EndLine = breakpoint is { IsFunctionBreakpoint: false, Verified: true } ? breakpoint.EndLine : null,
             EndColumn = breakpoint is { IsFunctionBreakpoint: false, Verified: true } ? breakpoint.EndColumn : null,
-            Source = breakpoint is not { IsFunctionBreakpoint: false, Verified: true } ? null : new DebugProtocol.Source {
-                Path = breakpoint.FilePath,
-                Name = Path.GetFileName(breakpoint.FilePath),
-            }
+            Source = breakpoint is { IsFunctionBreakpoint: false, Verified: true } ? breakpoint.FilePath.ToSource(breakpoint.SourceChecksum) : null
         };
     }
-    public static DebugProtocol.StackFrame ToStackFrame(this CorDebugResponse.StackFrameInfo frame) {
-        DebugProtocol.Source? source = null;
-        if (!string.IsNullOrEmpty(frame.Source)) {
-            source = new DebugProtocol.Source() {
-                Name = Path.GetFileName(frame.Source),
-                Path = frame.Source,
-            };
-        }
+    public static DebugProtocol.StackFrame ToStackFrame(this CorDebugResponse.StackFrameInfo frame, int? moduleId) {
         return new DebugProtocol.StackFrame() {
             Id = frame.Id,
-            Source = source,
+            Source = frame.Source.ToSource(frame.SourceChecksum),
             Name = frame.Name,
             Line = frame.Line,
             Column = frame.Column,
             EndLine = frame.EndLine,
             EndColumn = frame.EndColumn,
+            InstructionPointerReference = frame.InstructionPointerReference,
+            ModuleId = moduleId,
             PresentationHint = DebugProtocol.StackFrame.PresentationHintValue.Normal
         };
     }
@@ -122,7 +147,7 @@ public static class ServerExtensions {
             Name = variable.Name.ToDisplayName(variable.Type),
             Type = variable.Type,
             Value = variable.Value,
-            EvaluateName = variable.Name,
+            EvaluateName = variable.EvaluateName,
             PresentationHint = variable.PresentationHint?.ToVariablePresentationHint(),
             VariablesReference = variable.VariablesReference
         };
@@ -132,7 +157,16 @@ public static class ServerExtensions {
         return new DebugProtocol.VariablePresentationHint {
             Kind = hint.Kind?.ToKindValue(),
             Attributes = hint.Attributes?.ToAttributesValue(),
-            Visibility = null
+            Visibility = hint.Visibility?.ToVisibilityValue(),
+        };
+    }
+    private static DebugProtocol.VariablePresentationHint.VisibilityValue ToVisibilityValue(this CorDebugModels.PresentationHintVisibility visibility) {
+        return visibility switch {
+            CorDebugModels.PresentationHintVisibility.Public => DebugProtocol.VariablePresentationHint.VisibilityValue.Public,
+            CorDebugModels.PresentationHintVisibility.Private => DebugProtocol.VariablePresentationHint.VisibilityValue.Private,
+            CorDebugModels.PresentationHintVisibility.Protected => DebugProtocol.VariablePresentationHint.VisibilityValue.Protected,
+            CorDebugModels.PresentationHintVisibility.Internal => DebugProtocol.VariablePresentationHint.VisibilityValue.Internal,
+            _ => throw new ArgumentOutOfRangeException(nameof(visibility), visibility, null)
         };
     }
     private static DebugProtocol.VariablePresentationHint.KindValue ToKindValue(this CorDebugModels.PresentationHintKind kind) {

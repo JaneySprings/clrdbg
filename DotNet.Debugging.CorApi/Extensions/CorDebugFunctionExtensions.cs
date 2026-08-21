@@ -18,6 +18,11 @@ public static class CorDebugFunctionExtensions {
         return pmdSig;
     }
 
+    public static ICorDebugCode GetNativeCode(this ICorDebugFunction instance) {
+        Marshal.ThrowExceptionForHR(instance.TryGetNativeCode(out var ppCode));
+        return ppCode;
+    }
+
     public static ICorDebugModule GetModule(this ICorDebugFunction instance) {
         Marshal.ThrowExceptionForHR(instance.TryGetModule(out var ppModule));
         return ppModule;

@@ -19,6 +19,11 @@ public partial class ModuleMetadataReader : IDisposable {
     private Guid? _mvid;
     internal Guid Mvid => _mvid ??= _peMetadataReader.GetGuid(_peMetadataReader.GetModuleDefinition().Mvid);
     public bool HasSymbols => _pdbMetadataReader is not null;
+    /// <summary>Path of the external portable PDB the symbols were read from, null for embedded or missing symbols</summary>
+    public string? SymbolFilePath { get; private set; }
+
+    /// <summary>A source document checksum as recorded in the PDB: algorithm name ('SHA1', 'SHA256') and lowercase hex value</summary>
+    public record SourceChecksum(string Algorithm, string Value);
 
     /// Lines and columns are 1 based
     public record ResolvedBreakpoint(
@@ -155,6 +160,7 @@ public partial class ModuleMetadataReader : IDisposable {
 
             if (codeViewData.Age == 1 && pdbId == expectedId) {
                 SetPdbProvider(provider);
+                SymbolFilePath = pdbPath;
                 return true;
             }
 
@@ -448,6 +454,44 @@ public partial class ModuleMetadataReader : IDisposable {
             return null;
 
         return result;
+    }
+
+    private static readonly Guid Sha1HashAlgorithmGuid = new("ff1816ec-aa5e-4d10-87f7-6f4963833460");
+    private static readonly Guid Sha256HashAlgorithmGuid = new("8829d00f-11b8-4213-878b-770e8597ac16");
+
+    /// <summary>
+    /// The checksum the compiler recorded for a source document, used by clients to detect edited sources
+    /// </summary>
+    public SourceChecksum? GetSourceChecksum(string sourceFilePath) {
+        var reader = _pdbMetadataReader;
+        if (reader is null) return null;
+
+        foreach (var handle in reader.Documents) {
+            var document = reader.GetDocument(handle);
+            if (!PathsMatch(sourceFilePath, reader.GetString(document.Name))) continue;
+
+            var algorithmGuid = reader.GetGuid(document.HashAlgorithm);
+            string algorithm;
+            if (algorithmGuid == Sha256HashAlgorithmGuid) algorithm = "SHA256";
+            else if (algorithmGuid == Sha1HashAlgorithmGuid) algorithm = "SHA1";
+            else return null;
+
+            var hash = reader.GetBlobBytes(document.Hash);
+            return hash.Length is 0 ? null : new SourceChecksum(algorithm, Convert.ToHexStringLower(hash));
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// The assembly version from the metadata; the file version (which vsdbg reports) is read from the file itself by the caller
+    /// </summary>
+    public Version? GetAssemblyVersion() {
+        try {
+            return _peMetadataReader.IsAssembly ? _peMetadataReader.GetAssemblyDefinition().Version : null;
+        }
+        catch {
+            return null;
+        }
     }
 
     /// <summary>

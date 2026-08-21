@@ -43,6 +43,51 @@ public class BreakpointTests : BaseDebugTestFixture {
     }
 
     [Test]
+    public void OutputMessagesTest() {
+        Launch();
+        var breakpoints = SetBreakpoints(GetMarkerLine("marker:end"));
+        Assert.That(breakpoints[0].Message, Is.EqualTo("The breakpoint is pending and will be resolved when debugging starts."));
+        var exceptionBreakpoints = SetExceptionBreakpoints(Array.Empty<string>(), ("user-unhandled", null), ("no-such-filter", null));
+        Assert.That(exceptionBreakpoints.Select(it => it.Verified), Is.EqualTo(new[] { true, false }));
+        ConfigurationDone();
+
+        var notProcessed = WaitForEvent<BreakpointEvent>(it => !it.Breakpoint.Verified);
+        Assert.That(notProcessed.Breakpoint.Message, Is.EqualTo("Breakpoint has not been processed by the debugger."));
+
+        var moduleEvent = WaitForEvent<ModuleEvent>(it => it.Module.IsUserCode == true);
+        var moduleId = Convert.ToInt32(moduleEvent.Module.Id, System.Globalization.CultureInfo.InvariantCulture);
+        Assert.That(moduleId, Is.GreaterThanOrEqualTo(1000));
+        Assert.That(moduleEvent.Module.IsOptimized, Is.False);
+        Assert.That(moduleEvent.Module.Version, Does.Match(@"^\d+\.\d{2}\.\d+\.\d+$"));
+        Assert.That(moduleEvent.Module.SymbolStatus, Is.EqualTo("Symbols loaded."));
+        Assert.That(moduleEvent.Module.SymbolFilePath, Does.EndWith(".pdb"));
+
+        var bound = WaitForEvent<BreakpointEvent>(it => it.Breakpoint.Verified);
+        Assert.That(bound.Breakpoint.Source?.Checksums?.Single().Algorithm, Is.EqualTo(ChecksumAlgorithm.SHA256));
+        Assert.That(bound.Breakpoint.Source?.Checksums?.Single().ChecksumValue, Has.Length.EqualTo(64));
+
+        var stopped = WaitForStopped(StoppedEvent.ReasonValue.Breakpoint);
+        var stackTrace = Host.SendRequestSync(new StackTraceRequest() { ThreadId = stopped.ThreadId!.Value });
+        Assert.That(stackTrace.TotalFrames, Is.EqualTo(stackTrace.StackFrames.Count));
+        var frame = stackTrace.StackFrames[0];
+        Assert.That(frame.Name, Does.Match(@"^.+\.dll!.+\(string\[\] args\) Line \d+$"));
+        Assert.That(frame.Line, Is.EqualTo(GetMarkerLine("marker:end")));
+        Assert.That(frame.Source?.Checksums?.Single().ChecksumValue, Is.EqualTo(bound.Breakpoint.Source?.Checksums?.Single().ChecksumValue));
+        Assert.That(Convert.ToInt32(frame.ModuleId, System.Globalization.CultureInfo.InvariantCulture), Is.EqualTo(moduleId));
+        Assert.That(frame.InstructionPointerReference, Does.StartWith("0x"));
+
+        Continue(stopped.ThreadId!.Value);
+        var continued = WaitForEvent<ContinuedEvent>();
+        Assert.That(continued.ThreadId, Is.EqualTo(stopped.ThreadId));
+        Assert.That(continued.AllThreadsContinued, Is.True);
+
+        var exitMessage = WaitForEvent<OutputEvent>(it => it.Output.Contains("has exited with code"));
+        Assert.That(exitMessage.Category, Is.EqualTo(OutputEvent.CategoryValue.Console));
+        Assert.That(exitMessage.Output.Trim(), Does.Match(@"^The program '.+' has exited with code 0 \(0x0\)\.$"));
+        WaitForEvent<ExitedEvent>();
+    }
+
+    [Test]
     public void ConditionalBreakpointTest() {
         Launch();
         SetBreakpoints(new SourceBreakpoint() {

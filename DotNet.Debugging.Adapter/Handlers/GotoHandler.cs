@@ -11,7 +11,7 @@ public partial class DebugSession {
     }
     protected override GotoResponse HandleGotoRequest(GotoArguments arguments) {
         return Invoke(() => {
-            var target = gotoHandles.Get(arguments.TargetId, null);
+            var target = gotoHandles.Get(arguments.TargetId);
             if (target == null)
                 throw new ProtocolException("GotoTarget not found");
 

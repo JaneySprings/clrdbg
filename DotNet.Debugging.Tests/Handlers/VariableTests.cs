@@ -35,12 +35,12 @@ public class VariableTests : BaseDebugTestFixture {
     }
 
     [Test]
-    public void SimpleTypeDisplayNameTest() {
+    public void DisplayNameTest() {
         var threadId = StopAtMarker();
         var locals = GetLocalVariables(threadId);
 
         var count = locals.FirstOrDefault(it => it.Name == "count [int]");
-        Assert.That(count, Is.Not.Null, "Simple types must be displayed with the type in brackets");
+        Assert.That(count, Is.Not.Null, "Variables are displayed with the type in brackets");
         Assert.That(count!.Value, Is.EqualTo("42"));
         Assert.That(count.EvaluateName, Is.EqualTo("count"), "The evaluate name must not contain the type suffix");
 
@@ -48,13 +48,53 @@ public class VariableTests : BaseDebugTestFixture {
         Assert.That(title, Is.Not.Null);
         Assert.That(title!.Value, Is.EqualTo("\"hello\""));
 
-        Assert.That(locals.Any(it => it.Name == "numbers"), "Arrays are not simple types and must not have the type suffix");
+        var numbers = locals.FirstOrDefault(it => it.Name == "numbers [int[]]");
+        Assert.That(numbers, Is.Not.Null, "Arrays have the type suffix too");
+        Assert.That(numbers!.Value, Is.EqualTo("{int[60]}"));
+        var item = locals.FirstOrDefault(it => it.Name == "item [SampleClass]");
+        Assert.That(item, Is.Not.Null, "Objects have the type suffix too");
+        Assert.That(item!.Value, Is.EqualTo("{SampleClass}"));
+        Assert.That(item.EvaluateName, Is.EqualTo("item"));
+        var builder = locals.FirstOrDefault(it => it.Name == "builder [StringBuilder]");
+        Assert.That(builder, Is.Not.Null, "The suffix shows the type without its namespace");
+        Assert.That(builder!.Type, Is.EqualTo("System.Text.StringBuilder"), "The type itself stays fully qualified");
+    }
+
+    [Test]
+    public void EvaluateNamesArePathsTest() {
+        var threadId = StopAtMarker();
+        var locals = GetLocalVariables(threadId);
+
+        var item = locals.First(it => it.Name == "item [SampleClass]");
+        var members = GetVariables(item.VariablesReference);
+        var publicField = members.First(it => it.Name == "PublicField [int]");
+        Assert.That(publicField.EvaluateName, Is.EqualTo("item.PublicField"));
+        Assert.That(publicField.PresentationHint?.Kind, Is.EqualTo(VariablePresentationHint.KindValue.Data));
+        Assert.That(publicField.PresentationHint?.Visibility, Is.EqualTo(VariablePresentationHint.VisibilityValue.Public));
+        var privateProperty = members.First(it => it.Name == "PrivateProperty [int]");
+        Assert.That(privateProperty.EvaluateName, Is.EqualTo("item.PrivateProperty"));
+        Assert.That(privateProperty.PresentationHint?.Kind, Is.EqualTo(VariablePresentationHint.KindValue.Property));
+        Assert.That(privateProperty.PresentationHint?.Visibility, Is.EqualTo(VariablePresentationHint.VisibilityValue.Private));
+
+        var staticGroup = members.First(it => it.Name == "Static members");
+        Assert.That(staticGroup.EvaluateName, Is.Null, "Pseudo nodes are not expressions");
+        var staticField = GetVariables(staticGroup.VariablesReference).First(it => it.Name == "StaticPublicField [int]");
+        Assert.That(staticField.EvaluateName, Is.EqualTo("SampleClass.StaticPublicField"));
+
+        var numbers = locals.First(it => it.Name == "numbers [int[]]");
+        var firstPage = GetVariables(numbers.VariablesReference);
+        Assert.That(firstPage[0].EvaluateName, Is.EqualTo("numbers[0]"));
+        var more = firstPage[^1];
+        Assert.That(more.Name, Is.EqualTo("[More]"));
+        Assert.That(more.PresentationHint?.Attributes, Is.EqualTo(VariablePresentationHint.AttributesValue.ReadOnly));
+        var secondPage = GetVariables(more.VariablesReference);
+        Assert.That(secondPage[0].EvaluateName, Is.EqualTo("numbers[25]"));
     }
 
     [Test]
     public void VariablesPagingTest() {
         var threadId = StopAtMarker();
-        var numbers = GetLocalVariables(threadId).First(it => it.Name == "numbers");
+        var numbers = GetLocalVariables(threadId).First(it => it.Name == "numbers [int[]]");
 
         var firstPage = GetVariables(numbers.VariablesReference);
         Assert.That(firstPage, Has.Count.EqualTo(26), "25 items and the '[More]' node");
@@ -79,7 +119,7 @@ public class VariableTests : BaseDebugTestFixture {
     [Test]
     public void UserTypeMembersAreFlatTest() {
         var threadId = StopAtMarker();
-        var item = GetLocalVariables(threadId).First(it => it.Name == "item");
+        var item = GetLocalVariables(threadId).First(it => it.Name == "item [SampleClass]");
 
         var members = GetVariables(item.VariablesReference);
         var names = members.Select(it => it.Name).ToList();
@@ -89,7 +129,7 @@ public class VariableTests : BaseDebugTestFixture {
     [Test]
     public void SystemTypeNonPublicMembersGroupTest() {
         var threadId = StopAtMarker();
-        var builder = GetLocalVariables(threadId).First(it => it.Name == "builder");
+        var builder = GetLocalVariables(threadId).First(it => it.Name == "builder [StringBuilder]");
 
         var members = GetVariables(builder.VariablesReference);
         Assert.That(members.Any(it => it.Name == "Non-Public members"), "Library types must group their non-public members");

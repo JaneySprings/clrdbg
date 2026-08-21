@@ -24,6 +24,7 @@ public class BreakpointManager {
         public string? FunctionName { get; set; }
         public bool IsFunctionBreakpoint => FunctionName is not null;
         public string? Message { get; set; }
+        public ModuleMetadataReader.SourceChecksum? SourceChecksum { get; set; }
         public ModuleMetadataReader.ResolvedBreakpoint? ResolvedBreakpointFromPdb { get; set; }
         public CordbAddress? ModuleBaseAddress { get; set; }
 

@@ -240,14 +240,15 @@ public abstract class BaseDebugTestFixture {
     protected List<Breakpoint> SetBreakpoints(params int[] lines) {
         return SetBreakpoints(lines.Select(line => new SourceBreakpoint() { Line = line }).ToArray());
     }
-    protected void SetExceptionBreakpoints(string[] filters, params (string FilterId, string? Condition)[] filterOptions) {
-        Host.SendRequestSync(new SetExceptionBreakpointsRequest() {
+    protected List<Breakpoint> SetExceptionBreakpoints(string[] filters, params (string FilterId, string? Condition)[] filterOptions) {
+        var response = Host.SendRequestSync(new SetExceptionBreakpointsRequest() {
             Filters = filters.ToList(),
             FilterOptions = filterOptions.Select(it => new DapExceptionFilterOptions() {
                 FilterId = it.FilterId,
                 Condition = it.Condition,
             }).ToList(),
         });
+        return response.Breakpoints ?? new List<Breakpoint>();
     }
     protected void ConfigurationDone() {
         Host.SendRequestSync(new ConfigurationDoneRequest());

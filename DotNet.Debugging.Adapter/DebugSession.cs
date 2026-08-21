@@ -1,7 +1,7 @@
+using DotNet.Debugging.Adapter.Extensions;
 using DotNet.Debugging.Common.Logging;
 using DotNet.Debugging.Engine;
 using DotNet.Debugging.Engine.Models;
-using DotNet.Debugging.Adapter.Extensions;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
 
@@ -14,6 +14,7 @@ public partial class DebugSession : Session {
 
     private readonly Handles<SourceLocation> gotoHandles = new Handles<SourceLocation>();
     private readonly Handles<PagedVariablesReference> pagingHandles = new Handles<PagedVariablesReference>(PagingHandlesStart);
+    private readonly Handles<string> moduleHandles = new Handles<string>(StringComparer.InvariantCulture);
     private readonly Dictionary<int, string> logpointMessages = new Dictionary<int, string>();
     private readonly Dictionary<string, List<int>> logpointIdsByFile = new Dictionary<string, List<int>>();
     private readonly ExceptionFilterOptions allExceptionsFilter = new ExceptionFilterOptions();
@@ -33,7 +34,6 @@ public partial class DebugSession : Session {
         session.OnThreadStarted += TargetThreadStarted;
         session.OnThreadExited += TargetThreadStopped;
         session.OnModuleLoaded += AssemblyLoaded;
-        session.OnModuleLoadedVerbose += AssemblyLoadedVerbose;
         session.OnOutput += TargetOutput;
         session.OnBreakpointChanged += BreakpointStatusChanged;
         session.SendRunInTerminalRequest += RunInTerminal;
@@ -87,19 +87,15 @@ public partial class DebugSession : Session {
             AllThreadsStopped = true,
         });
     }
-    // Sent for every launch shape, and for no attach: a client that attached named the process itself.
-    // The name is what the client asked to run rather than what ran, since a managed dll goes through
-    // the muxer and the process's own executable is 'dotnet'.
     private void TargetProcessStarted(int processId) {
-        var configuration = (LaunchConfiguration)debugAgent.Configuration;
-
-        Protocol.SendEvent(new ProcessEvent(configuration.Program) {
+        Protocol.SendEvent(new ProcessEvent(debugAgent.Configuration.GetApplicationName()) {
             SystemProcessId = processId,
             StartMethod = ProcessEvent.StartMethodValue.Launch,
             IsLocalProcess = true,
         });
     }
     private void TargetExited(int exitCode) {
+        OnDebugDataReceived($"The program '{debugAgent.Configuration.GetApplicationName()}' has exited with code {exitCode} (0x{exitCode:x}).");
         Protocol.SendEvent(new ExitedEvent(exitCode));
         Protocol.SendEvent(new TerminatedEvent());
     }
@@ -109,14 +105,10 @@ public partial class DebugSession : Session {
     private void TargetThreadStopped(int threadId) {
         Protocol.SendEvent(new ThreadEvent(ThreadEvent.ReasonValue.Exited, threadId));
     }
-    private void AssemblyLoaded(string id, string name, string path, bool isUserCode) {
-        Protocol.SendEvent(new ModuleEvent(ModuleEvent.ReasonValue.New, new Module {
-            Id = id, Name = name, Path = path, IsUserCode = isUserCode
-        }));
-    }
-
-    private void AssemblyLoadedVerbose(ModuleLoadedInfo moduleInfo) {
-        OnDebugDataReceived(moduleInfo.ToLoadedAssemblyMessage(debugAgent.Configuration.GetApplicationName(), debugAgent.Configuration.JustMyCode));
+    private void AssemblyLoaded(ModuleLoadedInfo moduleInfo) {
+        var justMyCode = debugAgent.Configuration.JustMyCode;
+        OnDebugDataReceived(moduleInfo.ToLoadedAssemblyMessage(debugAgent.Configuration.GetApplicationName(), justMyCode));
+        Protocol.SendEvent(new ModuleEvent(ModuleEvent.ReasonValue.New, moduleInfo.ToModule(moduleHandles.Create(moduleInfo.ModulePath), justMyCode)));
     }
     private void BreakpointStatusChanged(BreakpointManager.BreakpointInfo breakpoint) {
         Protocol.SendEvent(new BreakpointEvent(BreakpointEvent.ReasonValue.Changed, breakpoint.ToBreakpoint()));
@@ -153,7 +145,6 @@ public partial class DebugSession : Session {
             return allExceptionsFilter;
         if (filterId == ExceptionsFilter.UserUnhandledExceptions.Filter)
             return userUnhandledExceptionsFilter;
-
         return null;
     }
 

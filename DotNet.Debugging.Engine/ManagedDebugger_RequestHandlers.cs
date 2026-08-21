@@ -1,15 +1,20 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using DotNet.Debugging.CorApi;
 using DotNet.Debugging.Engine.ExpressionEvaluator;
 using DotNet.Debugging.Engine.Models;
 using DotNet.Debugging.Engine.Models.Response;
 using DotNet.Debugging.Engine.PresentationHintModels;
-using DotNet.Debugging.CorApi;
 
 namespace DotNet.Debugging.Engine;
 
 public record BreakpointRequest(int Line, string? Condition = null, string? HitCondition = null, int? Column = null);
 public record FunctionBreakpointRequest(string Name, string? Condition = null, string? HitCondition = null);
+
+public static class BreakpointMessages {
+    public const string PendingUntilDebuggingStarts = "The breakpoint is pending and will be resolved when debugging starts.";
+    public const string NotProcessed = "Breakpoint has not been processed by the debugger.";
+}
 
 public partial class ManagedDebugger {
     // Store launch info for deferred attach in ConfigurationDone
@@ -341,7 +346,7 @@ public partial class ManagedDebugger {
             }
             else {
                 // No process yet, mark as pending
-                bp.Message = "Breakpoint has not been processed by the debugger.";
+                bp.Message = BreakpointMessages.PendingUntilDebuggingStarts;
             }
 
             result.Add(bp);
@@ -368,7 +373,7 @@ public partial class ManagedDebugger {
                     TryBindFunctionBreakpoint(bp, module);
                 }
                 if (!bp.Verified) bp.Message = _process is null
-                    ? "Breakpoint has not been processed by the debugger."
+                    ? BreakpointMessages.PendingUntilDebuggingStarts
                     : $"No functions matching '{request.Name}' were found.";
             }
             catch (ArgumentException ex) {
@@ -402,15 +407,17 @@ public partial class ManagedDebugger {
     /// <summary>
     /// Get stack trace for a thread
     /// </summary>
-    public List<StackFrameInfo> GetStackTrace(int threadId, int startFrame = 0, int? levels = null) {
+    public StackTraceInfo GetStackTrace(int threadId, int startFrame = 0, int? levels = null) {
         var result = new List<StackFrameInfo>();
+        var totalFrames = 0;
 
         if (!_threads.TryGetValue(threadId, out var thread)) {
-            return result;
+            return new StackTraceInfo(result, totalFrames);
         }
 
         try {
-            var frames = EnumerateFramesForThread(thread);
+            var frames = EnumerateFramesForThread(thread).ToList();
+            totalFrames = frames.Count;
             var filterFrames = frames.Skip(startFrame).Take(levels ?? int.MaxValue);
 
             foreach (var (index, frame) in filterFrames.Index()) {
@@ -425,8 +432,9 @@ public partial class ManagedDebugger {
                 };
                 if (frame is ICorDebugILFrame ilFrame) {
                     var function = ilFrame.GetFunction();
-                    stackFrameInfo.Name = GetFunctionFormattedName(function);
                     var module = _modules[function.GetModule().GetBaseAddress()];
+                    stackFrameInfo.ModulePath = module.ModulePath;
+                    stackFrameInfo.InstructionPointerReference = GetInstructionPointerReference(frame, function);
                     if (module.MetadataReader.HasSymbols) {
                         var ilOffset = ilFrame.GetIP().pnOffset;
                         var methodToken = function.GetToken();
@@ -437,8 +445,12 @@ public partial class ManagedDebugger {
                             stackFrameInfo.Column = sourceInfo.Value.startColumn;
                             stackFrameInfo.EndColumn = sourceInfo.Value.endColumn;
                             stackFrameInfo.Source = sourceInfo.Value.sourceFilePath;
+                            stackFrameInfo.SourceChecksum = module.MetadataReader.GetSourceChecksum(sourceInfo.Value.sourceFilePath);
                         }
                     }
+                    // vsdbg: 'Module.dll!Namespace.Type.Method(string[] args) Line 7', the line only when the source is known
+                    stackFrameInfo.Name = GetFunctionFormattedName(function, module);
+                    if (stackFrameInfo.Source is not null) stackFrameInfo.Name += $" Line {stackFrameInfo.Line}";
                 }
                 else if (frame is ICorDebugInternalFrame internalFrame) {
                     stackFrameInfo.Name = internalFrame.GetFrameType().ToDisplayName();
@@ -454,7 +466,22 @@ public partial class ManagedDebugger {
             _logger?.Invoke($"Error getting stack trace: {ex.Message}");
         }
 
-        return result;
+        return new StackTraceInfo(result, totalFrames);
+    }
+
+    /// <summary>
+    /// The native address the frame is executing at: the start of the function's jitted code plus the native offset
+    /// </summary>
+    private static string? GetInstructionPointerReference(ICorDebugFrame frame, ICorDebugFunction function) {
+        try {
+            if (frame is not ICorDebugNativeFrame nativeFrame) return null;
+            var codeStart = function.GetNativeCode().GetAddress();
+            return $"0x{codeStart.Value + (ulong)nativeFrame.GetIP():X16}";
+        }
+        catch {
+            // Not jitted (yet), or the frame has no native view
+            return null;
+        }
     }
 
     /// <summary>
@@ -506,8 +533,8 @@ public partial class ManagedDebugger {
                 if (variablesReference.DebuggerProxyInstance is not null) {
                     // get the public members of the debugger proxy instance instead
                     var objectValue = variablesReference.DebuggerProxyInstance.UnwrapDebugValueToObject();
-                    await AddMembersAndStaticPseudoVariable(variablesReference.DebuggerProxyInstance, objectValue.GetExactType(), variablesReference.ThreadId, variablesReference.FrameStackDepth, result, includeNonPublicGroup: false);
-                    var rawValueVariablesReference = _variableManager.CreateReference(new VariablesReference(StoredReferenceKind.StackVariable, variablesReference.ObjectValue, variablesReference.ThreadId, variablesReference.FrameStackDepth, null));
+                    await AddMembersAndStaticPseudoVariable(variablesReference.DebuggerProxyInstance, objectValue.GetExactType(), variablesReference.ThreadId, variablesReference.FrameStackDepth, result, variablesReference.EvaluateName, includeNonPublicGroup: false);
+                    var rawValueVariablesReference = _variableManager.CreateReference(new VariablesReference(StoredReferenceKind.StackVariable, variablesReference.ObjectValue, variablesReference.ThreadId, variablesReference.FrameStackDepth, null, variablesReference.EvaluateName));
                     var rawValuePseudoVariable = new VariableInfo {
                         Name = "Raw View",
                         Value = "",
@@ -522,10 +549,10 @@ public partial class ManagedDebugger {
                 var unwrappedDebugValue = variablesReference.ObjectValue!.UnwrapDebugValue();
 
                 if (unwrappedDebugValue is ICorDebugArrayValue arrayValue) {
-                    await AddArrayElements(arrayValue, variablesReference.ThreadId, variablesReference.FrameStackDepth, result);
+                    await AddArrayElements(arrayValue, variablesReference.ThreadId, variablesReference.FrameStackDepth, result, variablesReference.EvaluateName);
                 }
                 else if (unwrappedDebugValue is ICorDebugObjectValue objectValue) {
-                    await AddMembersAndStaticPseudoVariable(variablesReference.ObjectValue!, objectValue.GetExactType(), variablesReference.ThreadId, variablesReference.FrameStackDepth, result);
+                    await AddMembersAndStaticPseudoVariable(variablesReference.ObjectValue!, objectValue.GetExactType(), variablesReference.ThreadId, variablesReference.FrameStackDepth, result, variablesReference.EvaluateName);
                     SortMembers(result);
                 }
                 else {
@@ -534,28 +561,28 @@ public partial class ManagedDebugger {
             }
             else if (variablesReference.ReferenceKind is StoredReferenceKind.NonPublicStackVariable) {
                 var objectValue = variablesReference.ObjectValue!.UnwrapDebugValueToObject();
-                _ = await AddMembers(variablesReference.ObjectValue!, objectValue.GetExactType(), variablesReference.ThreadId, variablesReference.FrameStackDepth, result, MemberVisibility.NonPublic);
+                _ = await AddMembers(variablesReference.ObjectValue!, objectValue.GetExactType(), variablesReference.ThreadId, variablesReference.FrameStackDepth, result, MemberVisibility.NonPublic, variablesReference.EvaluateName);
                 SortMembers(result);
             }
             else if (variablesReference.ReferenceKind is StoredReferenceKind.StaticClassVariable) {
                 var objectValue = variablesReference.ObjectValue!.UnwrapDebugValueToObject();
                 // User code types show all their members inline, only non user (library) types get the 'Non-Public members' group
                 var visibility = IsUserCodeType(objectValue.GetExactType()) ? MemberVisibility.All : MemberVisibility.Public;
-                var hasNonPublicMembers = await AddStaticMembers(variablesReference.ObjectValue!, objectValue.GetExactType(), variablesReference.ThreadId, variablesReference.FrameStackDepth, result, visibility);
+                var hasNonPublicMembers = await AddStaticMembers(variablesReference.ObjectValue!, objectValue.GetExactType(), variablesReference.ThreadId, variablesReference.FrameStackDepth, result, visibility, variablesReference.EvaluateName);
                 if (hasNonPublicMembers) {
                     result.Add(new VariableInfo {
                         Name = "Non-Public members",
                         Value = "",
                         Type = "",
                         PresentationHint = new VariablePresentationHint { Kind = PresentationHintKind.Class },
-                        VariablesReference = _variableManager.CreateReference(new VariablesReference(StoredReferenceKind.NonPublicStaticClassVariable, variablesReference.ObjectValue, variablesReference.ThreadId, variablesReference.FrameStackDepth, null))
+                        VariablesReference = _variableManager.CreateReference(new VariablesReference(StoredReferenceKind.NonPublicStaticClassVariable, variablesReference.ObjectValue, variablesReference.ThreadId, variablesReference.FrameStackDepth, null, variablesReference.EvaluateName))
                     });
                 }
                 SortMembers(result);
             }
             else if (variablesReference.ReferenceKind is StoredReferenceKind.NonPublicStaticClassVariable) {
                 var objectValue = variablesReference.ObjectValue!.UnwrapDebugValueToObject();
-                _ = await AddStaticMembers(variablesReference.ObjectValue!, objectValue.GetExactType(), variablesReference.ThreadId, variablesReference.FrameStackDepth, result, MemberVisibility.NonPublic);
+                _ = await AddStaticMembers(variablesReference.ObjectValue!, objectValue.GetExactType(), variablesReference.ThreadId, variablesReference.FrameStackDepth, result, MemberVisibility.NonPublic, variablesReference.EvaluateName);
                 SortMembers(result);
             }
         }
@@ -595,12 +622,13 @@ public partial class ManagedDebugger {
         }
         var (friendlyTypeName, value, debuggerProxyInstance, resultIsError) = await GetValueForCorDebugValueAsync(result.Value!, threadId, frameStackDepth, true);
         VariablePresentationHint? variablePresentationHint = resultIsError ? new VariablePresentationHint { Attributes = AttributesValue.FailedEvaluation } : null;
-        var variablesReference = GetVariablesReference(result.Value!, friendlyTypeName, threadId, frameStackDepth, debuggerProxyInstance);
+        var variablesReference = GetVariablesReference(result.Value!, friendlyTypeName, threadId, frameStackDepth, debuggerProxyInstance, expression);
         var variableInfo = new VariableInfo {
             Name = null!,
             Value = value,
             Type = friendlyTypeName,
             PresentationHint = variablePresentationHint,
+            EvaluateName = expression,
             VariablesReference = variablesReference
         };
         if (variablesReference != 0) result.RelinquishResultHandleOwnership();

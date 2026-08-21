@@ -174,7 +174,7 @@ internal sealed class FunctionBreakpointSignatureTypeProvider : ISignatureTypePr
             : $"{GetTypeName(reader, declaringType)}.{name}";
     }
 
-    private static string GetTypeName(MetadataReader reader, TypeReferenceHandle handle) {
+    internal static string GetTypeName(MetadataReader reader, TypeReferenceHandle handle) {
         var type = reader.GetTypeReference(handle);
         var name = reader.GetString(type.Name);
         return type.ResolutionScope.Kind == HandleKind.TypeReference

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using DotNet.Debugging.Engine.Models.Response;
@@ -5,7 +6,11 @@ using DotNet.Debugging.CorApi;
 
 namespace DotNet.Debugging.Engine;
 
-public record ModuleLoadedInfo(string ModulePath, int ProcessId, bool SymbolsLoaded, bool IsOptimized);
+/// <summary>
+/// Everything a client needs for the 'module' event and the user-facing module load message.
+/// <paramref name="Version"/> is the file version in vsdbg's '1.00.0.0' form, <paramref name="SymbolFilePath"/> the external PDB when one was read
+/// </summary>
+public record ModuleLoadedInfo(string ModulePath, string ModuleName, int ProcessId, bool SymbolsLoaded, bool IsOptimized, bool IsUserCode, string? Version, string? SymbolFilePath);
 
 public enum ExceptionStopKind {
     FirstChance,
@@ -70,9 +75,21 @@ public partial class ManagedDebugger {
     }
 
     /// <summary>
-    /// Raised alongside <see cref="OnModuleLoaded"/> with the details needed for user-facing module load messages
+    /// The file version as vsdbg formats it ('10.00.1126.37416'), falling back to the assembly version from metadata
     /// </summary>
-    public event Action<ModuleLoadedInfo>? OnModuleLoadedVerbose;
+    private static string? GetModuleVersion(string modulePath, ModuleMetadataReader metadataReader) {
+        Version? version = null;
+        try {
+            if (File.Exists(modulePath) && Version.TryParse(FileVersionInfo.GetVersionInfo(modulePath).FileVersion, out var fileVersion))
+                version = fileVersion;
+        }
+        catch {
+            // A version is a nicety for the modules view
+        }
+        version ??= metadataReader.GetAssemblyVersion();
+        if (version is null) return null;
+        return $"{version.Major}.{Math.Max(version.Minor, 0):00}.{Math.Max(version.Build, 0)}.{Math.Max(version.Revision, 0)}";
+    }
 
     private bool _stopAtEntryPending;
     private ICorDebugFunctionBreakpoint? _entryPointBreakpoint;
@@ -227,7 +244,7 @@ public partial class ManagedDebugger {
             Name = name,
             Value = displayValue,
             Type = friendlyTypeName,
-            VariablesReference = GetVariablesReference(targetValue, friendlyTypeName, variablesReferenceInfo.ThreadId, variablesReferenceInfo.FrameStackDepth, debuggerProxyInstance)
+            VariablesReference = GetVariablesReference(targetValue, friendlyTypeName, variablesReferenceInfo.ThreadId, variablesReferenceInfo.FrameStackDepth, debuggerProxyInstance, variablesReferenceInfo.EvaluateName is null ? name : $"{variablesReferenceInfo.EvaluateName}.{name}")
         };
     }
 

@@ -5,6 +5,8 @@ namespace DotNet.Debugging.Adapter;
 public partial class DebugSession {
     protected override LaunchResponse HandleLaunchRequest(LaunchArguments arguments) {
         return Invoke(() => {
+            OnDebugDataReceived(Resources.MsgLicenseBanner);
+
             var configuration = new LaunchConfiguration(arguments.ConfigurationProperties);
             configuration.VerifyMissingProperties();
 

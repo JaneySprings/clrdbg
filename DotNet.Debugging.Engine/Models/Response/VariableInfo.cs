@@ -8,4 +8,5 @@ public class VariableInfo {
     public required string? Type { get; set; }
     public required int VariablesReference { get; set; }
     public VariablePresentationHint? PresentationHint { get; set; }
+    public string? EvaluateName { get; set; }
 }
