@@ -85,16 +85,4 @@ public class PauseTests : BaseDebugTestFixture {
             }
         }
     }
-
-    private int WaitForFirstThread() {
-        var deadline = DateTime.UtcNow.AddSeconds(30);
-        while (DateTime.UtcNow < deadline) {
-            var threads = Host.SendRequestSync(new ThreadsRequest()).Threads;
-            if (threads.Count > 0)
-                return threads[0].Id;
-
-            System.Threading.Thread.Sleep(25);
-        }
-        throw new TimeoutException("The attach never produced any threads");
-    }
 }

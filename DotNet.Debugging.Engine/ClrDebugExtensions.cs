@@ -57,7 +57,14 @@ public static class ClrDebugExtensions {
             _runtimeStartupTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
             unsafe {
                 var registerHr = DbgShim.RegisterForRuntimeStartup(checked((uint)pid), &OnRuntimeStartup, 0, out unregisterToken);
-                Marshal.ThrowExceptionForHR(registerHr);
+                if (registerHr is not Cor.S_OK) {
+                    // ThrowExceptionForHR alone reaches the client as bare text - "Access is denied." -
+                    // naming neither the call nor what it was about. Whether the debuggee is still alive
+                    // is what separates a launch that died from a registration that was refused.
+                    throw new InvalidOperationException(
+                        $"RegisterForRuntimeStartup failed for pid {pid}: 0x{registerHr:X8}, debuggee alive: {IsProcessAlive(pid)}",
+                        Marshal.GetExceptionForHR(registerHr));
+                }
             }
 
             if (resumeDiagnosticSuspension) await DiagnosticClientHelper.DiagnosticClientResumeRuntime(pid);
@@ -80,6 +87,16 @@ public static class ClrDebugExtensions {
         //InitCorDebug(cordebug, pid);
 
         //while (true) Thread.Sleep(1);
+    }
+
+    private static bool IsProcessAlive(int pid) {
+        try {
+            using var process = System.Diagnostics.Process.GetProcessById(pid);
+            return process.HasExited is false;
+        }
+        catch (ArgumentException) {
+            return false;
+        }
     }
 
     // public static ICorDebug Manual(int pid)

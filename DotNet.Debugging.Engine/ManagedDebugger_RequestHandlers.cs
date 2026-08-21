@@ -226,9 +226,10 @@ public partial class ManagedDebugger {
 
     /// <summary>
     /// Whether ICorDebug reports the debuggee as executing, which is the one state <see cref="Pause"/>
-    /// can stop it from.
+    /// can stop it from. A state that cannot be read counts as not running, so a caller acting on this
+    /// is refused rather than handed a COM failure out of a property.
     /// </summary>
-    public bool IsRunning => _process?.IsRunning() ?? false;
+    public bool IsRunning => _process?.TryIsRunning(out var isRunning) is Cor.S_OK && isRunning;
 
     /// <summary>
     /// Step to the next line
@@ -613,6 +614,14 @@ public partial class ManagedDebugger {
         _logger?.Invoke("Terminate");
         if (_process is not null) {
             try {
+                // Terminate needs the process synchronized. On a running one it fails with
+                // CORDBG_E_PROCESS_NOT_SYNCHRONIZED, and the catch below only logs, so the request
+                // would answer success on a debuggee that is still running.
+                if (IsRunning) {
+                    var hResult = _process.TryStop(0);
+                    if (hResult is not (Cor.S_OK or Cor.CORDBG_E_PROCESS_TERMINATED)) _logger?.Invoke($"Error stopping process before terminating: {hResult}");
+                }
+
                 _process.Terminate(0);
             }
             catch (Exception ex) {
@@ -632,7 +641,7 @@ public partial class ManagedDebugger {
             Terminate();
         }
         else {
-            if (_process is not null && _isAttached && _process?.TryIsRunning(out var isRunning) is Cor.S_OK && isRunning) {
+            if (_process is not null && _isAttached && IsRunning) {
                 var hResult = _process.TryStop(0);
                 if (hResult is not (Cor.S_OK or Cor.CORDBG_E_PROCESS_TERMINATED)) _logger?.Invoke($"Error stopping process during disconnect: {hResult}");
             }

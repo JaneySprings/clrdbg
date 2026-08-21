@@ -269,6 +269,22 @@ public abstract class BaseDebugTestFixture {
     protected StoppedEvent WaitForStopped(StoppedEvent.ReasonValue? reason = null) {
         return WaitForEvent<StoppedEvent>(it => reason == null || it.Reason == reason);
     }
+    /// <summary>
+    /// The first thread of an attached debuggee, which is the point a client can do anything with it.
+    /// 'PerformAttach' is fire-and-forget, so the attach is still landing when 'ConfigurationDone'
+    /// returns and there is nothing to act on until this answers.
+    /// </summary>
+    protected int WaitForFirstThread(int timeoutMs = 30000) {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (DateTime.UtcNow < deadline) {
+            var threads = Host.SendRequestSync(new ThreadsRequest()).Threads;
+            if (threads.Count > 0)
+                return threads[0].Id;
+
+            System.Threading.Thread.Sleep(25);
+        }
+        throw new TimeoutException("The attach never produced any threads");
+    }
 
     protected StackFrame GetTopStackFrame(int threadId) {
         var response = Host.SendRequestSync(new StackTraceRequest() { ThreadId = threadId });
