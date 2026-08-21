@@ -80,12 +80,7 @@ public partial class ManagedDebugger {
 
         _logger?.Invoke($"Process created suspended with PID: {processId}");
 
-        _corDebug = await ClrDebugExtensions.Automatic(processId, true);
-        _corDebug.Initialize();
-        _corDebug.SetManagedHandler(_callbacks);
-
-        _process = _corDebug.DebugActiveProcess(processId, false);
-        _isAttached = true;
+        await ClrDebugExtensions.Automatic(processId, corDebug => AttachToStartedRuntime(corDebug, processId), resumeDiagnosticSuspension: true);
 
         _logger?.Invoke($"Successfully attached to process: {processId}");
         OnProcessStarted?.Invoke(processId);

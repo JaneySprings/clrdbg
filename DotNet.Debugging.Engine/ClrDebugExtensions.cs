@@ -32,18 +32,36 @@ public static class ClrDebugExtensions {
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     public static unsafe void OnRuntimeStartup(void* pCorDebug, void* parameter, int hr) {
-        var corDebug = ComInterfaceMarshaller<ICorDebug>.ConvertToManaged(pCorDebug);
-        ArgumentNullException.ThrowIfNull(_runtimeStartupTcs);
-        _runtimeStartupTcs.SetResult((corDebug, hr));
+        // Nothing may escape an UnmanagedCallersOnly method - a throw here takes the adapter down - so every
+        // outcome, including a failed attach, travels back to 'Automatic' through the task
+        var registration = _runtimeStartupRegistration;
+        if (registration is null) return;
+        try {
+            var corDebug = ComInterfaceMarshaller<ICorDebug>.ConvertToManaged(pCorDebug);
+            if (corDebug is null || hr is not Cor.S_OK)
+                throw new InvalidOperationException($"Attempting to register for runtime startup failed: 0x{hr:X8}", Marshal.GetExceptionForHR(hr));
+            registration.Attach.Invoke(corDebug);
+            registration.Completion.SetResult();
+        }
+        catch (Exception ex) {
+            registration.Completion.SetException(ex);
+        }
     }
-    private static TaskCompletionSource<(ICorDebug? CorDebug, int Hr)>? _runtimeStartupTcs;
+    private sealed record RuntimeStartupRegistration(Action<ICorDebug> Attach, TaskCompletionSource Completion);
+    private static RuntimeStartupRegistration? _runtimeStartupRegistration;
 
-    /// pass resumeDiagnosticSuspension true if the process was launched with the DOTNET_DefaultDiagnosticPortSuspend environment variable, and you wish for it to be resumed after RegisterForRuntimeStartup
-    public static async Task<ICorDebug> Automatic(int pid, bool resumeDiagnosticSuspension = false) {
+    /// <summary>
+    /// Registers for the runtime startup of <paramref name="pid"/> and runs <paramref name="attach"/> (Initialize,
+    /// SetManagedHandler, DebugActiveProcess) on the resulting <see cref="ICorDebug"/> from inside dbgshim's startup
+    /// callback. That placement is the point: dbgshim lets the parked runtime continue the moment the callback returns.
+    /// On Unix the runtime then marks itself debugger-attached and blocks again until the debugger continues, so a late
+    /// attach is harmless - but on Windows nothing holds it, and a debuggee that finishes quickly can be exiting by the
+    /// time a post-callback DebugActiveProcess reaches it, which fails with E_ACCESSDENIED (STATUS_PROCESS_IS_TERMINATING).
+    /// Attaching inside the callback lands while the runtime is still waiting in its startup handshake, on every platform.
+    /// </summary>
+    /// <param name="resumeDiagnosticSuspension">true if the process was launched with the DOTNET_DefaultDiagnosticPortSuspend environment variable, and you wish for it to be resumed after RegisterForRuntimeStartup</param>
+    public static async Task Automatic(int pid, Action<ICorDebug> attach, bool resumeDiagnosticSuspension = false) {
         IntPtr unregisterToken = IntPtr.Zero;
-
-        ICorDebug? cordebug = null;
-        int hr = Cor.COR_E_FAILFAST;
 
         try {
             /* If the process starts before GetStartupNotificationEvent inside RegisterForRuntimeStartup is called (e.g. because you were playing
@@ -53,8 +71,10 @@ public static class ClrDebugExtensions {
 			 * technically speaking there is the possibility of a race occurring even without us stepping in the debugger, but that's the risk you take when
 			 * you use RegisterForRuntimeStartup */
 
-            if (_runtimeStartupTcs is not null) throw new InvalidOperationException("OnRuntimeStartup has already been registered. Only one registration is allowed at a time.");
-            _runtimeStartupTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            if (_runtimeStartupRegistration is not null) throw new InvalidOperationException("OnRuntimeStartup has already been registered. Only one registration is allowed at a time.");
+            // The continuation must leave dbgshim's helper thread: 'Unregister' below waits for that thread to finish
+            var registration = new RuntimeStartupRegistration(attach, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+            _runtimeStartupRegistration = registration;
             unsafe {
                 var registerHr = DbgShim.RegisterForRuntimeStartup(checked((uint)pid), &OnRuntimeStartup, 0, out unregisterToken);
                 if (registerHr is not Cor.S_OK) {
@@ -69,24 +89,12 @@ public static class ClrDebugExtensions {
 
             if (resumeDiagnosticSuspension) await DiagnosticClientHelper.DiagnosticClientResumeRuntime(pid);
 
-            var result = await _runtimeStartupTcs.Task.ConfigureAwait(false);
-            cordebug = result.CorDebug;
-            hr = result.Hr;
+            await registration.Completion.Task.ConfigureAwait(false);
         }
         finally {
             if (unregisterToken != IntPtr.Zero) DbgShim.UnregisterForRuntimeStartup(unregisterToken);
-            _runtimeStartupTcs = null;
+            _runtimeStartupRegistration = null;
         }
-
-        //if callbackHR was not S_OK, an error occurred while attempting to register for runtime startup
-        if (cordebug is null) throw new InvalidOperationException($"Attempting to register for runtime startup failed: {hr}");
-
-        return cordebug;
-
-        //Initialize ICorDebug, setup our managed callback and attach to the existing process
-        //InitCorDebug(cordebug, pid);
-
-        //while (true) Thread.Sleep(1);
     }
 
     private static bool IsProcessAlive(int pid) {

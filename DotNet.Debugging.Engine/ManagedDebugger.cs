@@ -155,17 +155,24 @@ public partial class ManagedDebugger {
 
         // Initialize the debugger
         _ = Task.Run(async () => {
-            _corDebug = await ClrDebugExtensions.Automatic(processId);
-            _corDebug.Initialize();
-            _corDebug.SetManagedHandler(_callbacks);
-
-            // Attach to the process
-            _process = _corDebug.DebugActiveProcess(processId, false);
-            _isAttached = true;
+            await ClrDebugExtensions.Automatic(processId, corDebug => AttachToStartedRuntime(corDebug, processId));
 
             _logger?.Invoke($"Attached to process: {processId}");
             SendAllBreakpointEvents();
         });
+    }
+
+    /// <summary>
+    /// The attach proper. Runs inside dbgshim's runtime-startup callback, while the debuggee's runtime is still parked
+    /// in its startup handshake - it is only let go once this returns (see <see cref="ClrDebugExtensions.Automatic"/>).
+    /// </summary>
+    private void AttachToStartedRuntime(ICorDebug corDebug, int processId) {
+        corDebug.Initialize();
+        corDebug.SetManagedHandler(_callbacks);
+        _corDebug = corDebug;
+
+        _process = corDebug.DebugActiveProcess(processId, false);
+        _isAttached = true;
     }
 
     /// <summary>
