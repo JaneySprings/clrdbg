@@ -12,7 +12,7 @@ public static class AndroidEmulator {
         if (rSerial != null)
             return new StartResult(rSerial, null);
 
-        var emulator = AndroidSdkLocator.EmulatorTool();
+        var emulator = AndroidSdkLocator.GetEmulatorPath();
         var runner = new ProcessRunner(emulator, new ProcessArgumentBuilder()
             .Append("-avd")
             .Append(name));
@@ -55,8 +55,9 @@ public static class AndroidEmulator {
             return avdName; // We allow to use avdName property as serial for running devices
         return serials.FirstOrDefault(it => GetEmulatorName(it) == avdName);
     }
-    private static List<string> GetDevices() {
-        var adb = AndroidSdkLocator.AdbTool();
+
+    public static List<string> GetDevices() {
+        var adb = AndroidSdkLocator.GetAdbPath();
         ProcessResult result = new ProcessRunner(adb, new ProcessArgumentBuilder()
             .Append("devices")
             .Append("-l"))
@@ -78,8 +79,8 @@ public static class AndroidEmulator {
 
         return devices;
     }
-    private static string GetEmulatorName(string serial) {
-        var adb = AndroidSdkLocator.AdbTool();
+    public static string GetEmulatorName(string serial) {
+        var adb = AndroidSdkLocator.GetAdbPath();
         ProcessResult result = new ProcessRunner(adb, new ProcessArgumentBuilder()
             .Append("-s", serial)
             .Append("emu", "avd", "name"))

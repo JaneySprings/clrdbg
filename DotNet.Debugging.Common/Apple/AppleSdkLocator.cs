@@ -3,7 +3,7 @@ using System.Diagnostics;
 namespace DotNet.Debugging.Common.Apple;
 
 public static class AppleSdkLocator {
-    public static string IDeviceLocation() {
+    public static string GetIDeviceDirectory() {
         var ideviceDirectory = Environment.GetEnvironmentVariable("IDEVICE_DIR");
         if (Directory.Exists(ideviceDirectory))
             return ideviceDirectory;
@@ -41,10 +41,10 @@ public static class AppleSdkLocator {
         return process.Length > 0;
     }
 
-    public static FileInfo MLaunchTool() {
+    public static string GetMLaunchPath() {
         var mlaunchToolPath = Environment.GetEnvironmentVariable("MLAUNCH_PATH");
         if (File.Exists(mlaunchToolPath))
-            return new FileInfo(mlaunchToolPath);
+            return mlaunchToolPath;
 
         var sdkPath = string.Empty;
         var dotnetPacksPath = Path.Combine(MSBuildLocator.GetRootDirectory(), "packs");
@@ -63,24 +63,13 @@ public static class AppleSdkLocator {
 
         var latestToolDirectory = toolLocations.OrderByDescending(x => Path.GetFileName(x)).First();
         mlaunchToolPath = Path.Combine(latestToolDirectory, "tools", "bin", "mlaunch");
-        return new FileInfo(mlaunchToolPath);
+        return mlaunchToolPath;
     }
-    public static FileInfo XCRunTool() {
-        string path = Path.Combine("/usr", "bin", "xcrun");
-        FileInfo tool = new FileInfo(path);
-
-        if (!tool.Exists)
-            throw new InvalidOperationException("Could not find xcrun tool");
-
-        return tool;
-    }
-    public static FileInfo OpenTool() {
+    public static string GetOpenPath() {
         string path = Path.Combine("/usr", "bin", "open");
-        FileInfo tool = new FileInfo(path);
-
-        if (!tool.Exists)
+        if (!File.Exists(path))
             throw new InvalidOperationException("Could not find open tool");
 
-        return tool;
+        return path;
     }
 }

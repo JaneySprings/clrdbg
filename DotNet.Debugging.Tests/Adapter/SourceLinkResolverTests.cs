@@ -47,13 +47,10 @@ public class SourceLinkResolverTests {
 
     [Test]
     public void FailedDownloadIsReportedOnceTest() {
-        var messages = new List<string>();
-        var resolver = new SourceLinkResolver(new Dictionary<string, SourceLinkOptions> { ["*"] = new SourceLinkOptions() }, messages.Add);
+        var resolver = new SourceLinkResolver(new Dictionary<string, SourceLinkOptions> { ["*"] = new SourceLinkOptions() });
         var reference = resolver.GetSourceReference("http://127.0.0.1:1/Missing.cs");
 
         Assert.That(resolver.GetSourceContent(reference), Is.Null);
         Assert.That(resolver.GetSourceContent(reference), Is.Null, "A failed download is not retried");
-        Assert.That(messages.Count(it => it.StartsWith("Downloading", StringComparison.Ordinal)), Is.EqualTo(1));
-        Assert.That(messages.Count(it => it.StartsWith("Failed", StringComparison.Ordinal)), Is.EqualTo(1));
     }
 }

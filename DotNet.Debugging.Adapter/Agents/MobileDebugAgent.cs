@@ -48,7 +48,7 @@ public class MobileDebugAgent : BaseDebugAgent<LaunchConfiguration> {
 
         Configuration.EnvironmentVariables.Add("CORECLR_PROFILER_PATH", libraryName);
 
-        var appProcess = new ProcessRunner(AppleSdkLocator.OpenTool(), new ProcessArgumentBuilder()
+        var appProcess = new ProcessRunner(AppleSdkLocator.GetOpenPath(), new ProcessArgumentBuilder()
             .Append("-n", "-W")
             .Append(Configuration.EnvironmentVariables, (kvp) => $"--env \"{kvp.Key}={kvp.Value}\"")
             .AppendQuoted(Configuration.Program), ProcessLogger)

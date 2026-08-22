@@ -7,7 +7,7 @@ namespace DotNet.Debugging.Common.Apple;
 // https://www.microsoft.com/store/productId/9NP83LWLPZ9K?ocid=pdpshare
 public static class IDeviceTool {
     public static void Installer(string serial, string bundlePath, IProcessLogger? logger = null) {
-        var tool = new FileInfo(Path.Combine(AppleSdkLocator.IDeviceLocation(), "ideviceinstaller" + RuntimeInfo.ExecExtension));
+        var tool = new FileInfo(Path.Combine(AppleSdkLocator.GetIDeviceDirectory(), "ideviceinstaller" + RuntimeInfo.ExecExtension));
         var result = new ProcessRunner(tool, new ProcessArgumentBuilder()
             .Append("--udid").Append(serial)
             .Append("--install").AppendQuoted(bundlePath), logger)
@@ -17,7 +17,7 @@ public static class IDeviceTool {
             throw new InvalidOperationException(string.Join(Environment.NewLine, result.StandardError));
     }
     public static Process Proxy(string serial, int port, IProcessLogger? logger = null) {
-        var tool = new FileInfo(Path.Combine(AppleSdkLocator.IDeviceLocation(), "iproxy" + RuntimeInfo.ExecExtension));
+        var tool = new FileInfo(Path.Combine(AppleSdkLocator.GetIDeviceDirectory(), "iproxy" + RuntimeInfo.ExecExtension));
         return RuntimeInfo.IsWindows
             ? new ProcessRunner(tool, new ProcessArgumentBuilder()
                 .Append($"{port} {port}")

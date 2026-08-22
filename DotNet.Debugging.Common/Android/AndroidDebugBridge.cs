@@ -5,7 +5,7 @@ namespace DotNet.Debugging.Common.Android;
 
 public static class AndroidDebugBridge {
     public static string Shell(string serial, params string[] args) {
-        var adb = AndroidSdkLocator.AdbTool();
+        var adb = AndroidSdkLocator.GetAdbPath();
         var result = new ProcessRunner(adb, new ProcessArgumentBuilder()
             .Append("-s", serial)
             .Append("shell")
@@ -18,7 +18,7 @@ public static class AndroidDebugBridge {
         return string.Join(Environment.NewLine, result.StandardOutput);
     }
     public static ProcessResult ShellResult(string serial, params string[] args) {
-        var adb = AndroidSdkLocator.AdbTool();
+        var adb = AndroidSdkLocator.GetAdbPath();
         var result = new ProcessRunner(adb, new ProcessArgumentBuilder()
             .Append("-s", serial)
             .Append("shell")
@@ -29,7 +29,7 @@ public static class AndroidDebugBridge {
     }
 
     public static string Forward(string serial, int port) {
-        var adb = AndroidSdkLocator.AdbTool();
+        var adb = AndroidSdkLocator.GetAdbPath();
         var result = new ProcessRunner(adb, new ProcessArgumentBuilder()
             .Append("-s", serial)
             .Append("forward")
@@ -40,7 +40,7 @@ public static class AndroidDebugBridge {
         return string.Join(Environment.NewLine, result.StandardOutput);
     }
     public static string Reverse(string serial, int target, int destination) {
-        var adb = AndroidSdkLocator.AdbTool();
+        var adb = AndroidSdkLocator.GetAdbPath();
         var result = new ProcessRunner(adb, new ProcessArgumentBuilder()
             .Append("-s", serial)
             .Append("reverse")
@@ -51,7 +51,7 @@ public static class AndroidDebugBridge {
         return string.Join(Environment.NewLine, result.StandardOutput);
     }
     public static string RemoveForward(string serial) {
-        var adb = AndroidSdkLocator.AdbTool();
+        var adb = AndroidSdkLocator.GetAdbPath();
         var result = new ProcessRunner(adb, new ProcessArgumentBuilder()
             .Append("-s", serial)
             .Append("forward")
@@ -64,7 +64,7 @@ public static class AndroidDebugBridge {
         return string.Join(Environment.NewLine, result.StandardOutput);
     }
     public static string RemoveReverse(string serial) {
-        var adb = AndroidSdkLocator.AdbTool();
+        var adb = AndroidSdkLocator.GetAdbPath();
         var result = new ProcessRunner(adb, new ProcessArgumentBuilder()
             .Append("-s", serial)
             .Append("reverse")
@@ -78,7 +78,7 @@ public static class AndroidDebugBridge {
     }
 
     public static void Install(string serial, string apk, IProcessLogger? logger = null) {
-        var adb = AndroidSdkLocator.AdbTool();
+        var adb = AndroidSdkLocator.GetAdbPath();
         var arguments = new ProcessArgumentBuilder()
             .Append("-s", serial)
             .Append("install")
@@ -89,7 +89,7 @@ public static class AndroidDebugBridge {
             throw new InvalidOperationException(string.Join(Environment.NewLine, result.StandardError));
     }
     public static void Uninstall(string serial, string pkg, IProcessLogger? logger = null) {
-        var adb = AndroidSdkLocator.AdbTool();
+        var adb = AndroidSdkLocator.GetAdbPath();
         var argument = new ProcessArgumentBuilder()
             .Append("-s", serial)
             .Append("uninstall")
@@ -103,7 +103,7 @@ public static class AndroidDebugBridge {
         logger?.OnOutputDataReceived(result);
     }
     public static void Push(string serial, string source, string destination, IProcessLogger? logger = null) {
-        var adb = AndroidSdkLocator.AdbTool();
+        var adb = AndroidSdkLocator.GetAdbPath();
         var arguments = new ProcessArgumentBuilder()
             .Append("-s", serial)
             .Append("push")
@@ -115,7 +115,7 @@ public static class AndroidDebugBridge {
     }
 
     public static void Flush(string serial) {
-        var adb = AndroidSdkLocator.AdbTool();
+        var adb = AndroidSdkLocator.GetAdbPath();
         _ = new ProcessRunner(adb, new ProcessArgumentBuilder()
             .Append("-s", serial)
             .Append("logcat")
@@ -123,7 +123,7 @@ public static class AndroidDebugBridge {
             .WaitForExit();
     }
     public static Process Logcat(string serial, string buffer, string filter, IProcessLogger logger) {
-        var adb = AndroidSdkLocator.AdbTool();
+        var adb = AndroidSdkLocator.GetAdbPath();
         var arguments = new ProcessArgumentBuilder()
             .Append("-s", serial)
             .Append("logcat")
@@ -133,7 +133,7 @@ public static class AndroidDebugBridge {
         return new ProcessRunner(adb, arguments, logger).Start();
     }
     public static Process Logcat(string serial, IProcessLogger logger) {
-        var adb = AndroidSdkLocator.AdbTool();
+        var adb = AndroidSdkLocator.GetAdbPath();
         var arguments = new ProcessArgumentBuilder()
             .Append("-s", serial)
             .Append("logcat")
@@ -147,12 +147,20 @@ public static class AndroidDebugBridge {
         if (string.IsNullOrEmpty(applicationProcessId))
             return Logcat(serial, logger);
 
-        var adb = AndroidSdkLocator.AdbTool();
+        var adb = AndroidSdkLocator.GetAdbPath();
         var arguments = new ProcessArgumentBuilder()
             .Append("-s", serial)
             .Append("logcat")
             .Append("--pid", applicationProcessId)
             .Append("-v", "tag");
         return new ProcessRunner(adb, arguments, logger).Start();
+    }
+
+    public static bool StartServer() {
+        ProcessResult result = new ProcessRunner(AndroidSdkLocator.GetAdbPath(), new ProcessArgumentBuilder()
+            .Append("start-server"))
+            .WaitForExit();
+
+        return result.Success;
     }
 }

@@ -124,7 +124,7 @@ public partial class DebugSession : Session {
     }
 
     private void ConnectDebugAgent(BaseConfiguration configuration) {
-        sourceLinkResolver = new SourceLinkResolver(configuration.SourceLinkOptions, OnDebugDataReceived);
+        sourceLinkResolver = new SourceLinkResolver(configuration.SourceLinkOptions);
         debugAgent = configuration.CreateDebugAgent(this);
         InvokeDebugger(() => {
             session.JustMyCode = configuration.JustMyCode;

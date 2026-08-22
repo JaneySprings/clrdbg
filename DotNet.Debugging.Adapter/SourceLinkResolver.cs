@@ -11,12 +11,12 @@ public class SourceLinkResolver {
     // The URL behind each reference, stable for the session so the client keeps one document per file
     private readonly Handles<string> sourceHandles;
     private readonly Dictionary<string, string?> contents;
-    private readonly Action<string>? messageHandler;
+    private readonly CurrentClassLogger logger;
     private readonly object handlesLock;
 
-    public SourceLinkResolver(Dictionary<string, SourceLinkOptions> options, Action<string>? messageHandler = null) {
+    public SourceLinkResolver(Dictionary<string, SourceLinkOptions> options) {
         this.options = options;
-        this.messageHandler = messageHandler;
+        logger = new CurrentClassLogger(nameof(SourceLinkResolver));
         sourceHandles = new Handles<string>(StringComparer.Ordinal);
         contents = new Dictionary<string, string?>(StringComparer.Ordinal);
         handlesLock = new object();
@@ -57,12 +57,11 @@ public class SourceLinkResolver {
 
     private string? Download(string url) {
         try {
-            messageHandler?.Invoke($"Downloading source file from '{url}'");
+            logger?.Debug($"Downloading source file from '{url}'");
             return httpClient.GetStringAsync(url).GetAwaiter().GetResult();
         }
         catch (Exception ex) {
-            CurrentSessionLogger.Error($"[SourceLink] Failed to download '{url}': {ex.Message}");
-            messageHandler?.Invoke($"Failed to download source file from '{url}': {ex.Message}");
+            logger?.Error($"Failed to download source file from '{url}': {ex.Message}");
             return null;
         }
     }
