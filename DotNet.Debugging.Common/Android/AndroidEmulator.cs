@@ -51,6 +51,8 @@ public static class AndroidEmulator {
     }
     private static string? SerialIfRunning(string avdName) {
         var serials = GetDevices().Where(it => it.StartsWith("emulator-"));
+        if (serials.Contains(avdName))
+            return avdName; // We allow to use avdName property as serial for running devices
         return serials.FirstOrDefault(it => GetEmulatorName(it) == avdName);
     }
     private static List<string> GetDevices() {

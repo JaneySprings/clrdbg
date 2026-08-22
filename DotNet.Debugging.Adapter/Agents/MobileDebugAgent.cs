@@ -1,4 +1,5 @@
 using DotNet.Debugging.Common;
+using DotNet.Debugging.Common.Android;
 using DotNet.Debugging.Common.Apple;
 using DotNet.Debugging.Common.Extensions;
 using DotNet.Debugging.Common.Interop;
@@ -23,9 +24,9 @@ public class MobileDebugAgent : BaseDebugAgent<LaunchConfiguration> {
             Configuration.EnvironmentVariables.Add("CORECLR_REMOTE_DEBUGGER_ISSERVER", Configuration.MobileOptions.IsServer ? "0" : "1");
             Configuration.EnvironmentVariables.Add("DOTNET_MODIFIABLE_ASSEMBLIES", "debug");
 
-            switch (Configuration.Platform) {
+            switch (Configuration.MobileOptions.Platform) {
                 case DebugTarget.Android:
-                    // LaunchAndroid();
+                    LaunchAndroid();
                     break;
                 case DebugTarget.IOS:
                     LaunchAppleMobile();
@@ -92,7 +93,34 @@ public class MobileDebugAgent : BaseDebugAgent<LaunchConfiguration> {
             Disposables.Add(() => SafeExtensions.Invoke(() => simProcess.Terminate(entireProcessTree: true)));
         }
     }
+    private void LaunchAndroid() {
+        ArgumentNullException.ThrowIfNullOrEmpty(Configuration.MobileOptions?.Device);
+        Configuration.EnvironmentVariables.Add("CORECLR_PROFILER_PATH", "libvsdbgremotecoreclrtarget.so");
 
+        var applicationId = Path.GetFileNameWithoutExtension(Configuration.Program).Replace("-Signed", "");
+        if (!Configuration.MobileOptions.IsDevice)
+            Configuration.MobileOptions.Device = AndroidEmulator.Run(Configuration.MobileOptions.Device).Serial;
+
+        var forwardedPorts = new List<int>() { Configuration.MobileOptions.Port };
+        if (Configuration.MobileOptions.TcpTunnel != null)
+            forwardedPorts.AddRange(Configuration.MobileOptions.TcpTunnel);
+
+        foreach (var port in forwardedPorts)
+            AndroidDebugBridge.Forward(Configuration.MobileOptions.Device, port);
+        if (Configuration.MobileOptions.UninstallApp)
+            AndroidDebugBridge.Uninstall(Configuration.MobileOptions.Device, applicationId, ProcessLogger);
+
+        AndroidDebugBridge.Install(Configuration.MobileOptions.Device, Configuration.Program, ProcessLogger);
+        AndroidDebugBridge.Shell(Configuration.MobileOptions.Device, "am", "set-debug-app", applicationId);
+        AndroidFastDev.TryPushAssemblies(Configuration.MobileOptions.Device, Configuration.MobileOptions.AssetsPath, applicationId, ProcessLogger);
+        AndroidFastDev.TrySetEnvironment(Configuration.MobileOptions.Device, Configuration.EnvironmentVariables, applicationId, ProcessLogger);
+        AndroidDebugBridge.Launch(Configuration.MobileOptions.Device, applicationId, ProcessLogger);
+
+        AndroidDebugBridge.Flush(Configuration.MobileOptions.Device);
+        var logcatProcess = AndroidDebugBridge.Logcat(Configuration.MobileOptions.Device, applicationId, ProcessLogger);
+        Disposables.Add(() => logcatProcess.Terminate());
+        Disposables.Add(() => AndroidDebugBridge.RemoveForward(Configuration.MobileOptions.Device));
+    }
 
     private string GetCoreclrHostLibrary() {
         var runtime = $"{RuntimeInfo.GetOperationSystem()}-{RuntimeInfo.GetArchitecture()}";

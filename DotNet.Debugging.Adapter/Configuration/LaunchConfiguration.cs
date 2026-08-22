@@ -12,7 +12,6 @@ public class LaunchConfiguration : BaseConfiguration {
     public List<string> Arguments { get; private set; }
     public Dictionary<string, string> EnvironmentVariables { get; private set; }
     public LaunchRequestConsoleType Console { get; }
-    public DebugTarget Platform { get; }
     public bool SuppressJITOptimizations { get; }
     public bool StopAtEntry { get; }
     public string? LaunchSettingsFilePath { get; }
@@ -29,7 +28,6 @@ public class LaunchConfiguration : BaseConfiguration {
         Arguments = properties.TryGetValue("args").ToClass<List<string>>() ?? new List<string>();
         EnvironmentVariables = properties.TryGetValue("env").ToClass<Dictionary<string, string>>() ?? new Dictionary<string, string>();
         Console = properties.TryGetValue("console").ToValue<LaunchRequestConsoleType>(LaunchRequestConsoleType.InternalConsole);
-        Platform = properties.TryGetValue("platform").ToValue<DebugTarget>(DebugTarget.CoreClr);
         SuppressJITOptimizations = properties.TryGetValue("suppressJITOptimizations").ToValue<bool>(false);
         StopAtEntry = properties.TryGetValue("stopAtEntry").ToValue<bool>(false);
         LaunchSettingsFilePath = properties.TryGetValue("launchSettingsFilePath").ToClass<string>().ToPlatformPath();

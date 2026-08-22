@@ -41,6 +41,9 @@ public class CoreClrMobileDebuggerOptions {
     [JsonPropertyName("runtimeIdentifier")]
     public string? RuntimeIdentifier { get; set; }
 
+    [JsonPropertyName("platform")]
+    public DebugTarget Platform { get; set; }
+
     [JsonPropertyName("ip")]
     public string? Address { get; set; }
 
@@ -50,9 +53,6 @@ public class CoreClrMobileDebuggerOptions {
     [JsonPropertyName("tcpTunnel")]
     public int[]? TcpTunnel { get; set; }
 
-    [JsonPropertyName("isServer")]
-    public bool IsServer { get; set; }
-
     [JsonPropertyName("assetsPath")]
     public string? AssetsPath { get; set; }
 
@@ -61,4 +61,11 @@ public class CoreClrMobileDebuggerOptions {
 
     [JsonPropertyName("isDevice")]
     public bool IsDevice { get; set; }
+
+    [JsonPropertyName("uninstallApp")]
+    public bool UninstallApp { get; set; }
+
+
+    [JsonIgnore]
+    public bool IsServer => Platform == DebugTarget.Maccatalyst || (Platform == DebugTarget.IOS && !IsDevice);
 }
