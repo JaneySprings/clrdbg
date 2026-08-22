@@ -14,7 +14,7 @@ public partial class DebugSession {
                 pageOffset = page.Offset;
             }
 
-            var variables = InvokeDebugger(() => session.GetVariables(variablesReference));
+            var variables = InvokeDebugger(() => session.GetVariablesAsync(variablesReference));
             var response = new VariablesResponse(variables
                 .Skip(pageOffset)
                 .Take(VariablesPageSize)

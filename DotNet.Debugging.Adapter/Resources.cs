@@ -15,8 +15,14 @@ public static class Resources {
 
     public const string MsgCannotFindPdb = "Cannot find or open the PDB file.";
     public const string MsgPdbLoaded = "Symbols loaded.";
-    public const string MsgPdfSkipped = "Skipped loading symbols. Module is optimized and the debugger option 'Just My Code' is enabled.";
+    public const string MsgPdbSkipped = "Skipped loading symbols. Module is optimized and the debugger option 'Just My Code' is enabled.";
     public const string MsgPdbSkippedShort = "Skipped loading symbols.";
+
+    public const string MsgBreakpointPending = "The breakpoint is pending and will be resolved when debugging starts.";
+    public const string MsgBreakpointNotProcessed = "Breakpoint has not been processed by the debugger.";
+    public const string MsgBreakpointNoSymbols = "The breakpoint will not currently be hit. No symbols have been loaded for this document.";
+    public const string MsgBreakpointNoFunctions = "No functions matching '{0}' were found.";
+    public const string MsgBreakpointError = "Error binding breakpoint: {0}";
 
     // public const string MsgMissingRuntimeId = $"Missing required property: 'runtimeIdentifier'.";
     public const string MsgMissingAssets = "Missing required property: 'assets'.";

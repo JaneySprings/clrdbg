@@ -1,9 +1,12 @@
 using DotNet.Debugging.Adapter.Extensions;
-using DotNet.Debugging.Common.Logging;
+using DotNet.Debugging.Adapter.Logging;
 using DotNet.Debugging.Engine;
+using DotNet.Debugging.Engine.Enums;
+using DotNet.Debugging.Engine.Logging;
 using DotNet.Debugging.Engine.Models;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
+using Breakpoint = DotNet.Debugging.Engine.Models.Breakpoint;
 
 namespace DotNet.Debugging.Adapter;
 
@@ -15,19 +18,18 @@ public partial class DebugSession : Session {
     private readonly Handles<SourceLocation> gotoHandles = new Handles<SourceLocation>();
     private readonly Handles<PagedVariablesReference> pagingHandles = new Handles<PagedVariablesReference>(PagingHandlesStart);
     private readonly Handles<string> moduleHandles = new Handles<string>(StringComparer.InvariantCulture);
-    private readonly Dictionary<int, string> logpointMessages = new Dictionary<int, string>();
-    private readonly Dictionary<string, List<int>> logpointIdsByFile = new Dictionary<string, List<int>>();
     private readonly ExceptionFilterOptions allExceptionsFilter = new ExceptionFilterOptions();
     private readonly ExceptionFilterOptions userUnhandledExceptionsFilter = new ExceptionFilterOptions();
     private readonly ManagedDebugger session;
 
     private IDebugAgent debugAgent = null!;
+    private SourceLinkResolver? sourceLinkResolver;
 
     public DebugSession(Stream input, Stream output) : base(input, output) {
-        session = new ManagedDebugger(message => CurrentSessionLogger.Debug($"[CorDebug] {message}"));
+        DebuggerLoggingService.CustomLogger = new EngineLogger();
+        session = new ManagedDebugger();
 
         session.OnStopped += TargetStopped;
-        session.OnStopped2 += TargetStoppedAtSource;
         session.OnExceptionThrown += TargetExceptionThrown;
         session.OnExited += TargetExited;
         session.OnProcessStarted += TargetProcessStarted;
@@ -35,55 +37,37 @@ public partial class DebugSession : Session {
         session.OnThreadExited += TargetThreadStopped;
         session.OnModuleLoaded += AssemblyLoaded;
         session.OnOutput += TargetOutput;
+        session.OnLogPoint += TargetLogPoint;
         session.OnBreakpointChanged += BreakpointStatusChanged;
-        session.SendRunInTerminalRequest += RunInTerminal;
+        session.RunInTerminalHandler = RunInTerminal;
     }
 
     protected override void OnUnhandledException(Exception ex) => debugAgent?.Dispose();
 
-    private void TargetStopped(int threadId, string reason) {
+    private void TargetStopped(StopInfo stop) {
         ResetHandles();
-        Protocol.SendEvent(new StoppedEvent(reason.ToStoppedReason()) {
-            ThreadId = threadId,
+        Protocol.SendEvent(new StoppedEvent(stop.Reason.ToStoppedReason()) {
+            ThreadId = stop.ThreadId,
             AllThreadsStopped = true,
+            HitBreakpointIds = stop.HitBreakpointIds,
         });
     }
-    private void TargetStoppedAtSource(int threadId, string filePath, int line, int column, string reason, List<int>? hitBreakpointIds, DecompiledSourceInfo? decompiledSourceInfo) {
+    private void TargetExceptionThrown(ExceptionStopInfo exception) {
         ResetHandles();
-        if (hitBreakpointIds != null && hitBreakpointIds.Count > 0) {
-            var logpointIds = hitBreakpointIds.Where(logpointMessages.ContainsKey).ToList();
-            foreach (var breakpointId in logpointIds)
-                OnOutputDataReceived(session.ToInterpolatedLogMessage(logpointMessages[breakpointId], threadId));
-            // Do not stop when only logpoints were hit at this location
-            if (logpointIds.Count == hitBreakpointIds.Count) {
-                session.HandleContinueRequest();
-                return;
-            }
-        }
-
-        Protocol.SendEvent(new StoppedEvent(reason.ToStoppedReason()) {
-            ThreadId = threadId,
-            AllThreadsStopped = true,
-            HitBreakpointIds = hitBreakpointIds,
-        });
-    }
-    private void TargetExceptionThrown(int threadId, ExceptionStopKind kind) {
-        ResetHandles();
-        var exceptionType = session.GetCurrentExceptionTypeName(threadId);
-        var shouldStop = kind switch {
+        var shouldStop = exception.Kind switch {
             ExceptionStopKind.Unhandled => true,
-            ExceptionStopKind.UserUnhandled => userUnhandledExceptionsFilter.ShouldStopOnException(exceptionType),
-            _ => allExceptionsFilter.ShouldStopOnException(exceptionType)
+            ExceptionStopKind.UserUnhandled => userUnhandledExceptionsFilter.ShouldStopOnException(exception.TypeName),
+            _ => allExceptionsFilter.ShouldStopOnException(exception.TypeName)
         };
         if (!shouldStop) {
-            session.HandleContinueRequest();
+            session.Continue();
             return;
         }
 
         Protocol.SendEvent(new StoppedEvent(StoppedEvent.ReasonValue.Exception) {
-            Description = kind == ExceptionStopKind.UserUnhandled ? "Paused on user-unhandled exception" : "Paused on exception",
-            Text = exceptionType ?? "Exception",
-            ThreadId = threadId,
+            Description = exception.Kind == ExceptionStopKind.UserUnhandled ? "Paused on user-unhandled exception" : "Paused on exception",
+            Text = exception.TypeName ?? "Exception",
+            ThreadId = exception.ThreadId,
             AllThreadsStopped = true,
         });
     }
@@ -105,26 +89,29 @@ public partial class DebugSession : Session {
     private void TargetThreadStopped(int threadId) {
         Protocol.SendEvent(new ThreadEvent(ThreadEvent.ReasonValue.Exited, threadId));
     }
-    private void AssemblyLoaded(ModuleLoadedInfo moduleInfo) {
+    private void AssemblyLoaded(ModuleInfo module) {
         var justMyCode = debugAgent.Configuration.JustMyCode;
-        OnDebugDataReceived(moduleInfo.ToLoadedAssemblyMessage(debugAgent.Configuration.GetApplicationName(), justMyCode));
-        Protocol.SendEvent(new ModuleEvent(ModuleEvent.ReasonValue.New, moduleInfo.ToModule(moduleHandles.Create(moduleInfo.ModulePath), justMyCode)));
+        OnDebugDataReceived(module.ToLoadedAssemblyMessage(debugAgent.Configuration.GetApplicationName(), session.ProcessId, justMyCode));
+        Protocol.SendEvent(new ModuleEvent(ModuleEvent.ReasonValue.New, module.ToModule(moduleHandles.Create(module.Path), justMyCode)));
     }
-    private void BreakpointStatusChanged(BreakpointManager.BreakpointInfo breakpoint) {
-        Protocol.SendEvent(new BreakpointEvent(BreakpointEvent.ReasonValue.Changed, breakpoint.ToBreakpoint()));
+    private void BreakpointStatusChanged(Breakpoint breakpoint) {
+        Protocol.SendEvent(new BreakpointEvent(BreakpointEvent.ReasonValue.Changed, breakpoint.ToBreakpoint(sourceLinkResolver)));
     }
     private void TargetOutput(string output, bool isError) {
         if (isError) OnErrorDataReceived(output);
         else OnOutputDataReceived(output);
     }
+    private void TargetLogPoint(string message) {
+        OnOutputDataReceived($"[LogPoint]: {message}");
+    }
     private int RunInTerminal(LaunchInfo launchInfo) {
         var runInTerminalRequest = new RunInTerminalRequest() {
-            Kind = launchInfo.LaunchRequestConsoleType == LaunchRequestConsoleType.ExternalTerminal
+            Kind = launchInfo.Console == ConsoleType.ExternalTerminal
                 ? RunInTerminalArguments.KindValue.External
                 : RunInTerminalArguments.KindValue.Integrated,
             Arguments = new List<string>() { launchInfo.Program }.Concat(launchInfo.Arguments).ToList(),
-            Cwd = launchInfo.Cwd,
-            Env = launchInfo.Env.ToDictionary(it => it.Key, it => (object)it.Value),
+            Cwd = launchInfo.WorkingDirectory,
+            Env = launchInfo.Environment.ToDictionary(it => it.Key, it => (object)it.Value),
             Title = $"{Path.GetFileName(launchInfo.Program)} [DEBUG]"
         };
         runInTerminalRequest.Env["DOTNET_DefaultDiagnosticPortSuspend"] = "1";
@@ -136,6 +123,14 @@ public partial class DebugSession : Session {
         return response.ProcessId.Value;
     }
 
+    private void ConnectDebugAgent(BaseConfiguration configuration) {
+        sourceLinkResolver = new SourceLinkResolver(configuration.SourceLinkOptions, OnDebugDataReceived);
+        debugAgent = configuration.CreateDebugAgent(this);
+        InvokeDebugger(() => {
+            session.JustMyCode = configuration.JustMyCode;
+            debugAgent.Connect(session);
+        });
+    }
     private void ResetHandles() {
         gotoHandles.Reset();
         pagingHandles.Reset();
@@ -148,13 +143,9 @@ public partial class DebugSession : Session {
         return null;
     }
 
+    // Requests run under the debugger's lock, off the protocol thread so the debugger can call back into the client meanwhile
     private T InvokeDebugger<T>(Func<Task<T>> handler) {
-        return Task.Run(async () => {
-            using (await session.DapRequestAndRuntimeEventLock.LockAsync()) {
-                await session.DrainRuntimeEventQueue().ConfigureAwait(false);
-                return await handler.Invoke().ConfigureAwait(false);
-            }
-        }).GetAwaiter().GetResult();
+        return Task.Run(() => session.InvokeAsync(handler)).GetAwaiter().GetResult();
     }
     private T InvokeDebugger<T>(Func<T> handler) {
         return InvokeDebugger(() => Task.FromResult(handler.Invoke()));

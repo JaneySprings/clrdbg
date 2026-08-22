@@ -5,7 +5,7 @@ namespace DotNet.Debugging.Adapter;
 public partial class DebugSession {
     protected override ConfigurationDoneResponse HandleConfigurationDoneRequest(ConfigurationDoneArguments arguments) {
         return Invoke(() => {
-            InvokeDebugger(() => session.ConfigurationDone());
+            InvokeDebugger(() => session.ConfigurationDoneAsync());
             return new ConfigurationDoneResponse();
         });
     }

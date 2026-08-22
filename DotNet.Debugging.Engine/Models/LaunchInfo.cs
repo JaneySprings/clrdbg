@@ -1,10 +1,18 @@
+using DotNet.Debugging.Engine.Enums;
+
 namespace DotNet.Debugging.Engine.Models;
 
 public class LaunchInfo {
-    public required LaunchRequestConsoleType LaunchRequestConsoleType { get; set; }
-    public required string? Cwd { get; set; }
-    public required string Program { get; set; }
-    public required bool StopAtEntry { get; set; }
-    public required List<string> Arguments { get; set; }
-    public required Dictionary<string, string> Env { get; set; }
+    public string Program { get; set; }
+    public string? WorkingDirectory { get; set; }
+    public List<string> Arguments { get; set; }
+    public Dictionary<string, string> Environment { get; set; }
+    public bool StopAtEntry { get; set; }
+    public ConsoleType Console { get; set; }
+
+    public LaunchInfo(string program) {
+        Program = program;
+        Arguments = new List<string>();
+        Environment = new Dictionary<string, string>();
+    }
 }

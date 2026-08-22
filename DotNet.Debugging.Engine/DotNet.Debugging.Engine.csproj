@@ -8,12 +8,11 @@
 	</PropertyGroup>
 
 	<ItemGroup>
-		<!-- The Roslyn expression compiler and decompiler internals used by the expression evaluator -->
+		<!-- The Roslyn expression compiler internals used by the expression evaluator -->
 		<Publicize IncludeCompilerGeneratedMembers="false" Include="Microsoft.CodeAnalysis" />
 		<Publicize IncludeCompilerGeneratedMembers="false" Include="Microsoft.CodeAnalysis.CSharp" />
 		<Publicize IncludeCompilerGeneratedMembers="false" Include="Microsoft.CodeAnalysis.ExpressionEvaluator.ExpressionCompiler" />
 		<Publicize IncludeCompilerGeneratedMembers="false" Include="Microsoft.CodeAnalysis.CSharp.ExpressionEvaluator.ExpressionCompiler" />
-		<Publicize IncludeCompilerGeneratedMembers="false" Include="ICSharpCode.Decompiler" MemberPattern="^ICSharpCode\.Decompiler\.(CSharp\.Transforms\.RemoveEmbeddedAttributes|DebugInfo)\..*" />
 	</ItemGroup>
 
 	<ItemGroup>
@@ -21,12 +20,10 @@
 			<PrivateAssets>all</PrivateAssets>
 			<IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
 		</PackageReference>
-		<PackageReference Include="ICSharpCode.Decompiler" />
 		<PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
 		<PackageReference Include="MP.Microsoft.CodeAnalysis.CSharp.ExpressionEvaluator.ExpressionCompiler" />
 		<PackageReference Include="Microsoft.Diagnostics.NETCore.Client" />
 		<PackageReference Include="Microsoft.Diagnostics.DbgShim" />
-		<PackageReference Include="NeoSmart.AsyncLock" />
 	</ItemGroup>
 
 	<ItemGroup>

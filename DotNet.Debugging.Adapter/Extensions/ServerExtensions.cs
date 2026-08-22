@@ -1,10 +1,10 @@
 using DotNet.Debugging.Common.Logging;
-using DotNet.Debugging.Engine;
+using DotNet.Debugging.Engine.Enums;
+using DotNet.Debugging.Engine.Models;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
-using CorDebugModels = DotNet.Debugging.Engine.PresentationHintModels;
-using CorDebugResponse = DotNet.Debugging.Engine.Models.Response;
 using DebugProtocol = Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
+using Breakpoint = DotNet.Debugging.Engine.Models.Breakpoint;
 
 namespace DotNet.Debugging.Adapter.Extensions;
 
@@ -42,161 +42,129 @@ public static class ServerExtensions {
         };
     }
 
-    public static DebugProtocol.ExceptionInfoResponse ToExceptionInfoResponse(this CorDebugResponse.ExceptionInfo exception) {
-        return new DebugProtocol.ExceptionInfoResponse(exception.ExceptionId, exception.BreakMode.ToExceptionBreakMode()) {
-            Description = exception.Description,
-            Code = exception.Code,
-            Details = exception.Details.ToExceptionDetails(),
+    public static DebugProtocol.ExceptionInfoResponse ToExceptionInfoResponse(this ExceptionInfo exception) {
+        var shortTypeName = exception.TypeName.Substring(exception.TypeName.LastIndexOf('.') + 1);
+        return new DebugProtocol.ExceptionInfoResponse($"CLR/{exception.TypeName}", DebugProtocol.ExceptionBreakMode.Always) {
+            Description = $"Exception thrown: '{exception.TypeName}' in {exception.Source}.dll: '{exception.Message}'",
+            Code = 0,
+            Details = new DebugProtocol.ExceptionDetails {
+                Message = exception.Message,
+                TypeName = shortTypeName,
+                FullTypeName = exception.TypeName,
+                EvaluateName = "$exception",
+                StackTrace = exception.StackTrace,
+                InnerException = new List<DebugProtocol.ExceptionDetails>(),
+                FormattedDescription = $"**{exception.TypeName}:** '{exception.Message}'",
+                HResult = exception.HResult,
+                Source = exception.Source,
+            },
         };
     }
-    private static DebugProtocol.ExceptionBreakMode ToExceptionBreakMode(this CorDebugResponse.ExceptionBreakMode breakMode) {
-        return breakMode switch {
-            CorDebugResponse.ExceptionBreakMode.Always => DebugProtocol.ExceptionBreakMode.Always,
-            CorDebugResponse.ExceptionBreakMode.Never => DebugProtocol.ExceptionBreakMode.Never,
-            CorDebugResponse.ExceptionBreakMode.Unhandled => DebugProtocol.ExceptionBreakMode.Unhandled,
-            CorDebugResponse.ExceptionBreakMode.UserUnhandled => DebugProtocol.ExceptionBreakMode.UserUnhandled,
-            _ => DebugProtocol.ExceptionBreakMode.Unknown
-        };
-    }
-    private static DebugProtocol.ExceptionDetails? ToExceptionDetails(this CorDebugResponse.ExceptionInfo.ExceptionDetails? details) {
-        if (details == null)
-            return null;
-
-        return new DebugProtocol.ExceptionDetails {
-            Message = details.Message,
-            TypeName = details.TypeName,
-            FullTypeName = details.FullTypeName,
-            EvaluateName = details.EvaluateName,
-            StackTrace = details.StackTrace,
-            InnerException = details.InnerException?.Select(it => it.ToExceptionDetails()).ToList(),
-            FormattedDescription = details.FormattedDescription,
-            HResult = details.HResult,
-            Source = details.Source,
-        };
-    }
-
-    public static DebugProtocol.Source? ToSource(this string? filePath, ModuleMetadataReader.SourceChecksum? checksum = null) {
-        if (string.IsNullOrEmpty(filePath))
-            return null;
-
+    public static DebugProtocol.Source ToSource(this SourceLocation location, SourceLinkResolver? sourceLinkResolver) {
         // The library pre-populates 'sources' and 'checksums' with empty lists, which vsdbg never sends
         var source = new DebugProtocol.Source {
-            Name = Path.GetFileName(filePath),
-            Path = filePath,
+            Name = Path.GetFileName(location.FilePath),
+            Path = location.FilePath,
             Sources = null,
             Checksums = null,
         };
-        if (checksum != null && Enum.TryParse<DebugProtocol.ChecksumAlgorithm>(checksum.Algorithm, out var algorithm))
-            source.Checksums = new List<DebugProtocol.Checksum> { new DebugProtocol.Checksum(algorithm, checksum.Value) };
+        if (location.Checksum != null && Enum.TryParse<DebugProtocol.ChecksumAlgorithm>(location.Checksum.Algorithm, out var algorithm))
+            source.Checksums = new List<DebugProtocol.Checksum> { new DebugProtocol.Checksum(algorithm, location.Checksum.Value) };
+        if (location.SourceLink != null) {
+            source.VsSourceLinkInfo = new DebugProtocol.VSSourceLinkInfo { Url = location.SourceLink, RelativeFilePath = location.FilePath };
+            // A document that does not exist locally is served through the 'source' request, which downloads it
+            if (sourceLinkResolver != null && !File.Exists(location.FilePath))
+                source.SourceReference = sourceLinkResolver.GetSourceReference(location.SourceLink);
+        }
         return source;
     }
-    public static DebugProtocol.Module ToModule(this ModuleLoadedInfo moduleInfo, int moduleId, bool justMyCode) {
+    public static DebugProtocol.Module ToModule(this ModuleInfo module, int moduleId, bool justMyCode) {
         var symbolStatus = Resources.MsgCannotFindPdb;
-        if (moduleInfo.SymbolsLoaded)
+        if (module.HasSymbols)
             symbolStatus = Resources.MsgPdbLoaded;
-        else if (moduleInfo.IsOptimized && justMyCode)
+        else if (!module.IsUserCode && justMyCode)
             symbolStatus = Resources.MsgPdbSkippedShort;
 
         return new DebugProtocol.Module {
             Id = moduleId,
-            Name = moduleInfo.ModuleName,
-            Path = moduleInfo.ModulePath,
-            IsOptimized = moduleInfo.IsOptimized,
-            IsUserCode = moduleInfo.IsUserCode,
-            Version = moduleInfo.Version,
+            Name = module.Name,
+            Path = module.Path,
+            IsOptimized = !module.IsUserCode,
+            IsUserCode = module.IsUserCode,
+            Version = module.Version.ToDisplayVersion(),
             SymbolStatus = symbolStatus,
-            SymbolFilePath = moduleInfo.SymbolsLoaded ? moduleInfo.SymbolFilePath : null,
+            SymbolFilePath = module.HasSymbols ? module.SymbolFilePath : null,
         };
     }
-    public static DebugProtocol.Breakpoint ToBreakpoint(this BreakpointManager.BreakpointInfo breakpoint) {
+    public static DebugProtocol.Breakpoint ToBreakpoint(this Breakpoint breakpoint, SourceLinkResolver? sourceLinkResolver) {
+        var isBoundSourceBreakpoint = !breakpoint.IsFunctionBreakpoint && breakpoint.Verified;
         return new DebugProtocol.Breakpoint() {
             Id = breakpoint.Id,
             Verified = breakpoint.Verified,
-            Message = breakpoint.Message,
+            Message = breakpoint.ToStatusMessage(),
             Line = breakpoint.IsFunctionBreakpoint ? null : breakpoint.Line,
-            Column = breakpoint is { IsFunctionBreakpoint: false, Verified: true } ? breakpoint.Column : null,
-            EndLine = breakpoint is { IsFunctionBreakpoint: false, Verified: true } ? breakpoint.EndLine : null,
-            EndColumn = breakpoint is { IsFunctionBreakpoint: false, Verified: true } ? breakpoint.EndColumn : null,
-            Source = breakpoint is { IsFunctionBreakpoint: false, Verified: true } ? breakpoint.FilePath.ToSource(breakpoint.SourceChecksum) : null
+            Column = isBoundSourceBreakpoint ? breakpoint.Column : null,
+            EndLine = isBoundSourceBreakpoint ? breakpoint.EndLine : null,
+            EndColumn = isBoundSourceBreakpoint ? breakpoint.EndColumn : null,
+            Source = isBoundSourceBreakpoint ? breakpoint.Location?.ToSource(sourceLinkResolver) : null,
         };
     }
-    public static DebugProtocol.StackFrame ToStackFrame(this CorDebugResponse.StackFrameInfo frame, int? moduleId) {
+    public static DebugProtocol.StackFrame ToStackFrame(this StackFrameInfo frame, int? moduleId, SourceLinkResolver? sourceLinkResolver) {
         return new DebugProtocol.StackFrame() {
             Id = frame.Id,
-            Source = frame.Source.ToSource(frame.SourceChecksum),
-            Name = frame.Name,
-            Line = frame.Line,
-            Column = frame.Column,
-            EndLine = frame.EndLine,
-            EndColumn = frame.EndColumn,
-            InstructionPointerReference = frame.InstructionPointerReference,
+            Source = frame.Location?.ToSource(sourceLinkResolver),
+            Name = frame.ToDisplayName(),
+            Line = frame.Location?.Line ?? 0,
+            Column = frame.Location?.Column ?? 0,
+            EndLine = frame.Location?.EndLine ?? 0,
+            EndColumn = frame.Location?.EndColumn ?? 0,
+            InstructionPointerReference = frame.InstructionPointer == null ? null : $"0x{frame.InstructionPointer.Value:X16}",
             ModuleId = moduleId,
             PresentationHint = DebugProtocol.StackFrame.PresentationHintValue.Normal
         };
     }
-    public static DebugProtocol.Scope ToScope(this CorDebugResponse.ScopeInfo scope) {
-        return new DebugProtocol.Scope() {
-            Name = scope.Name,
-            PresentationHint = scope.Name == "Locals" ? DebugProtocol.Scope.PresentationHintValue.Locals : DebugProtocol.Scope.PresentationHintValue.Unknown,
-            VariablesReference = scope.VariablesReference,
-            Expensive = scope.Expensive
-        };
+    public static DebugProtocol.Thread ToThread(this ThreadInfo thread) {
+        return new DebugProtocol.Thread(thread.Id, thread.ToDisplayName());
     }
-    public static DebugProtocol.Variable ToVariable(this CorDebugResponse.VariableInfo variable) {
+    public static DebugProtocol.Variable ToVariable(this VariableInfo variable) {
         return new DebugProtocol.Variable {
             Name = variable.Name.ToDisplayName(variable.Type),
             Type = variable.Type,
             Value = variable.Value,
             EvaluateName = variable.EvaluateName,
-            PresentationHint = variable.PresentationHint?.ToVariablePresentationHint(),
+            PresentationHint = variable.ToPresentationHint(),
             VariablesReference = variable.VariablesReference
         };
     }
 
-    public static DebugProtocol.VariablePresentationHint ToVariablePresentationHint(this CorDebugModels.VariablePresentationHint hint) {
+    public static DebugProtocol.VariablePresentationHint ToPresentationHint(this VariableInfo variable) {
         return new DebugProtocol.VariablePresentationHint {
-            Kind = hint.Kind?.ToKindValue(),
-            Attributes = hint.Attributes?.ToAttributesValue(),
-            Visibility = hint.Visibility?.ToVisibilityValue(),
+            Kind = variable.IsError ? null : variable.Kind.ToKindValue(),
+            Attributes = variable.IsError ? DebugProtocol.VariablePresentationHint.AttributesValue.FailedEvaluation : null,
+            Visibility = variable.Visibility?.ToVisibilityValue(),
         };
     }
-    private static DebugProtocol.VariablePresentationHint.VisibilityValue ToVisibilityValue(this CorDebugModels.PresentationHintVisibility visibility) {
-        return visibility switch {
-            CorDebugModels.PresentationHintVisibility.Public => DebugProtocol.VariablePresentationHint.VisibilityValue.Public,
-            CorDebugModels.PresentationHintVisibility.Private => DebugProtocol.VariablePresentationHint.VisibilityValue.Private,
-            CorDebugModels.PresentationHintVisibility.Protected => DebugProtocol.VariablePresentationHint.VisibilityValue.Protected,
-            CorDebugModels.PresentationHintVisibility.Internal => DebugProtocol.VariablePresentationHint.VisibilityValue.Internal,
-            _ => throw new ArgumentOutOfRangeException(nameof(visibility), visibility, null)
-        };
-    }
-    private static DebugProtocol.VariablePresentationHint.KindValue ToKindValue(this CorDebugModels.PresentationHintKind kind) {
+    public static DebugProtocol.VariablePresentationHint.KindValue ToKindValue(this VariableKind kind) {
         return kind switch {
-            CorDebugModels.PresentationHintKind.Property => DebugProtocol.VariablePresentationHint.KindValue.Property,
-            CorDebugModels.PresentationHintKind.Method => DebugProtocol.VariablePresentationHint.KindValue.Method,
-            CorDebugModels.PresentationHintKind.Event => DebugProtocol.VariablePresentationHint.KindValue.Event,
-            CorDebugModels.PresentationHintKind.Class => DebugProtocol.VariablePresentationHint.KindValue.Class,
-            CorDebugModels.PresentationHintKind.Data => DebugProtocol.VariablePresentationHint.KindValue.Data,
-            _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null)
+            VariableKind.Property => DebugProtocol.VariablePresentationHint.KindValue.Property,
+            VariableKind.Group => DebugProtocol.VariablePresentationHint.KindValue.Class,
+            _ => DebugProtocol.VariablePresentationHint.KindValue.Data
         };
     }
-    private static DebugProtocol.VariablePresentationHint.AttributesValue ToAttributesValue(this CorDebugModels.AttributesValue attributes) {
-        return attributes switch {
-            CorDebugModels.AttributesValue.FailedEvaluation => DebugProtocol.VariablePresentationHint.AttributesValue.FailedEvaluation,
-            _ => throw new ArgumentOutOfRangeException(nameof(attributes), attributes, null)
+    public static DebugProtocol.VariablePresentationHint.VisibilityValue ToVisibilityValue(this VariableVisibility visibility) {
+        return visibility switch {
+            VariableVisibility.Public => DebugProtocol.VariablePresentationHint.VisibilityValue.Public,
+            VariableVisibility.Protected => DebugProtocol.VariablePresentationHint.VisibilityValue.Protected,
+            VariableVisibility.Internal => DebugProtocol.VariablePresentationHint.VisibilityValue.Internal,
+            _ => DebugProtocol.VariablePresentationHint.VisibilityValue.Private
         };
     }
-
-    public static StoppedEvent.ReasonValue ToStoppedReason(this string reason) {
-        return reason.ToLowerInvariant() switch {
-            "step" => StoppedEvent.ReasonValue.Step,
-            "breakpoint" => StoppedEvent.ReasonValue.Breakpoint,
-            "exception" => StoppedEvent.ReasonValue.Exception,
-            "pause" => StoppedEvent.ReasonValue.Pause,
-            "entry" => StoppedEvent.ReasonValue.Entry,
-            "goto" => StoppedEvent.ReasonValue.Goto,
-            "function breakpoint" => StoppedEvent.ReasonValue.FunctionBreakpoint,
-            "data breakpoint" => StoppedEvent.ReasonValue.DataBreakpoint,
-            "instruction breakpoint" => StoppedEvent.ReasonValue.InstructionBreakpoint,
+    public static StoppedEvent.ReasonValue ToStoppedReason(this StopReason reason) {
+        return reason switch {
+            StopReason.Breakpoint => StoppedEvent.ReasonValue.Breakpoint,
+            StopReason.Step => StoppedEvent.ReasonValue.Step,
+            StopReason.Pause => StoppedEvent.ReasonValue.Pause,
+            StopReason.Entry => StoppedEvent.ReasonValue.Entry,
             _ => StoppedEvent.ReasonValue.Unknown
         };
     }

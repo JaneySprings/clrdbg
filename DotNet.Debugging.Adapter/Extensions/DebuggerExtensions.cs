@@ -1,11 +1,10 @@
 using System.Text;
-using System.Text.RegularExpressions;
-using DotNet.Debugging.Common.Logging;
-using DotNet.Debugging.Engine;
+using DotNet.Debugging.Engine.Enums;
+using DotNet.Debugging.Engine.Models;
 
 namespace DotNet.Debugging.Adapter.Extensions;
 
-public static partial class DebuggerExtensions {
+public static class DebuggerExtensions {
     public static string ToDisplayName(this string? variableName, string? typeName) {
         if (string.IsNullOrEmpty(variableName) || string.IsNullOrEmpty(typeName))
             return variableName ?? string.Empty;
@@ -19,6 +18,47 @@ public static partial class DebuggerExtensions {
         var suffixIndex = displayName.LastIndexOf(" [", StringComparison.Ordinal);
         return suffixIndex <= 0 ? displayName : displayName.Substring(0, suffixIndex);
     }
+    // 'Module.dll!Namespace.Type.Method(string[] args) Line 7', the line only when the source is known
+    public static string ToDisplayName(this StackFrameInfo frame) {
+        if (frame.Kind != StackFrameKind.Managed)
+            return frame.Name;
+
+        var name = $"{frame.ModuleName}!{frame.Name}";
+        if (frame.Location != null)
+            name += $" Line {frame.Location.Line}";
+        return name;
+    }
+    public static string ToDisplayName(this ThreadInfo thread) {
+        if (!string.IsNullOrEmpty(thread.Name))
+            return thread.Name;
+        return thread.IsMain ? "Main Thread" : "<No Name>";
+    }
+    // vsdbg's '1.00.0.0' form
+    public static string? ToDisplayVersion(this Version? version) {
+        if (version == null)
+            return null;
+        return $"{version.Major}.{Math.Max(version.Minor, 0):00}.{Math.Max(version.Build, 0)}.{Math.Max(version.Revision, 0)}";
+    }
+    public static string ToStatusMessage(this Breakpoint breakpoint) {
+        return breakpoint.Status switch {
+            BreakpointStatus.Pending => Resources.MsgBreakpointPending,
+            BreakpointStatus.NotProcessed => Resources.MsgBreakpointNotProcessed,
+            BreakpointStatus.NoSymbols => Resources.MsgBreakpointNoSymbols,
+            BreakpointStatus.NoMatchingFunctions => string.Format(Resources.MsgBreakpointNoFunctions, breakpoint.FunctionName),
+            BreakpointStatus.Error => string.Format(Resources.MsgBreakpointError, breakpoint.Error),
+            _ => string.Empty
+        };
+    }
+    public static string ToLoadedAssemblyMessage(this ModuleInfo module, string processName, int processId, bool justMyCode) {
+        var symbolStatus = Resources.MsgCannotFindPdb;
+        if (module.HasSymbols)
+            symbolStatus = Resources.MsgPdbLoaded;
+        else if (!module.IsUserCode && justMyCode)
+            symbolStatus = Resources.MsgPdbSkipped;
+
+        return $"{processName} ({processId}): Loaded '{module.Path}'. {symbolStatus}";
+    }
+
     private static string ToShortTypeName(string typeName) {
         var result = new StringBuilder(typeName.Length);
         var segmentStart = 0;
@@ -34,33 +74,4 @@ public static partial class DebuggerExtensions {
         }
         return result.ToString();
     }
-
-    public static string ToThreadName(this string? threadName, int threadId) {
-        return string.IsNullOrEmpty(threadName) ? "<No Name>" : threadName;
-    }
-    public static string ToLoadedAssemblyMessage(this ModuleLoadedInfo moduleInfo, string processName, bool justMyCode) {
-        var symbolStatus = Resources.MsgCannotFindPdb;
-        if (moduleInfo.SymbolsLoaded)
-            symbolStatus = Resources.MsgPdbLoaded;
-        else if (moduleInfo.IsOptimized && justMyCode)
-            symbolStatus = Resources.MsgPdfSkipped;
-
-        return $"{processName} ({moduleInfo.ProcessId}): Loaded '{moduleInfo.ModulePath}'. {symbolStatus}";
-    }
-    public static string ToInterpolatedLogMessage(this ManagedDebugger debugger, string message, int threadId) {
-        var result = LogpointExpressionRegex().Replace(message, match => {
-            try {
-                var frameId = debugger.GetTopFrameId(threadId);
-                var variable = debugger.Evaluate(match.Groups[1].Value, frameId).GetAwaiter().GetResult();
-                return variable.Value;
-            }
-            catch (Exception ex) {
-                CurrentSessionLogger.Error($"[LogPoint] Failed to evaluate '{match.Groups[1].Value}' {ex}");
-                return match.Value;
-            }
-        });
-        return $"[LogPoint]: {result}";
-    }
-    [GeneratedRegex(@"\{([^{}]+)\}", RegexOptions.Compiled)]
-    private static partial Regex LogpointExpressionRegex();
 }

@@ -5,7 +5,7 @@ namespace DotNet.Debugging.Adapter;
 public partial class DebugSession {
     protected override PauseResponse HandlePauseRequest(PauseArguments arguments) {
         return Invoke(() => {
-            InvokeDebugger(() => session.Pause());
+            InvokeDebugger(() => session.Pause(arguments.ThreadId));
             return new PauseResponse();
         });
     }

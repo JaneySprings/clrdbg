@@ -10,7 +10,7 @@ public partial class DebugSession {
             if (pagingHandles.TryGet(variablesReference, out var page) && page != null)
                 variablesReference = page.VariablesReference;
 
-            var variable = InvokeDebugger(() => session.SetVariableValue(variablesReference, arguments.Name.ToVariableName(), arguments.Value));
+            var variable = InvokeDebugger(() => session.SetVariableAsync(variablesReference, arguments.Name.ToVariableName(), arguments.Value));
             return variable.ToVariable().ToSetVariableResponse();
         });
     }

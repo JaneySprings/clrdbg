@@ -14,7 +14,7 @@ public class MobileDebugAgent : BaseDebugAgent<LaunchConfiguration> {
 
     public override void Connect(ManagedDebugger debugger) {
         ArgumentNullException.ThrowIfNull(Configuration.MobileOptions);
-        debugger.AttachRemote(GetAttachInfo(), Configuration.JustMyCode, onListenerReady: () => {
+        debugger.AttachRemote(GetAttachInfo(), onListenerReady: () => {
             Logger.Debug($"Debugger listening on {Configuration.MobileOptions.Address}:{Configuration.MobileOptions.Port}");
 
             Configuration.EnvironmentVariables.Add("CORECLR_ENABLE_PROFILING", "1");
@@ -142,13 +142,10 @@ public class MobileDebugAgent : BaseDebugAgent<LaunchConfiguration> {
             Configuration.MobileOptions.RuntimeIdentifier = string.Empty;
 
         var mscordbiPath = GetCoreclrHostLibrary();
-        return new RemoteAttachInfo {
-            Address = Configuration.MobileOptions.Address,
-            Port = Configuration.MobileOptions.Port,
-            IsServer = Configuration.MobileOptions.IsServer,
-            AssembliesPath = $"{Configuration.MobileOptions.AssetsPath};{Path.GetDirectoryName(mscordbiPath)}",
-            Platform = Configuration.MobileOptions.RuntimeIdentifier.Replace('-', ';').Replace("iossimulator", "ios"),
-            MscordbiPath = mscordbiPath,
+        var platform = Configuration.MobileOptions.RuntimeIdentifier.Replace('-', ';').Replace("iossimulator", "ios");
+        var assembliesPath = $"{Configuration.MobileOptions.AssetsPath};{Path.GetDirectoryName(mscordbiPath)}";
+        return new RemoteAttachInfo(Configuration.MobileOptions.Address, Configuration.MobileOptions.Port, platform, mscordbiPath, assembliesPath) {
+            IsServer = Configuration.MobileOptions.IsServer
         };
     }
 }

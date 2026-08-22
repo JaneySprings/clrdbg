@@ -22,7 +22,7 @@ public class AttachDebugAgent : BaseDebugAgent<AttachConfiguration> {
         watchdog.Start();
         Disposables.Add(() => watchdog.Dispose());
 
-        debugger.Attach(processId, Configuration.JustMyCode);
+        debugger.Attach(processId);
     }
 
     private static bool IsProcessAlive(int processId) {

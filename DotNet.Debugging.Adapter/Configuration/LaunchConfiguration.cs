@@ -1,6 +1,7 @@
 using System.Text.Json;
 using DotNet.Debugging.Adapter.Extensions;
 using DotNet.Debugging.Common.Extensions;
+using DotNet.Debugging.Engine.Enums;
 using DotNet.Debugging.Engine.Models;
 using Newtonsoft.Json.Linq;
 
@@ -11,7 +12,7 @@ public class LaunchConfiguration : BaseConfiguration {
     public string? WorkingDirectory { get; private set; }
     public List<string> Arguments { get; private set; }
     public Dictionary<string, string> EnvironmentVariables { get; private set; }
-    public LaunchRequestConsoleType Console { get; }
+    public ConsoleType Console { get; }
     public bool SuppressJITOptimizations { get; }
     public bool StopAtEntry { get; }
     public string? LaunchSettingsFilePath { get; }
@@ -27,7 +28,7 @@ public class LaunchConfiguration : BaseConfiguration {
         WorkingDirectory = properties.TryGetValue("cwd").ToClass<string>().ToPlatformPath();
         Arguments = properties.TryGetValue("args").ToClass<List<string>>() ?? new List<string>();
         EnvironmentVariables = properties.TryGetValue("env").ToClass<Dictionary<string, string>>() ?? new Dictionary<string, string>();
-        Console = properties.TryGetValue("console").ToValue<LaunchRequestConsoleType>(LaunchRequestConsoleType.InternalConsole);
+        Console = properties.TryGetValue("console").ToValue<ConsoleType>(ConsoleType.InternalConsole);
         SuppressJITOptimizations = properties.TryGetValue("suppressJITOptimizations").ToValue<bool>(false);
         StopAtEntry = properties.TryGetValue("stopAtEntry").ToValue<bool>(false);
         LaunchSettingsFilePath = properties.TryGetValue("launchSettingsFilePath").ToClass<string>().ToPlatformPath();
@@ -73,14 +74,12 @@ public class LaunchConfiguration : BaseConfiguration {
 
     public LaunchInfo GetLaunchInfo() {
         ArgumentNullException.ThrowIfNull(Program);
-        var info = new LaunchInfo {
-            Program = Program,
-            Arguments = Arguments,
-            Cwd = WorkingDirectory ?? Path.GetDirectoryName(Program),
-            Env = EnvironmentVariables,
-            StopAtEntry = StopAtEntry,
-            LaunchRequestConsoleType = Console
-        };
+        var info = new LaunchInfo(Program);
+        info.Arguments = Arguments;
+        info.WorkingDirectory = WorkingDirectory ?? Path.GetDirectoryName(Program);
+        info.Environment = EnvironmentVariables;
+        info.StopAtEntry = StopAtEntry;
+        info.Console = Console;
 
         if (Path.GetExtension(Program).Equals(".dll", StringComparison.OrdinalIgnoreCase)) {
             Arguments.Insert(0, Program);

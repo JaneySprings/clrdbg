@@ -17,8 +17,8 @@ public class SkipDebugAgent : BaseDebugAgent<LaunchConfiguration> {
             arguments.Append(argument);
 
         var runner = new ProcessRunner(launchInfo.Program, arguments, ProcessLogger);
-        runner.SetWorkingDirectory(launchInfo.Cwd);
-        foreach (var kvp in launchInfo.Env)
+        runner.SetWorkingDirectory(launchInfo.WorkingDirectory);
+        foreach (var kvp in launchInfo.Environment)
             runner.SetEnvironmentVariable(kvp.Key, kvp.Value);
 
         var process = runner.Start();

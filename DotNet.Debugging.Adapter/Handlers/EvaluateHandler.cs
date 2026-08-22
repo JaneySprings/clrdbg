@@ -1,5 +1,3 @@
-using DotNet.Debugging.Engine.PresentationHintModels;
-using DotNet.Debugging.Adapter.Extensions;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
 
@@ -11,11 +9,10 @@ public partial class DebugSession {
             var expression = arguments.Expression?.TrimEnd(';');
             if (string.IsNullOrEmpty(expression))
                 throw new ProtocolException("Expression is empty");
+            if (arguments.FrameId == null || arguments.FrameId == 0)
+                throw new ProtocolException("Frame ID is required for evaluation");
 
-            var variable = InvokeDebugger(() => session.Evaluate(expression, arguments.FrameId));
-            if (variable.PresentationHint?.Attributes == AttributesValue.FailedEvaluation)
-                throw new ProtocolException(variable.Value);
-
+            var variable = InvokeDebugger(() => session.EvaluateAsync(expression, arguments.FrameId.Value));
             return new EvaluateResponse() {
                 Result = variable.Value,
                 Type = variable.Type,

@@ -36,6 +36,8 @@ public abstract class BaseDebugTestFixture {
     }
 
     protected abstract string CreateProgramFileContent();
+    // Additional files the debuggee project needs, written before it is built
+    protected virtual void CreateProjectFiles(string projectDirectory) { }
     protected virtual string CreateProjectFileContent() {
         return """
         <Project Sdk="Microsoft.NET.Sdk">
@@ -61,6 +63,7 @@ public abstract class BaseDebugTestFixture {
         ProgramFilePath = Path.Combine(ProjectDirectory, "Program.cs");
         File.WriteAllText(Path.Combine(ProjectDirectory, $"{ProjectName}.csproj"), CreateProjectFileContent());
         File.WriteAllText(ProgramFilePath, CreateProgramFileContent());
+        CreateProjectFiles(ProjectDirectory);
 
         var buildProcess = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("dotnet", "build -c Debug -nologo") {
             WorkingDirectory = ProjectDirectory,
@@ -138,8 +141,8 @@ public abstract class BaseDebugTestFixture {
         }
     }
 
-    /// <summary>Launches the program. 'skipDebug' runs it without a debugger at all.</summary>
-    protected void Launch(bool stopAtEntry = false, bool justMyCode = true, bool skipDebug = false) {
+    /// <summary>Launches the program. 'skipDebug' runs it without a debugger at all, 'properties' are added to the launch configuration.</summary>
+    protected void Launch(bool stopAtEntry = false, bool justMyCode = true, bool skipDebug = false, Dictionary<string, JToken>? properties = null) {
         var launchRequest = new LaunchRequest();
         launchRequest.ConfigurationProperties = new Dictionary<string, JToken> {
             ["program"] = ProgramPath,
@@ -147,6 +150,8 @@ public abstract class BaseDebugTestFixture {
             ["justMyCode"] = justMyCode,
             ["skipDebug"] = skipDebug,
         };
+        foreach (var (key, value) in properties ?? new Dictionary<string, JToken>())
+            launchRequest.ConfigurationProperties[key] = value;
 
         Host.SendRequestSync(launchRequest);
     }

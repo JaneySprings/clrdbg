@@ -1,4 +1,6 @@
 using DotNet.Debugging.Adapter.Extensions;
+using DotNet.Debugging.Engine.Enums;
+using DotNet.Debugging.Engine.Models;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
 using NUnit.Framework;
 using ExceptionFilterOptions = DotNet.Debugging.Adapter.ExceptionFilterOptions;
@@ -38,21 +40,39 @@ public class DebuggerExtensionsTests {
         Assert.That(displayName.ToVariableName(), Is.EqualTo(expected));
     }
 
-    [TestCase("breakpoint", StoppedEvent.ReasonValue.Breakpoint)]
-    [TestCase("step", StoppedEvent.ReasonValue.Step)]
-    [TestCase("exception", StoppedEvent.ReasonValue.Exception)]
-    [TestCase("entry", StoppedEvent.ReasonValue.Entry)]
-    [TestCase("goto", StoppedEvent.ReasonValue.Goto)]
-    [TestCase("something else", StoppedEvent.ReasonValue.Unknown)]
-    public void ToStoppedReasonTest(string reason, StoppedEvent.ReasonValue expected) {
+    [TestCase(StopReason.Breakpoint, StoppedEvent.ReasonValue.Breakpoint)]
+    [TestCase(StopReason.Step, StoppedEvent.ReasonValue.Step)]
+    [TestCase(StopReason.Pause, StoppedEvent.ReasonValue.Pause)]
+    [TestCase(StopReason.Entry, StoppedEvent.ReasonValue.Entry)]
+    public void ToStoppedReasonTest(StopReason reason, StoppedEvent.ReasonValue expected) {
         Assert.That(reason.ToStoppedReason(), Is.EqualTo(expected));
     }
 
-    [TestCase(null, "<No Name>")]
-    [TestCase("", "<No Name>")]
-    [TestCase("My Worker", "My Worker")]
-    public void ToThreadNameTest(string? threadName, string expected) {
-        Assert.That(threadName.ToThreadName(1), Is.EqualTo(expected));
+    [TestCase(null, false, "<No Name>")]
+    [TestCase("", false, "<No Name>")]
+    [TestCase(null, true, "Main Thread")]
+    [TestCase("My Worker", true, "My Worker")]
+    public void ToThreadNameTest(string? threadName, bool isMain, string expected) {
+        Assert.That(new ThreadInfo(1, threadName, isMain).ToDisplayName(), Is.EqualTo(expected));
+    }
+
+    [TestCase(StackFrameKind.Managed, "Program.Main(string[] args)", "App.dll", 7, "App.dll!Program.Main(string[] args) Line 7")]
+    [TestCase(StackFrameKind.Managed, "Program.Main(string[] args)", "App.dll", null, "App.dll!Program.Main(string[] args)")]
+    [TestCase(StackFrameKind.Native, "[Native Frame]", null, null, "[Native Frame]")]
+    public void ToFrameDisplayNameTest(StackFrameKind kind, string name, string? moduleName, int? line, string expected) {
+        var frame = new StackFrameInfo(1, kind, name);
+        frame.ModuleName = moduleName;
+        if (line != null)
+            frame.Location = new SourceLocation("Program.cs", line.Value, 1, line.Value, 10);
+        Assert.That(frame.ToDisplayName(), Is.EqualTo(expected));
+    }
+
+    [TestCase(1, 0, 0, 0, "1.00.0.0")]
+    [TestCase(10, 0, 1126, 37416, "10.00.1126.37416")]
+    [TestCase(2, 5, -1, -1, "2.05.0.0")]
+    public void ToDisplayVersionTest(int major, int minor, int build, int revision, string expected) {
+        var version = build < 0 ? new Version(major, minor) : new Version(major, minor, build, revision);
+        Assert.That(version.ToDisplayVersion(), Is.EqualTo(expected));
     }
 
     [Test]

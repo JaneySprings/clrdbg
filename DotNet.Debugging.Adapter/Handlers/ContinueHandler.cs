@@ -6,7 +6,7 @@ public partial class DebugSession {
     protected override ContinueResponse HandleContinueRequest(ContinueArguments arguments) {
         return Invoke(() => {
             InvokeDebugger(() => {
-                session.HandleContinueRequest();
+                session.Continue();
                 Protocol.SendEvent(new ContinuedEvent(arguments.ThreadId) { AllThreadsContinued = true });
             });
             return new ContinueResponse() { AllThreadsContinued = true };

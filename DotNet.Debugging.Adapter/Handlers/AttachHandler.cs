@@ -9,8 +9,7 @@ public partial class DebugSession {
             configuration.VerifyMissingProperties();
 
             OnDebugDataReceived(Resources.MsgLicenseBanner);
-            debugAgent = configuration.CreateDebugAgent(this);
-            InvokeDebugger(() => debugAgent.Connect(session));
+            ConnectDebugAgent(configuration);
             // Breakpoints arrive after this event and the attach itself is deferred until 'ConfigurationDone'
             Protocol.SendEvent(new InitializedEvent());
             return new AttachResponse();
