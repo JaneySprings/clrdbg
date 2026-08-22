@@ -12,18 +12,19 @@ internal static class NativeThreadNames {
     private const uint THREAD_QUERY_LIMITED_INFORMATION = 0x0800;
 
     public static string? GetThreadName(int processId, int threadId) {
+        string? name = null;
         try {
             if (OperatingSystem.IsMacOS())
-                return GetMacOSThreadName(processId, threadId);
-            if (OperatingSystem.IsLinux())
-                return GetLinuxThreadName(processId, threadId);
-            if (OperatingSystem.IsWindows())
-                return GetWindowsThreadName(threadId);
+                name = GetMacOSThreadName(processId, threadId);
+            else if (OperatingSystem.IsLinux())
+                name = GetLinuxThreadName(processId, threadId);
+            else if (OperatingSystem.IsWindows())
+                name = GetWindowsThreadName(threadId);
         }
         catch {
             // Native thread names are an optional nicety
         }
-        return null;
+        return string.IsNullOrEmpty(name) ? null : name;
     }
 
     private static string? GetMacOSThreadName(int processId, int threadId) {

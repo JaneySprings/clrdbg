@@ -133,7 +133,8 @@ through user code and is about to be swallowed by a library.
 ## 7. Inspecting state
 
 - `GetThreads` names threads from the managed `Thread._name` field (read directly, no evaluation)
-  or the OS thread name (`NativeThreadNames`), and marks the first thread as main.
+  or, except for the main thread, the OS thread name (`NativeThreadNames`), and marks the first
+  thread as main so the host can label it.
 - `GetStackFrames` walks the managed chains of the thread; each `StackFrameInfo` carries the
   `Namespace.Type.Method(params)` signature read from metadata, the module, the `SourceLocation`
   (with checksum and Source Link) and the native instruction pointer; internal and native frames

@@ -224,7 +224,12 @@ public partial class ManagedDebugger {
         try {
             foreach (var thread in process.EnumerateThreads()) {
                 var threadId = thread.GetId();
-                result.Add(new ThreadInfo(threadId, GetThreadName(thread), threadId == mainThreadId));
+                var isMain = threadId == mainThreadId;
+                // The OS name of the main thread is the executable's ('dotnet' on Linux), the host labels it instead
+                var name = GetManagedThreadName(thread);
+                if (name == null && !isMain)
+                    name = NativeThreadNames.GetThreadName(ProcessId, threadId);
+                result.Add(new ThreadInfo(threadId, name, isMain));
             }
         }
         catch (Exception ex) {
@@ -665,8 +670,8 @@ public partial class ManagedDebugger {
         };
     }
 
-    // The managed 'Thread.Name' (the '_name' field of the Thread object, read without running code), or the OS-level thread name
-    private string? GetThreadName(ICorDebugThread thread) {
+    // The managed 'Thread.Name': the '_name' field of the Thread object, read without running code
+    private string? GetManagedThreadName(ICorDebugThread thread) {
         try {
             if (thread.GetObject()?.UnwrapDebugValue() is ICorDebugObjectValue threadObject) {
                 var corClass = threadObject.GetClass();
@@ -682,8 +687,6 @@ public partial class ManagedDebugger {
         catch (Exception ex) {
             DebuggerLoggingService.LogMessage($"Failed to read the managed name of thread {thread.GetId()}: {ex.Message}");
         }
-
-        var nativeName = NativeThreadNames.GetThreadName(ProcessId, thread.GetId());
-        return string.IsNullOrEmpty(nativeName) ? null : nativeName;
+        return null;
     }
 }
