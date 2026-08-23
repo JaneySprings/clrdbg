@@ -52,7 +52,9 @@ them.
 ## Expanding a value
 
 Members are listed for the exact runtime type, then its base types up to `System.Object`,
-`System.ValueType` or `System.Enum`:
+`System.ValueType` or `System.Enum`. Base types are walked with the engine's `GetBaseType()`, which
+reports no base where `ICorDebugType.GetBase` returns a null type locally but an element-type-less
+placeholder over the remote (mobile) transport:
 
 - **Fields** are read with `ICorDebugObjectValue.GetFieldValue`; static fields through
   `FuncEvalRunner.GetStaticFieldValueAsync`, which runs the type's static constructor

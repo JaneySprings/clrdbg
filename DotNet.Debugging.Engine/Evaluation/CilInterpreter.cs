@@ -729,9 +729,10 @@ internal class CilInterpreter {
         if (receiver.GetExactType().GetElementType() == CorElementType.VALUETYPE)
             receiver = (await BoxAsync(value, receiver.GetExactType(), context, handles)).CorValue!;
 
-        var concat = resolver.ResolveRuntimeMethod("System", "String", "Concat", PrimitiveTypeCode.Object.ToString());
+        // 'Object.ToString' is dispatched virtually by the func eval, unlike 'String.Concat(object)' it survives a trimmed core library
+        var toString = resolver.ResolveRuntimeMethod("System", "Object", "ToString");
         var eval = context.Thread.CreateEval();
-        var result = handles.Track(await debugger.FuncEval.CallFunctionAsync(eval, concat.Function, [], [receiver], throwOnException: true));
+        var result = handles.Track(await debugger.FuncEval.CallFunctionAsync(eval, toString.Function, [], [receiver], throwOnException: true));
         return result?.UnwrapDebugValue() is ICorDebugStringValue stringValue ? stringValue.GetString() : string.Empty;
     }
 

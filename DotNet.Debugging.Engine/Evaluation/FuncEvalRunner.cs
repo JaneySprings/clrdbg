@@ -65,7 +65,7 @@ internal class FuncEvalRunner {
             var metadataImport = module.GetMetaDataInterface<IMetaDataImport>();
             var property = metadataImport.FindProperty(corClass.GetToken(), propertyName);
             if (property == null) {
-                type = type.GetBase();
+                type = type.GetBaseType();
                 continue;
             }
 

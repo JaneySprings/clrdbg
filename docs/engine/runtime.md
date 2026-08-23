@@ -112,10 +112,11 @@ the await may have continued the debuggee.
 ## 4. Threads
 
 `CreateThread`/`ExitThread` maintain the `threads` dictionary (the first thread created is the main
-thread), and `GetThread(id)` re-obtains an `ICorDebugThread` from the process when the engine needs a
-fresh one. Thread names are read without running code: the managed `Thread._name` field of the
-thread object, then — for every thread but the main one, whose OS name is the executable's — the OS
-thread name (`NativeThreadNames`: `proc_pidinfo` on macOS, `/proc/<pid>/task/<tid>/comm` on Linux,
+thread), and `GetThread(id)` answers from it: `ICorDebugThread` objects stay valid until the thread
+exits, and `ICorDebugProcess.GetThread` is not implemented by the remote (mobile) transport. Thread
+names are read without running code: the managed `Thread._name` field of the thread object, then —
+for every thread but the main one, whose OS name is the executable's — the OS thread name
+(`NativeThreadNames`: `proc_pidinfo` on macOS, `/proc/<pid>/task/<tid>/comm` on Linux,
 `GetThreadDescription` on Windows). `ThreadInfo.IsMain` lets the host label an unnamed main thread.
 
 ## 5. Exit and disposal

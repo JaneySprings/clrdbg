@@ -94,8 +94,9 @@ and opcode as well.
   with temporary locals;
 - `System.Type.GetTypeFromHandle`, answered with the `System.Type` of the token (`typeof`);
 - the `DefaultInterpolatedStringHandler` calls interpolated strings are lowered to, emulated with a
-  host `StringBuilder` — debuggee values are formatted with `String.Concat(object)` in the debuggee,
-  host values with `IFormattable`;
+  host `StringBuilder` — debuggee values are formatted by calling `Object.ToString()` on them in the
+  debuggee (dispatched virtually by the func eval; unlike `String.Concat(object)` it survives a trimmed
+  core library), host values with `IFormattable`;
 - a runtime method: the arguments are *materialized* into debuggee values (strings created with
   `NewString`, primitives with `CreateValue`, by-ref arguments passed as their debuggee slot or a
   temporary copied back afterwards), the receiver boxed when it is a value type (honouring

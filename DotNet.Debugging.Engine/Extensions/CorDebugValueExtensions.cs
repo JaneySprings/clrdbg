@@ -52,7 +52,7 @@ internal static class CorDebugValueExtensions {
             var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
             var fieldDef = metadataImport.EnumFieldsWithName(corClass.GetToken(), fieldName).SingleOrDefault();
             if (fieldDef.IsNil) {
-                type = type.GetBase();
+                type = type.GetBaseType();
                 continue;
             }
 
@@ -72,7 +72,7 @@ internal static class CorDebugValueExtensions {
             var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
             if (metadataImport.GetTypeDefProps(corClass.GetToken()).szTypeDef == "System.Exception")
                 return true;
-            current = current.GetBase();
+            current = current.GetBaseType();
         }
         return false;
     }

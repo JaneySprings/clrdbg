@@ -279,7 +279,7 @@ internal class VariableProvider {
         await AddFieldsAsync(FilterFields(metadataImport, instanceFields, filter), metadataImport, type, value, reference, result);
         await AddPropertiesAsync(FilterProperties(metadataImport, instanceProperties, filter), metadataImport, type, value, reference, result);
 
-        var baseType = type.GetBase();
+        var baseType = type.GetBaseType();
         if (baseType == null || IsRootType(baseType))
             return summary;
         var baseSummary = await AddMembersAsync(value, baseType, filter, reference, result);
@@ -299,7 +299,7 @@ internal class VariableProvider {
         await AddFieldsAsync(FilterFields(metadataImport, staticFields, filter), metadataImport, type, value, reference, result);
         await AddPropertiesAsync(FilterProperties(metadataImport, staticProperties, filter), metadataImport, type, value, reference, result);
 
-        var baseType = type.GetBase();
+        var baseType = type.GetBaseType();
         if (baseType == null || IsRootType(baseType))
             return hasNonPublicMembers;
         return hasNonPublicMembers | await AddStaticMembersAsync(value, baseType, filter, reference, result);

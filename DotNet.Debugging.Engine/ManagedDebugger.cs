@@ -171,7 +171,7 @@ public partial class ManagedDebugger {
     }
     public async Task StepAsync(int threadId, StepKind kind) {
         DebuggerLoggingService.LogMessage($"Step {kind} on thread {threadId}");
-        var thread = threads.GetValueOrDefault(threadId) ?? throw new InvalidOperationException($"Thread '{threadId}' not found");
+        var thread = GetThread(threadId);
         await stepController.StepAsync(thread, kind);
         ClearReferences();
         ContinueProcess();
@@ -307,7 +307,7 @@ public partial class ManagedDebugger {
     }
     // Moves the instruction pointer of the thread's active frame to the given line ('Set Next Statement')
     public void SetNextStatement(int threadId, string filePath, int line) {
-        var thread = threads.GetValueOrDefault(threadId) ?? throw new InvalidOperationException($"Thread '{threadId}' not found");
+        var thread = GetThread(threadId);
         if (thread.GetActiveFrame() is not ICorDebugILFrame frame)
             throw new InvalidOperationException("The active frame is not an IL frame");
 
@@ -328,9 +328,9 @@ public partial class ManagedDebugger {
         ClearReferences();
     }
 
+    // Threads come from the 'CreateThread' callbacks rather than 'ICorDebugProcess.GetThread', which the remote (mobile) transport does not implement
     internal ICorDebugThread GetThread(int threadId) {
-        ArgumentNullException.ThrowIfNull(process);
-        return process.GetThread(threadId);
+        return threads.GetValueOrDefault(threadId) ?? throw new InvalidOperationException($"Thread '{threadId}' not found");
     }
     // Frames are re-obtained from the thread every time, the ICorDebugFrame objects are neutered by any continue
     internal ICorDebugFrame GetFrame(int threadId, int depth) {
@@ -348,7 +348,7 @@ public partial class ManagedDebugger {
         return modules.GetValueOrDefault(module.GetBaseAddress());
     }
     internal ICorDebugValue? GetCurrentException(int threadId) {
-        var thread = process?.GetThread(threadId);
+        var thread = threads.GetValueOrDefault(threadId);
         if (thread == null)
             return null;
         thread.TryGetCurrentException(out var exception);

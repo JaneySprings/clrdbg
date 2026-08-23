@@ -248,12 +248,12 @@ internal static class ValueFormatter {
                 if (!attributes.IsMdStatic() && attributes.IsMdVirtual() && !attributes.IsMdNewSlot() && parameterCount == 0)
                     return true;
             }
-            current = current.GetBase();
+            current = current.GetBaseType();
         }
         return false;
     }
     private static string? GetBaseTypeName(ICorDebugType type) {
-        var baseType = type.GetBase();
+        var baseType = type.GetBaseType();
         if (baseType == null)
             return null;
         var corClass = baseType.GetClass();
