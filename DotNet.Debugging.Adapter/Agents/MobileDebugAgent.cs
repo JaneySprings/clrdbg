@@ -99,7 +99,7 @@ public class MobileDebugAgent : BaseDebugAgent<LaunchConfiguration> {
 
         var applicationId = Path.GetFileNameWithoutExtension(Configuration.Program).Replace("-Signed", "");
         if (!Configuration.MobileOptions.IsDevice)
-            Configuration.MobileOptions.Device = AndroidEmulator.Run(Configuration.MobileOptions.Device).Serial;
+            Configuration.MobileOptions.Device = AndroidEmulator.Run(Configuration.MobileOptions.Device, ProcessLogger).Serial;
 
         var forwardedPorts = new List<int>() { Configuration.MobileOptions.Port };
         if (Configuration.MobileOptions.TcpTunnel != null)

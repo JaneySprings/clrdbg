@@ -39,18 +39,20 @@ public class LaunchConfiguration : BaseConfiguration {
 
         if (string.IsNullOrEmpty(WorkingDirectory))
             WorkingDirectory = Path.GetDirectoryName(Path.GetFullPath(Program));
-        if (!string.IsNullOrEmpty(WorkingDirectory) && !Path.IsPathRooted(Program))
-            Program = Path.Combine(WorkingDirectory, Program);
-        if (!string.IsNullOrEmpty(WorkingDirectory) && !Path.IsPathRooted(LaunchSettingsFilePath))
-            LaunchSettingsFilePath = Path.Combine(WorkingDirectory, LaunchSettingsFilePath);
+        if (!string.IsNullOrEmpty(WorkingDirectory)) {
+            if (!Path.IsPathRooted(Program))
+                Program = Path.Combine(WorkingDirectory, Program);
+            if (!Path.IsPathRooted(LaunchSettingsFilePath))
+                LaunchSettingsFilePath = Path.Combine(WorkingDirectory, LaunchSettingsFilePath);
+        }
+        if (!string.IsNullOrEmpty(MobileOptions?.AssetsPath))
+            MobileOptions.AssetsPath = MobileOptions.AssetsPath.ToPlatformPath();
 
         if (File.Exists(LaunchSettingsFilePath))
             OverrideFromLaunchSettings(LaunchSettingsFilePath, LaunchSettingsProfile);
     }
 
     public override IDebugAgent CreateDebugAgent(DebugSession debugSession) {
-        if (SkipDebug)
-            return new SkipDebugAgent(this, debugSession);
         if (MobileOptions != null)
             return new MobileDebugAgent(this, debugSession);
         return new LaunchDebugAgent(this, debugSession);

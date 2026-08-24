@@ -1,4 +1,5 @@
 using DotNet.Debugging.Adapter;
+using DotNet.Debugging.Adapter.Symbols;
 using NUnit.Framework;
 
 namespace DotNet.Debugging.Tests;

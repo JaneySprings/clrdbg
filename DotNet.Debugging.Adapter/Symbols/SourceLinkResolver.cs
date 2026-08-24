@@ -1,6 +1,6 @@
 using DotNet.Debugging.Common.Logging;
 
-namespace DotNet.Debugging.Adapter;
+namespace DotNet.Debugging.Adapter.Symbols;
 
 // Serves the sources of modules whose PDB carries a Source Link map when they are not available locally.
 // Such a document is reported with a 'sourceReference' and downloaded only when the client opens it ('source' request)

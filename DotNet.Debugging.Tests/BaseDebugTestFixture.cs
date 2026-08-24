@@ -141,14 +141,13 @@ public abstract class BaseDebugTestFixture {
         }
     }
 
-    /// <summary>Launches the program. 'skipDebug' runs it without a debugger at all, 'properties' are added to the launch configuration.</summary>
-    protected void Launch(bool stopAtEntry = false, bool justMyCode = true, bool skipDebug = false, Dictionary<string, JToken>? properties = null) {
+    /// <summary>Launches the program. 'properties' are added to the launch configuration.</summary>
+    protected void Launch(bool stopAtEntry = false, bool justMyCode = true, Dictionary<string, JToken>? properties = null) {
         var launchRequest = new LaunchRequest();
         launchRequest.ConfigurationProperties = new Dictionary<string, JToken> {
             ["program"] = ProgramPath,
             ["stopAtEntry"] = stopAtEntry,
             ["justMyCode"] = justMyCode,
-            ["skipDebug"] = skipDebug,
         };
         foreach (var (key, value) in properties ?? new Dictionary<string, JToken>())
             launchRequest.ConfigurationProperties[key] = value;

@@ -1,10 +1,11 @@
+using DotNet.Debugging.Adapter.Symbols;
 using DotNet.Debugging.Common.Logging;
 using DotNet.Debugging.Engine.Enums;
 using DotNet.Debugging.Engine.Models;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
-using DebugProtocol = Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
 using Breakpoint = DotNet.Debugging.Engine.Models.Breakpoint;
+using DebugProtocol = Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
 
 namespace DotNet.Debugging.Adapter.Extensions;
 

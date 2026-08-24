@@ -1,10 +1,11 @@
 using DotNet.Debugging.Adapter.Extensions;
 using DotNet.Debugging.Adapter.Logging;
+using DotNet.Debugging.Adapter.Symbols;
+using DotNet.Debugging.Adapter.Terminal;
 using DotNet.Debugging.Engine;
 using DotNet.Debugging.Engine.Enums;
 using DotNet.Debugging.Engine.Logging;
 using DotNet.Debugging.Engine.Models;
-using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
 using Breakpoint = DotNet.Debugging.Engine.Models.Breakpoint;
 
@@ -42,7 +43,9 @@ public partial class DebugSession : Session {
         session.RunInTerminalHandler = RunInTerminal;
     }
 
-    protected override void OnUnhandledException(Exception ex) => debugAgent?.Dispose();
+    protected override void OnUnhandledException(Exception ex) {
+        debugAgent?.Dispose();
+    }
 
     private void TargetStopped(StopInfo stop) {
         ResetHandles();
@@ -98,39 +101,21 @@ public partial class DebugSession : Session {
         Protocol.SendEvent(new BreakpointEvent(BreakpointEvent.ReasonValue.Changed, breakpoint.ToBreakpoint(sourceLinkResolver)));
     }
     private void TargetOutput(string output, bool isError) {
-        if (isError) OnErrorDataReceived(output);
-        else OnOutputDataReceived(output);
+        // Print chunks directly, without trimming
+        var category = isError ? OutputEvent.CategoryValue.Stderr : OutputEvent.CategoryValue.Stdout;
+        Protocol.TrySendEvent(new OutputEvent(output) { Category = category });
     }
     private void TargetLogPoint(string message) {
         OnOutputDataReceived($"[LogPoint]: {message}");
     }
     private int RunInTerminal(LaunchInfo launchInfo) {
-        var runInTerminalRequest = new RunInTerminalRequest() {
-            Kind = launchInfo.Console == ConsoleType.ExternalTerminal
-                ? RunInTerminalArguments.KindValue.External
-                : RunInTerminalArguments.KindValue.Integrated,
-            Arguments = new List<string>() { launchInfo.Program }.Concat(launchInfo.Arguments).ToList(),
-            Cwd = launchInfo.WorkingDirectory,
-            Env = launchInfo.Environment.ToDictionary(it => it.Key, it => (object)it.Value),
-            Title = $"{Path.GetFileName(launchInfo.Program)} [DEBUG]"
-        };
-        runInTerminalRequest.Env["DOTNET_DefaultDiagnosticPortSuspend"] = "1";
+        if (debugAgent is not LaunchDebugAgent launchDebugAgent)
+            throw new InvalidOperationException();
 
-        var response = Protocol.SendClientRequestSync(runInTerminalRequest);
-        if (response.ProcessId == null)
-            throw new ProtocolException("RunInTerminalRequest did not return a process ID");
-
-        return response.ProcessId.Value;
+        ArgumentNullException.ThrowIfNull(launchDebugAgent.TerminalLauncher);
+        return launchDebugAgent.TerminalLauncher.LaunchProgram(launchInfo);
     }
 
-    private void ConnectDebugAgent(BaseConfiguration configuration) {
-        sourceLinkResolver = new SourceLinkResolver(configuration.SourceLinkOptions);
-        debugAgent = configuration.CreateDebugAgent(this);
-        InvokeDebugger(() => {
-            session.JustMyCode = configuration.JustMyCode;
-            debugAgent.Connect(session);
-        });
-    }
     private void ResetHandles() {
         gotoHandles.Reset();
         pagingHandles.Reset();

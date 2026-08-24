@@ -6,6 +6,15 @@ namespace DotNet.Debugging.Adapter;
 public partial class DebugSession {
     protected override EvaluateResponse HandleEvaluateRequest(EvaluateArguments arguments) {
         return Invoke(() => {
+            // vsdbg routes console input typed while the debuggee runs into its standard input
+            if (arguments.Context == EvaluateArguments.ContextValue.Repl && InvokeDebugger(() => session.IsRunning && session.WriteStandardInput(arguments.Expression))) {
+                return new EvaluateResponse(string.Empty, 0) {
+                    PresentationHint = new VariablePresentationHint() {
+                        Attributes = VariablePresentationHint.AttributesValue.ReadOnly | VariablePresentationHint.AttributesValue.FailedEvaluation,
+                    },
+                };
+            }
+
             var expression = arguments.Expression?.TrimEnd(';');
             if (string.IsNullOrEmpty(expression))
                 throw new ProtocolException("Expression is empty");

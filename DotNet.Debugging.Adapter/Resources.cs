@@ -5,6 +5,8 @@ public static class Resources {
     public const string MsgNoRunningProcesses = "No process with the specified name is currently running.";
     public const string MsgMultipleProcesses = "Multiple processes were found matching the process name. Attach by process id instead.";
     public const string MsgInvalidProgram = "launch: program '{0}' does not exist.";
+    public const string MsgTerminalLaunchFailed = "Unable to launch the program in the terminal: {0}";
+    public const string MsgTerminalLaunchTimeout = "Timed out waiting for the terminal host to connect back to the debugger.";
 
     public const string MsgLicenseBanner =
         "------------------------------------------------------------------------------\n" +

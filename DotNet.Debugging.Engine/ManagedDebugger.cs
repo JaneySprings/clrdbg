@@ -21,8 +21,9 @@ namespace DotNet.Debugging.Engine;
 // An ICorDebug based debugger for .NET (Core) processes. Every request and every runtime callback is handled
 // under one lock, in the order they arrive, so the debuggee state a request sees is never stale
 public partial class ManagedDebugger {
+    // Makes the runtime of a spawned debuggee wait for a diagnostics client, so the attach lands before any managed code runs
+    public const string DiagnosticPortSuspendVariable = "DOTNET_DefaultDiagnosticPortSuspend";
     internal const string CoreLibraryName = "System.Private.CoreLib.dll";
-    private const string DiagnosticPortSuspendVariable = "DOTNET_DefaultDiagnosticPortSuspend";
 
     private readonly CorDebugManagedCallback callbacks;
     private readonly Channel<CorDebugManagedCallbackEventArgs> eventQueue;
@@ -39,6 +40,7 @@ public partial class ManagedDebugger {
     private ICorDebug? corDebug;
     private ICorDebugProcess? process;
     private Process? launchedProcess;
+    private StreamWriter? standardInput;
     private ExpressionEvaluator? evaluator;
     private LaunchInfo? pendingLaunch;
     private int? pendingAttachProcessId;
@@ -54,6 +56,8 @@ public partial class ManagedDebugger {
     public Func<LaunchInfo, int>? RunInTerminalHandler { get; set; }
     // Whether ICorDebug reports the debuggee as executing. A state that cannot be read counts as not running
     public bool IsRunning => process != null && process.TryIsRunning(out var isRunning) == Cor.S_OK && isRunning;
+    // Whether the debuggee's standard input is held open for writing, which only an internal-console launch is
+    public bool HasStandardInput => standardInput != null;
     public int ProcessId { get; private set; }
 
     internal FuncEvalRunner FuncEval { get; }
@@ -168,6 +172,20 @@ public partial class ManagedDebugger {
         // Stopping the process raises no callback, the stop is reported here
         var stoppedThreadId = threads.ContainsKey(threadId) ? threadId : threads.Keys.FirstOrDefault(threadId);
         OnStopped?.Invoke(new StopInfo(stoppedThreadId, StopReason.Pause));
+    }
+    // A line of console input collected by the client while the debuggee runs, written to its standard input
+    public bool WriteStandardInput(string text) {
+        if (standardInput == null)
+            return false;
+        try {
+            standardInput.WriteLine(text);
+            standardInput.Flush();
+            return true;
+        }
+        catch (Exception ex) {
+            DebuggerLoggingService.LogMessage($"Failed to write to the debuggee's standard input: {ex.Message}");
+            return false;
+        }
     }
     public async Task StepAsync(int threadId, StepKind kind) {
         DebuggerLoggingService.LogMessage($"Step {kind} on thread {threadId}");
@@ -462,7 +480,7 @@ public partial class ManagedDebugger {
             CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            RedirectStandardInput = false,
+            RedirectStandardInput = launchInfo.Console == ConsoleType.InternalConsole,
         };
         foreach (var argument in launchInfo.Arguments)
             startInfo.ArgumentList.Add(argument);
@@ -473,10 +491,10 @@ public partial class ManagedDebugger {
 
         var started = Process.Start(startInfo) ?? throw new InvalidOperationException("The process could not be started");
         launchedProcess = started;
-        started.OutputDataReceived += (_, e) => ForwardOutput(e.Data, isError: false);
-        started.ErrorDataReceived += (_, e) => ForwardOutput(e.Data, isError: true);
-        started.BeginOutputReadLine();
-        started.BeginErrorReadLine();
+        if (launchInfo.Console == ConsoleType.InternalConsole)
+            standardInput = started.StandardInput;
+        _ = Task.Run(() => PumpOutputAsync(started.StandardOutput, isError: false));
+        _ = Task.Run(() => PumpOutputAsync(started.StandardError, isError: true));
         DebuggerLoggingService.LogMessage($"Process created suspended with PID: {started.Id}");
 
         stopAtEntryPending = launchInfo.StopAtEntry;
@@ -537,15 +555,21 @@ public partial class ManagedDebugger {
         foreach (var breakpoint in breakpointManager.MarkProcessStarted())
             OnBreakpointChanged?.Invoke(breakpoint);
     }
-    // The output callbacks run on background threads, a throwing subscriber must not take the process down
-    private void ForwardOutput(string? data, bool isError) {
-        if (data == null)
-            return;
+    // The debuggee's output is forwarded in raw chunks rather than lines, so an unterminated prompt such as
+    // 'Enter name: ' reaches the client before the debuggee blocks on reading the answer. The pump runs on a
+    // background thread: whatever it throws is logged here rather than taking the adapter down
+    private async Task PumpOutputAsync(StreamReader reader, bool isError) {
+        var buffer = new char[4096];
         try {
-            OnOutput?.Invoke(data + Environment.NewLine, isError);
+            while (true) {
+                var read = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
+                if (read <= 0)
+                    return;
+                OnOutput?.Invoke(new string(buffer, 0, read), isError);
+            }
         }
         catch (Exception ex) {
-            DebuggerLoggingService.LogError("Error forwarding the debuggee output", ex);
+            DebuggerLoggingService.LogMessage($"Stopped reading the debuggee output: {ex.Message}");
         }
     }
 
@@ -586,6 +610,7 @@ public partial class ManagedDebugger {
             launchedProcess?.Kill();
         launchedProcess?.Dispose();
         launchedProcess = null;
+        standardInput = null;
     }
 
     private static IEnumerable<ICorDebugFrame> EnumerateFrames(ICorDebugThread thread) {

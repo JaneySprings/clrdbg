@@ -1,6 +1,6 @@
+using DotNet.Debugging.Adapter.Extensions;
 using DotNet.Debugging.Common.Interop;
 using DotNet.Debugging.Common.Logging;
-using DotNet.Debugging.Adapter.Extensions;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
 
@@ -10,6 +10,10 @@ public abstract class Session : DebugAdapterBase, IProcessLogger {
     private readonly CurrentClassLogger logger;
 
     protected Session(Stream input, Stream output) {
+        Console.SetError(TextWriter.Null);
+        Console.SetOut(TextWriter.Null);
+        Console.SetIn(TextReader.Null);
+
         logger = new CurrentClassLogger(nameof(DebugSession));
         InitializeProtocolClient(input, output);
     }

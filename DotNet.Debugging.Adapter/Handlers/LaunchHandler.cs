@@ -1,3 +1,5 @@
+using DotNet.Debugging.Adapter.Symbols;
+using DotNet.Debugging.Engine.Enums;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
 
 namespace DotNet.Debugging.Adapter;
@@ -10,7 +12,18 @@ public partial class DebugSession {
             var configuration = new LaunchConfiguration(arguments.ConfigurationProperties);
             configuration.VerifyMissingProperties();
 
-            ConnectDebugAgent(configuration);
+            sourceLinkResolver = new SourceLinkResolver(configuration.SourceLinkOptions);
+            debugAgent = configuration.CreateDebugAgent(this);
+
+            if (configuration.Console != ConsoleType.InternalConsole && debugAgent is LaunchDebugAgent launchDebugAgent) {
+                var request = launchDebugAgent.CreateRunInTerminalRequest(configuration.Console);
+                Protocol.SendClientRequest(request, (_, _) => { }, (_, error) => launchDebugAgent.TerminalLauncher?.Abort(error.Message));
+            }
+
+            InvokeDebugger(() => {
+                session.JustMyCode = configuration.JustMyCode;
+                debugAgent.Connect(session);
+            });
             // Breakpoints arrive after this event and the launch itself is deferred until 'ConfigurationDone'
             Protocol.SendEvent(new InitializedEvent());
             return new LaunchResponse();

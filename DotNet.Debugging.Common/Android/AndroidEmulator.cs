@@ -7,18 +7,22 @@ namespace DotNet.Debugging.Common.Android;
 public static class AndroidEmulator {
     private const int AppearingRetryCount = 120; //seconds
 
-    public static StartResult Run(string name) {
-        var rSerial = SerialIfRunning(name);
-        if (rSerial != null)
-            return new StartResult(rSerial, null);
+    public static StartResult Run(string name, IProcessLogger? logger = null) {
+        var serial = SerialIfRunning(name);
+        if (!string.IsNullOrEmpty(serial)) {
+            logger?.OnOutputDataReceived($"Skipping the boot of emulator '{name}': it is already running ({serial})");
+            return new StartResult(serial, null);
+        }
 
         var emulator = AndroidSdkLocator.GetEmulatorPath();
         var runner = new ProcessRunner(emulator, new ProcessArgumentBuilder()
             .Append("-avd")
             .Append(name));
 
+        logger?.OnOutputDataReceived($"Starting emulator '{name}'");
         var process = runner.Start();
-        var serial = AndroidEmulator.WaitForBoot();
+        serial = AndroidEmulator.WaitForBoot();
+        logger?.OnOutputDataReceived($"Emulator '{name}' booted successfully ({serial})");
 
         return new StartResult(serial, process);
     }

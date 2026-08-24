@@ -15,7 +15,6 @@ public partial class DebugSession {
             SupportsFunctionBreakpoints = true,
             SupportsLogPoints = true,
             SupportsExceptionFilterOptions = true,
-            SupportsCompletionsRequest = true,
             SupportsSetVariable = true,
             SupportsGotoTargetsRequest = true,
             ExceptionBreakpointFilters = new List<ExceptionBreakpointsFilter> {
