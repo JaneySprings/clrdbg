@@ -1,6 +1,7 @@
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
+using System.Security.Cryptography;
 using System.Text;
 using DotNet.Debugging.Engine.Models;
 
@@ -105,19 +106,20 @@ internal sealed class ModuleMetadataReader : IDisposable {
         var document = match.Value.Document.IsNil ? debugInformation.Document : match.Value.Document;
         return CreateLocation(reader, document, match.Value);
     }
-    public ResolvedBreakpoint? ResolveBreakpoint(string filePath, int line, int? column) {
+    public ResolvedBreakpoint? ResolveBreakpoint(string filePath, int line, int? column, bool requireExactSource, out bool sourceMismatch) {
+        sourceMismatch = false;
         var reader = PdbMetadataReader;
         if (reader == null)
             return null;
 
-        var documentHandle = FindDocument(reader, filePath);
+        var documentHandle = FindDocument(reader, filePath, requireExactSource, out var exactMatch, out sourceMismatch);
         if (documentHandle.IsNil)
             return null;
 
         var match = SequencePointResolver.Resolve(reader, documentHandle, line, column);
         if (match == null)
             return null;
-        return new ResolvedBreakpoint(match.MethodToken, match.Point.Offset, CreateLocation(reader, documentHandle, match.Point));
+        return new ResolvedBreakpoint(match.MethodToken, match.Point.Offset, CreateLocation(reader, documentHandle, match.Point), exactMatch);
     }
     public ResolvedBreakpoint? ResolveMethodEntry(int methodToken) {
         var reader = PdbMetadataReader;
@@ -129,7 +131,7 @@ internal sealed class ModuleMetadataReader : IDisposable {
         var document = point.Document.IsNil ? debugInformation.Document : point.Document;
         if (document.IsNil)
             return null;
-        return new ResolvedBreakpoint(methodToken, point.Offset, CreateLocation(reader, document, point));
+        return new ResolvedBreakpoint(methodToken, point.Offset, CreateLocation(reader, document, point), isExactMatch: true);
     }
 
     public string? GetLocalVariableName(int methodToken, int localIndex, int ilOffset) {
@@ -351,19 +353,64 @@ internal sealed class ModuleMetadataReader : IDisposable {
         return null;
     }
 
-    // An exact path match wins, a file name match handles PDBs built from a different location
-    private static DocumentHandle FindDocument(MetadataReader reader, string filePath) {
+    // An exact path match wins, a file name match handles PDBs built from a different location. A file name
+    // match whose content hash equals the PDB's counts as exact; an unverified one is allowed only without
+    // 'requireExactSource', because any module with an equally named source captures the breakpoint otherwise.
+    // 'sourceMismatch' reports that only such a rejected name match was found
+    private static DocumentHandle FindDocument(MetadataReader reader, string filePath, bool requireExactSource, out bool exactMatch, out bool sourceMismatch) {
+        exactMatch = false;
+        sourceMismatch = false;
         var normalizedPath = NormalizePath(filePath);
         var fileName = Path.GetFileName(normalizedPath);
         var fileNameMatch = default(DocumentHandle);
+        var fileNameMatchVerified = false;
+        var mismatchFound = false;
         foreach (var handle in reader.Documents) {
             var documentPath = NormalizePath(reader.GetString(reader.GetDocument(handle).Name));
-            if (string.Equals(documentPath, normalizedPath, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(documentPath, normalizedPath, StringComparison.OrdinalIgnoreCase)) {
+                exactMatch = true;
                 return handle;
-            if (fileNameMatch.IsNil && string.Equals(Path.GetFileName(documentPath), fileName, StringComparison.OrdinalIgnoreCase))
+            }
+            if (fileNameMatchVerified || !string.Equals(Path.GetFileName(documentPath), fileName, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (ChecksumMatchesFile(reader, handle, filePath)) {
+                fileNameMatch = handle;
+                fileNameMatchVerified = true;
+            }
+            else if (requireExactSource)
+                mismatchFound = true;
+            else if (fileNameMatch.IsNil)
                 fileNameMatch = handle;
         }
+        exactMatch = fileNameMatchVerified;
+        sourceMismatch = fileNameMatch.IsNil && mismatchFound;
         return fileNameMatch;
+    }
+    private static bool ChecksumMatchesFile(MetadataReader reader, DocumentHandle handle, string filePath) {
+        try {
+            if (!File.Exists(filePath))
+                return false;
+            var document = reader.GetDocument(handle);
+            var documentHash = reader.GetBlobBytes(document.Hash);
+            if (documentHash.Length == 0)
+                return false;
+
+            var algorithmGuid = reader.GetGuid(document.HashAlgorithm);
+            using var stream = File.OpenRead(filePath);
+            byte[] fileHash;
+            if (algorithmGuid == sha256AlgorithmGuid)
+                fileHash = SHA256.HashData(stream);
+#pragma warning disable CA5350 // The checksum algorithm is chosen by the compiler that produced the PDB
+            else if (algorithmGuid == sha1AlgorithmGuid)
+                fileHash = SHA1.HashData(stream);
+#pragma warning restore CA5350
+            else
+                return false;
+            return fileHash.AsSpan().SequenceEqual(documentHash);
+        }
+        catch {
+            return false;
+        }
     }
     private static string NormalizePath(string path) {
         return path.Replace('\\', '/');

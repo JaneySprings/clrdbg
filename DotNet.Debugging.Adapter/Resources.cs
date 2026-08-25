@@ -23,6 +23,7 @@ public static class Resources {
     public const string MsgBreakpointPending = "The breakpoint is pending and will be resolved when debugging starts.";
     public const string MsgBreakpointNotProcessed = "Breakpoint has not been processed by the debugger.";
     public const string MsgBreakpointNoSymbols = "The breakpoint will not currently be hit. No symbols have been loaded for this document.";
+    public const string MsgBreakpointSourceMismatch = "A copy of {0} was found in {1}, but the current source code is different from the version built into {1}.\r\nTo allow this breakpoint to be hit: Add '\"requireExactSource\": false' to launch.json and restart debugging.";
     public const string MsgBreakpointNoFunctions = "No functions matching '{0}' were found.";
     public const string MsgBreakpointError = "Error binding breakpoint: {0}";
 

@@ -52,6 +52,8 @@ public partial class ManagedDebugger {
     private int? mainThreadId;
 
     public bool JustMyCode { get; set; } = true;
+    // A source file matched by name alone (PDBs built from a different location) must also match the PDB's content checksum
+    public bool RequireExactSource { get; set; } = true;
     // Starts the debuggee in the client's terminal and returns its process id, for launches with a terminal console
     public Func<LaunchInfo, int>? RunInTerminalHandler { get; set; }
     // Whether ICorDebug reports the debuggee as executing. A state that cannot be read counts as not running
@@ -228,7 +230,7 @@ public partial class ManagedDebugger {
 
     public List<Breakpoint> SetBreakpoints(string filePath, List<BreakpointRequest> requests) {
         DebuggerLoggingService.LogMessage($"SetBreakpoints: {filePath}, lines: {string.Join(", ", requests.Select(it => it.Line))}");
-        return breakpointManager.SetBreakpoints(filePath, requests, Modules, process != null);
+        return breakpointManager.SetBreakpoints(filePath, requests, Modules, process != null, RequireExactSource);
     }
     public List<Breakpoint> SetFunctionBreakpoints(List<FunctionBreakpointRequest> requests) {
         DebuggerLoggingService.LogMessage($"SetFunctionBreakpoints: {string.Join(", ", requests.Select(it => it.Name))}");
@@ -331,7 +333,7 @@ public partial class ManagedDebugger {
 
         var function = frame.GetFunction();
         var module = GetModule(function.GetModule());
-        var resolved = module.MetadataReader.ResolveBreakpoint(filePath, line, null)
+        var resolved = module.MetadataReader.ResolveBreakpoint(filePath, line, null, RequireExactSource, out _)
             ?? throw new InvalidOperationException($"No executable code found at {Path.GetFileName(filePath)}:{line}");
         if (resolved.MethodToken != function.GetToken())
             throw new InvalidOperationException("The next statement must be within the current method");

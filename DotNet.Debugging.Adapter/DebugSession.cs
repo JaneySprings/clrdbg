@@ -98,6 +98,8 @@ public partial class DebugSession : Session {
         Protocol.SendEvent(new ModuleEvent(ModuleEvent.ReasonValue.New, module.ToModule(moduleHandles.Create(module.Path), justMyCode)));
     }
     private void BreakpointStatusChanged(Breakpoint breakpoint) {
+        if (breakpoint.Status == BreakpointStatus.SourceMismatch)
+            OnDebugDataReceived($"Breakpoint warning: {breakpoint.ToStatusMessage()} - {breakpoint.FilePath}: {breakpoint.Line}");
         Protocol.SendEvent(new BreakpointEvent(BreakpointEvent.ReasonValue.Changed, breakpoint.ToBreakpoint(sourceLinkResolver)));
     }
     private void TargetOutput(string output, bool isError) {

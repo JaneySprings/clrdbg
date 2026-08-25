@@ -44,6 +44,7 @@ public static class DebuggerExtensions {
             BreakpointStatus.Pending => Resources.MsgBreakpointPending,
             BreakpointStatus.NotProcessed => Resources.MsgBreakpointNotProcessed,
             BreakpointStatus.NoSymbols => Resources.MsgBreakpointNoSymbols,
+            BreakpointStatus.SourceMismatch => string.Format(Resources.MsgBreakpointSourceMismatch, Path.GetFileName(breakpoint.FilePath), breakpoint.SourceMismatchModule),
             BreakpointStatus.NoMatchingFunctions => string.Format(Resources.MsgBreakpointNoFunctions, breakpoint.FunctionName),
             BreakpointStatus.Error => string.Format(Resources.MsgBreakpointError, breakpoint.Error),
             _ => string.Empty

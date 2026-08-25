@@ -22,6 +22,7 @@ public partial class DebugSession {
 
             InvokeDebugger(() => {
                 session.JustMyCode = configuration.JustMyCode;
+                session.RequireExactSource = configuration.RequireExactSource;
                 debugAgent.Connect(session);
             });
             // Breakpoints arrive after this event and the launch itself is deferred until 'ConfigurationDone'

@@ -15,6 +15,7 @@ public partial class DebugSession {
             OnDebugDataReceived(Resources.MsgLicenseBanner);
             InvokeDebugger(() => {
                 session.JustMyCode = configuration.JustMyCode;
+                session.RequireExactSource = configuration.RequireExactSource;
                 debugAgent.Connect(session);
             });
             // Breakpoints arrive after this event and the attach itself is deferred until 'ConfigurationDone'

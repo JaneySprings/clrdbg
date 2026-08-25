@@ -10,6 +10,9 @@ public class Breakpoint {
     public string? Condition { get; }
     public string? HitCondition { get; }
     public string? LogMessage { get; }
+    // The requested position, kept while 'Line'/'Column' snap to the bound location
+    public int RequestedLine { get; }
+    public int? RequestedColumn { get; }
     public int Line { get; internal set; }
     public int? Column { get; internal set; }
     public int EndLine { get; internal set; }
@@ -17,6 +20,8 @@ public class Breakpoint {
     public BreakpointStatus Status { get; internal set; }
     // Details of a 'BreakpointStatus.Error'
     public string? Error { get; internal set; }
+    // The module whose equally named document was rejected, for 'BreakpointStatus.SourceMismatch'
+    public string? SourceMismatchModule { get; internal set; }
     public int HitCount { get; internal set; }
     // The location the breakpoint is bound to, with the document's checksum and Source Link
     public SourceLocation? Location { get; internal set; }
@@ -31,6 +36,8 @@ public class Breakpoint {
     public Breakpoint(int id, string filePath, BreakpointRequest request) {
         Id = id;
         FilePath = filePath;
+        RequestedLine = request.Line;
+        RequestedColumn = request.Column;
         Line = request.Line;
         Column = request.Column;
         Condition = NormalizeExpression(request.Condition);
