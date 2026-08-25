@@ -58,7 +58,9 @@ public class LaunchConfiguration : BaseConfiguration {
         return new LaunchDebugAgent(this, debugSession);
     }
     public override string GetApplicationName() {
-        return Path.GetFileName(Program);
+        if (MobileOptions == null)
+            return Path.GetFileName(Program);
+        return Path.GetFileNameWithoutExtension(Program).Replace("-Signed", string.Empty);
     }
     public override void VerifyMissingProperties() {
         if (string.IsNullOrEmpty(Program) || (!File.Exists(Program) && !Directory.Exists(Program)))

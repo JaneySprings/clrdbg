@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using DotNet.Debugging.Adapter;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
@@ -65,7 +66,8 @@ public class SourceLinkTests : BaseDebugTestFixture {
 
     [Test]
     public void MissingSourceIsServedOnRequestTest() {
-        Launch();
+        var sourceLinkOptions = JObject.Parse("""{"*": {"enabled": true}}""");
+        Launch(properties: new Dictionary<string, JToken> { ["sourceLinkOptions"] = sourceLinkOptions });
         SetBreakpoints(GetMarkerLine("marker:stop"));
         ConfigurationDone();
         var stopped = WaitForStopped(StoppedEvent.ReasonValue.Breakpoint);

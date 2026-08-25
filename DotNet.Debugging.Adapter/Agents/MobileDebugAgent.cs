@@ -97,7 +97,7 @@ public class MobileDebugAgent : BaseDebugAgent<LaunchConfiguration> {
         ArgumentNullException.ThrowIfNullOrEmpty(Configuration.MobileOptions?.Device);
         Configuration.EnvironmentVariables.Add("CORECLR_PROFILER_PATH", "libvsdbgremotecoreclrtarget.so");
 
-        var applicationId = Path.GetFileNameWithoutExtension(Configuration.Program).Replace("-Signed", "");
+        var applicationId = Configuration.GetApplicationName();
         if (!Configuration.MobileOptions.IsDevice)
             Configuration.MobileOptions.Device = AndroidEmulator.Run(Configuration.MobileOptions.Device, ProcessLogger).Serial;
 
@@ -111,9 +111,11 @@ public class MobileDebugAgent : BaseDebugAgent<LaunchConfiguration> {
             AndroidDebugBridge.Uninstall(Configuration.MobileOptions.Device, applicationId, ProcessLogger);
 
         AndroidDebugBridge.Install(Configuration.MobileOptions.Device, Configuration.Program, ProcessLogger);
+        AndroidDebugBridge.Shell(Configuration.MobileOptions.Device, "setprop", "debug.coreclr.enabled", "1");
+        // AndroidDebugBridge.Shell(Configuration.MobileOptions.Device, "setprop", "debug.mono.extra", "debug=<ip>:<port>,timeout=1787672357,loglevel=0,server=y"); // Legacy?
         AndroidDebugBridge.Shell(Configuration.MobileOptions.Device, "am", "set-debug-app", applicationId);
         AndroidFastDev.TryPushAssemblies(Configuration.MobileOptions.Device, Configuration.MobileOptions.AssetsPath, applicationId, ProcessLogger);
-        AndroidFastDev.TrySetEnvironment(Configuration.MobileOptions.Device, Configuration.EnvironmentVariables, applicationId, ProcessLogger);
+        AndroidFastDev.TrySetEnvironment(Configuration.MobileOptions.Device, Configuration.EnvironmentVariables, Configuration.MobileOptions.AssetsPath, applicationId, ProcessLogger);
         AndroidDebugBridge.Launch(Configuration.MobileOptions.Device, applicationId, ProcessLogger);
 
         AndroidDebugBridge.Flush(Configuration.MobileOptions.Device);
@@ -143,12 +145,10 @@ public class MobileDebugAgent : BaseDebugAgent<LaunchConfiguration> {
 
         var mscordbiPath = GetCoreclrHostLibrary();
         var assembliesPath = $"{Configuration.MobileOptions.AssetsPath};{Path.GetDirectoryName(mscordbiPath)}";
-        var platform = Configuration.MobileOptions.RuntimeIdentifier.Replace('-', ';').Replace("iossimulator", "ios");
-        if (Configuration.MobileOptions.Platform == DebugTarget.Android) {
-            if (Directory.Exists(Configuration.MobileOptions.AssetsPath))
-                assembliesPath += ';' + string.Join(';', Directory.GetDirectories(Configuration.MobileOptions.AssetsPath));
-        }
+        if (Configuration.MobileOptions.Platform == DebugTarget.Android)
+            assembliesPath = $"{AndroidFastDev.GetAssembliesPath(Configuration.MobileOptions.AssetsPath)};{Path.GetDirectoryName(mscordbiPath)}";
 
+        var platform = Configuration.MobileOptions.RuntimeIdentifier.Replace('-', ';').Replace("iossimulator", "ios");
         return new RemoteAttachInfo(Configuration.MobileOptions.Address, Configuration.MobileOptions.Port, platform, mscordbiPath, assembliesPath) {
             IsServer = Configuration.MobileOptions.IsServer
         };

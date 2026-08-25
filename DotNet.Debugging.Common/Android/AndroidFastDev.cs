@@ -1,3 +1,4 @@
+using System.Text;
 using DotNet.Debugging.Common.Extensions;
 using DotNet.Debugging.Common.Interop;
 
@@ -32,28 +33,65 @@ public static class AndroidFastDev {
         logger?.OnOutputDataReceived("[FastDev]: Cleaning up temporary directory");
         AndroidDebugBridge.Shell(serial, "rm", "-rf", $"/data/local/tmp/{applicationId}");
     }
-    public static void TrySetEnvironment(string serial, Dictionary<string, string> environment, string applicationId, IProcessLogger? logger) {
-        if (environment.Count == 0)
+    public static void TrySetEnvironment(string serial, Dictionary<string, string> environment, string? assetsPath, string applicationId, IProcessLogger? logger) {
+        if (environment.Count == 0 || !Directory.Exists(assetsPath))
             return;
 
         logger?.OnOutputDataReceived($"[FastDev]: Setting {environment.Count} environment variable(s)...");
-        AndroidDebugBridge.Shell(serial, "run-as", applicationId, "mkdir", "-p", $"/data/user/0/{applicationId}/files"); // Create directory if not exists
-        AndroidDebugBridge.Shell(serial, "run-as", applicationId, "rm", "-f", $"/data/user/0/{applicationId}/files/.__environment__"); // Remove the previous environment file
-        foreach (var kvp in environment) {
-            if (string.IsNullOrWhiteSpace(kvp.Key))
-                continue;
 
-            var result = AndroidDebugBridge.ShellResult(serial, "run-as", applicationId, "sh", "-c",
-                $"printf '%s=%s\\n' {EscapeShellArgument(kvp.Key)} {EscapeShellArgument(kvp.Value)} >> {EscapeShellArgument($"/data/user/0/{applicationId}/files/.__environment__")}");
+        var environmentFile = Path.Combine(AppContext.BaseDirectory, $"{applicationId}.environment");
+        if (File.Exists(environmentFile))
+            File.Delete(environmentFile);
+        File.WriteAllBytes(environmentFile, CreateEnvironmentBytes(environment));
 
+        AndroidDebugBridge.Push(serial, environmentFile, $"/data/local/tmp/{applicationId}.environment", logger);
+        foreach (var abiPath in Directory.EnumerateDirectories(assetsPath)) {
+            var abiName = Path.GetFileName(abiPath);
+            var overridePath = $"/data/user/0/{applicationId}/files/.__override__/{abiName}";
+            AndroidDebugBridge.Shell(serial, "run-as", applicationId, "mkdir", "-p", overridePath); // Create directory if not exists
+            AndroidDebugBridge.Shell(serial, "run-as", applicationId, "rm", "-f", $"{overridePath}/environment");
+
+            var result = AndroidDebugBridge.ShellResult(serial, "run-as", applicationId, "cp", $"/data/local/tmp/{applicationId}.environment", $"{overridePath}/environment");
             if (!result.Success)
-                logger?.OnErrorDataReceived($"[FastDev]: Failed to set environment variable '{kvp.Value}': {result.GetError()}");
+                logger?.OnErrorDataReceived($"[FastDev]: Failed to set environment variables for '{abiName}': {result.GetError()}");
         }
 
-        logger?.OnOutputDataReceived("[FastDev]: Environment variables configured");
+        AndroidDebugBridge.Shell(serial, "rm", "-f", $"/data/local/tmp/{applicationId}.environment");
+        File.Delete(environmentFile);
+        logger?.OnOutputDataReceived($"[FastDev]: Environment variables configured");
+    }
 
-        string EscapeShellArgument(string value) {
-            return "'" + value.Replace("'", "'\\''") + "'";
+    public static string GetAssembliesPath(string? assetsPath) {
+        if (!Directory.Exists(assetsPath))
+            throw new DirectoryNotFoundException($"Directory not found: {assetsPath}");
+
+        return string.Join(';', Directory.EnumerateDirectories(assetsPath).Select(abiPath => {
+            if (!abiPath.EndsWith(Path.DirectorySeparatorChar))
+                return abiPath + Path.DirectorySeparatorChar; // Very important thing!!!
+            return abiPath;
+        }));
+    }
+
+
+    private static byte[] CreateEnvironmentBytes(Dictionary<string, string> environment) {
+        const int EnvironmentHeaderFieldSize = sizeof(byte) * 11; // '0x' + 8 hex digits + NUL
+        const int EnvironmentHeaderSize = EnvironmentHeaderFieldSize * 2;
+
+        var rawDictionary = environment.ToDictionary(it => Encoding.UTF8.GetBytes(it.Key), it => Encoding.UTF8.GetBytes(it.Value));
+        var nameWidth = rawDictionary.Max(it => it.Key.Length) + 1;
+        var valueWidth = rawDictionary.Max(it => it.Value.Length) + 1;
+
+        // The buffer is zero initialized, which already provides the terminators and the padding
+        var block = new byte[EnvironmentHeaderSize + rawDictionary.Count * (nameWidth + valueWidth)];
+        Encoding.ASCII.GetBytes($"0x{nameWidth:x8}").CopyTo(block, 0);
+        Encoding.ASCII.GetBytes($"0x{valueWidth:x8}").CopyTo(block, EnvironmentHeaderFieldSize);
+
+        var offset = EnvironmentHeaderSize;
+        foreach (var record in rawDictionary) {
+            record.Key.CopyTo(block, offset);
+            record.Value.CopyTo(block, offset + nameWidth);
+            offset += nameWidth + valueWidth;
         }
+        return block;
     }
 }

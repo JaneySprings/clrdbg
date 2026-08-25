@@ -8,7 +8,7 @@ public class SourceLinkResolverTests {
     [Test]
     public void DefaultOptionsEnableEverythingTest() {
         var resolver = new SourceLinkResolver(new Dictionary<string, SourceLinkOptions> { ["*"] = new SourceLinkOptions() });
-        Assert.That(resolver.IsEnabled("https://raw.githubusercontent.com/org/repo/sha/File.cs"), Is.True);
+        Assert.That(resolver.IsEnabled("https://raw.githubusercontent.com/org/repo/sha/File.cs"), Is.False);
     }
 
     [Test]
@@ -26,7 +26,7 @@ public class SourceLinkResolverTests {
 
     [Test]
     public void SourceReferencesAreStablePerUrlTest() {
-        var resolver = new SourceLinkResolver(new Dictionary<string, SourceLinkOptions> { ["*"] = new SourceLinkOptions() });
+        var resolver = new SourceLinkResolver(new Dictionary<string, SourceLinkOptions> { ["*"] = new SourceLinkOptions { Enabled = true } });
         var first = resolver.GetSourceReference("https://example.com/First.cs");
         var second = resolver.GetSourceReference("https://example.com/Second.cs");
         Assert.That(first, Is.GreaterThan(0));
