@@ -8,6 +8,7 @@ public abstract class BaseConfiguration {
     public bool RequireExactSource { get; }
     public bool EnableStepFiltering { get; }
     public Dictionary<string, SourceLinkOptions> SourceLinkOptions { get; }
+    public LoggingOptions? Logging { get; }
     // TODO: implement
     public object? SourceFileMap { get; }
     public object? SymbolOptions { get; }
@@ -16,6 +17,7 @@ public abstract class BaseConfiguration {
         JustMyCode = properties.TryGetValue("justMyCode").ToValue<bool>(true);
         RequireExactSource = properties.TryGetValue("requireExactSource").ToValue<bool>(true);
         EnableStepFiltering = properties.TryGetValue("enableStepFiltering").ToValue<bool>(false);
+        Logging = properties.TryGetValue("logging").ToClass<LoggingOptions>();
         SourceLinkOptions = properties.TryGetValue("sourceLinkOptions").ToClass<Dictionary<string, SourceLinkOptions>>()
             ?? new Dictionary<string, SourceLinkOptions> { ["*"] = new SourceLinkOptions() };
     }

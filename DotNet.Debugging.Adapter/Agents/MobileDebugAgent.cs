@@ -142,8 +142,13 @@ public class MobileDebugAgent : BaseDebugAgent<LaunchConfiguration> {
             Configuration.MobileOptions.RuntimeIdentifier = string.Empty;
 
         var mscordbiPath = GetCoreclrHostLibrary();
-        var platform = Configuration.MobileOptions.RuntimeIdentifier.Replace('-', ';').Replace("iossimulator", "ios");
         var assembliesPath = $"{Configuration.MobileOptions.AssetsPath};{Path.GetDirectoryName(mscordbiPath)}";
+        var platform = Configuration.MobileOptions.RuntimeIdentifier.Replace('-', ';').Replace("iossimulator", "ios");
+        if (Configuration.MobileOptions.Platform == DebugTarget.Android) {
+            if (Directory.Exists(Configuration.MobileOptions.AssetsPath))
+                assembliesPath += ';' + string.Join(';', Directory.GetDirectories(Configuration.MobileOptions.AssetsPath));
+        }
+
         return new RemoteAttachInfo(Configuration.MobileOptions.Address, Configuration.MobileOptions.Port, platform, mscordbiPath, assembliesPath) {
             IsServer = Configuration.MobileOptions.IsServer
         };

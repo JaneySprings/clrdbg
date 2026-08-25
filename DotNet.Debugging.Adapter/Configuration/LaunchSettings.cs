@@ -69,3 +69,19 @@ public class CoreClrMobileDebuggerOptions {
     [JsonIgnore]
     public bool IsServer => Platform == DebugTarget.Maccatalyst || (Platform == DebugTarget.IOS && !IsDevice);
 }
+
+public class SourceLinkOptions {
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; }
+}
+
+public class LoggingOptions {
+    [JsonPropertyName("enableLogging")]
+    public bool EnableLogging { get; set; }
+
+    [JsonPropertyName("trace")]
+    public bool Trace { get; set; }
+
+    [JsonPropertyName("traceResponse")]
+    public bool TraceResponse { get; set; }
+}
