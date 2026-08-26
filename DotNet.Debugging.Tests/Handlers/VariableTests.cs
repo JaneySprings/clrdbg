@@ -13,7 +13,11 @@ public class VariableTests : BaseDebugTestFixture {
         var numbers = Enumerable.Range(0, 60).ToArray();
         var item = new SampleClass();
         var builder = new System.Text.StringBuilder("abc");
-        Console.WriteLine($"{count} {title} {numbers.Length} {item.PublicProperty} {builder.Length}"); // marker:stop
+        var custom = new CustomCollection();
+        custom.Add("first");
+        custom.Add("second");
+        var legacy = new LegacyCollection();
+        Console.WriteLine($"{count} {title} {numbers.Length} {item.PublicProperty} {builder.Length} {custom} {legacy}"); // marker:stop
         Console.WriteLine("done");
 
         public class SampleClass {
@@ -21,7 +25,28 @@ public class VariableTests : BaseDebugTestFixture {
             private int privateField = 2;
             public int PublicProperty => 10;
             private int PrivateProperty => 20;
+            public int this[int index] => index;
             public static int StaticPublicField = 100;
+        }
+
+        public class CustomCollection : IEnumerable<string> {
+            private readonly List<string> innerItems = new List<string>();
+
+            public void Add(string item) {
+                innerItems.Add(item);
+            }
+            public IEnumerator<string> GetEnumerator() {
+                return innerItems.GetEnumerator();
+            }
+            System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() {
+                return innerItems.GetEnumerator();
+            }
+        }
+
+        public class LegacyCollection : System.Collections.IEnumerable {
+            public System.Collections.IEnumerator GetEnumerator() {
+                return new object[] { 1, 2 }.GetEnumerator();
+            }
         }
         """;
     }
@@ -134,10 +159,45 @@ public class VariableTests : BaseDebugTestFixture {
         var members = GetVariables(builder.VariablesReference);
         Assert.That(members.Any(it => it.Name == "Non-Public members"), "Library types must group their non-public members");
         Assert.That(members.Any(it => it.Name.StartsWith("m_")), Is.False, "Non-public members must not be shown inline");
+        Assert.That(members.Any(it => it.Name.StartsWith("Chars")), Is.False, "Indexers cannot be evaluated without arguments and must be hidden");
 
         var nonPublicGroup = members.First(it => it.Name == "Non-Public members");
         var nonPublicMembers = GetVariables(nonPublicGroup.VariablesReference);
         Assert.That(nonPublicMembers.Any(it => it.Name.StartsWith("m_")), "The non-public members of StringBuilder are expected in the group");
+    }
+
+    [Test]
+    public void ResultsViewTest() {
+        var threadId = StopAtMarker();
+        var custom = GetLocalVariables(threadId).First(it => it.Name == "custom [CustomCollection]");
+
+        var members = GetVariables(custom.VariablesReference);
+        var resultsView = members[^1];
+        Assert.That(resultsView.Name, Is.EqualTo("Results View"), "Enumerable values offer a deferred enumeration node, sorted last");
+        Assert.That(resultsView.Value, Is.EqualTo("Expanding the Results View will enumerate the IEnumerable"));
+
+        var items = GetVariables(resultsView.VariablesReference);
+        Assert.That(items.Select(it => it.Name), Is.EqualTo(new[] { "[0] [string]", "[1] [string]" }), "Expanding the node enumerates the value");
+        Assert.That(items[0].Value, Is.EqualTo("\"first\""));
+        Assert.That(items[1].Value, Is.EqualTo("\"second\""));
+
+        var innerList = members.First(it => it.Name.StartsWith("innerItems"));
+        var listMembers = GetVariables(innerList.VariablesReference);
+        Assert.That(listMembers.Any(it => it.Name == "Results View"), Is.False, "A value shown through a DebuggerTypeProxy already enumerates through the proxy");
+        var rawView = listMembers.First(it => it.Name == "Raw View");
+        Assert.That(GetVariables(rawView.VariablesReference).Any(it => it.Name == "Results View"), Is.False, "The 'Raw View' shows the plain members only");
+    }
+
+    [Test]
+    public void NonGenericResultsViewTest() {
+        var threadId = StopAtMarker();
+        var legacy = GetLocalVariables(threadId).First(it => it.Name == "legacy [LegacyCollection]");
+
+        var members = GetVariables(legacy.VariablesReference);
+        var resultsView = members.First(it => it.Name == "Results View");
+        var items = GetVariables(resultsView.VariablesReference);
+        Assert.That(items.Select(it => it.Name), Is.EqualTo(new[] { "[0] [int]", "[1] [int]" }), "The items of a non generic IEnumerable are enumerated as objects");
+        Assert.That(items[0].Value, Is.EqualTo("1"));
     }
 
     [Test]

@@ -141,7 +141,7 @@ public static class ServerExtensions {
     public static DebugProtocol.VariablePresentationHint ToPresentationHint(this VariableInfo variable) {
         return new DebugProtocol.VariablePresentationHint {
             Kind = variable.IsError ? null : variable.Kind.ToKindValue(),
-            Attributes = variable.IsError ? DebugProtocol.VariablePresentationHint.AttributesValue.FailedEvaluation : null,
+            Attributes = variable.ToAttributesValue(),
             Visibility = variable.Visibility?.ToVisibilityValue(),
         };
     }
@@ -149,8 +149,16 @@ public static class ServerExtensions {
         return kind switch {
             VariableKind.Property => DebugProtocol.VariablePresentationHint.KindValue.Property,
             VariableKind.Group => DebugProtocol.VariablePresentationHint.KindValue.Class,
+            VariableKind.ResultsView => DebugProtocol.VariablePresentationHint.KindValue.Method,
             _ => DebugProtocol.VariablePresentationHint.KindValue.Data
         };
+    }
+    public static DebugProtocol.VariablePresentationHint.AttributesValue? ToAttributesValue(this VariableInfo variable) {
+        if (variable.IsError)
+            return DebugProtocol.VariablePresentationHint.AttributesValue.FailedEvaluation;
+        if (variable.Kind == VariableKind.ResultsView)
+            return DebugProtocol.VariablePresentationHint.AttributesValue.ReadOnly | DebugProtocol.VariablePresentationHint.AttributesValue.ExpansionHasSideEffects;
+        return null;
     }
     public static DebugProtocol.VariablePresentationHint.VisibilityValue ToVisibilityValue(this VariableVisibility visibility) {
         return visibility switch {

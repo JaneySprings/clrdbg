@@ -131,6 +131,11 @@ internal static class ValueFormatter {
                 return new FormattedValue(typeName, "null");
             return new FormattedValue(typeName, Format(underlyingValue, escapeStrings).Value);
         }
+        // A boxed primitive is shown as the primitive itself, without evaluating its ToString override
+        if (TypeNameFormatter.IsPrimitiveTypeName(typeName)) {
+            var valueField = metadataImport.FindField(classToken, typeName is "nint" or "nuint" ? "_value" : "m_value", 0, 0);
+            return new FormattedValue(typeName, Format(objectValue.GetFieldValue(corClass, valueField), escapeStrings).Value);
+        }
 
         string? proxyTypeName = null;
         if (metadataImport.TryGetCustomAttributeByName(classToken, AttributeNames.DebuggerTypeProxy, out var proxyData, out var proxySize) == Cor.S_OK)
@@ -149,12 +154,13 @@ internal static class ValueFormatter {
                 display = $"{displayName} = {display}";
             return new FormattedValue(typeName, display, true, proxyTypeName);
         }
+        // A ToString result is shown in braces ('{Text}'), unlike a DebuggerDisplay one - the '{{'/'}}' are the literal braces
         if (exactType.IsExceptionType())
-            return new FormattedValue(typeName, "{ToString()}", true, proxyTypeName);
+            return new FormattedValue(typeName, "{{{ToString()}}}", true, proxyTypeName);
         if (typeName == "decimal")
             return new FormattedValue(typeName, FormatDecimal(objectValue));
         if (OverridesToString(exactType))
-            return new FormattedValue(typeName, "{ToString()}", true, proxyTypeName);
+            return new FormattedValue(typeName, "{{{ToString()}}}", true, proxyTypeName);
 
         return new FormattedValue(typeName, $"{{{typeName}}}", false, proxyTypeName);
     }

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using DotNet.Debugging.CorApi;
 using DotNet.Debugging.CorApi.Extensions;
 using DotNet.Debugging.Engine.Enums;
@@ -37,9 +38,16 @@ internal class VariableProvider {
     private const string StaticMembersGroup = "Static members";
     private const string NonPublicMembersGroup = "Non-Public members";
     private const string RawViewGroup = "Raw View";
+    private const string ResultsViewGroup = "Results View";
+    private const string ResultsViewMessage = "Expanding the Results View will enumerate the IEnumerable";
+    // The implicit evaluations (ToString, DebuggerDisplay) of one variables request share this time budget,
+    // so a single slow override cannot stall a whole listing - vsdbg cuts the formatting off the same way
+    private const int ImplicitEvalBudgetMilliseconds = 1000;
 
     private readonly ManagedDebugger debugger;
     private readonly VariableManager variableManager;
+    private readonly Stopwatch implicitEvalTime = new Stopwatch();
+    private bool limitImplicitEvals;
 
     public VariableProvider(ManagedDebugger debugger, VariableManager variableManager) {
         this.debugger = debugger;
@@ -52,12 +60,29 @@ internal class VariableProvider {
     public async Task<List<VariableInfo>> GetVariablesAsync(int referenceId) {
         var reference = variableManager.Get(referenceId) ?? throw new ArgumentException("Invalid variables reference");
         var result = new List<VariableInfo>();
+        limitImplicitEvals = true;
+        implicitEvalTime.Reset();
+        try {
+            await AddVariablesAsync(reference, result);
+        }
+        finally {
+            limitImplicitEvals = false;
+        }
+        return result;
+    }
+    private async Task AddVariablesAsync(VariableReference reference, List<VariableInfo> result) {
         switch (reference.Kind) {
             case VariableReferenceKind.Scope:
                 await AddScopeVariablesAsync(reference, result);
                 break;
             case VariableReferenceKind.Members:
-                await AddChildrenAsync(reference, result);
+                await AddChildrenAsync(reference, result, includeResultsView: true);
+                break;
+            case VariableReferenceKind.RawMembers:
+                await AddChildrenAsync(reference, result, includeResultsView: false);
+                break;
+            case VariableReferenceKind.ResultsView:
+                await AddResultsViewItemsAsync(reference, result);
                 break;
             case VariableReferenceKind.NonPublicMembers:
                 await AddMembersAsync(reference.Value!, reference.Value!.UnwrapDebugValueToObject().GetExactType(), MemberFilter.NonPublic, reference, result);
@@ -71,7 +96,6 @@ internal class VariableProvider {
                 SortMembers(result);
                 break;
         }
-        return result;
     }
     public async Task<VariableInfo> SetVariableAsync(int referenceId, string name, string text) {
         var reference = variableManager.Get(referenceId) ?? throw new InvalidOperationException("The variables reference was not found");
@@ -96,13 +120,25 @@ internal class VariableProvider {
         var formatted = ValueFormatter.Format(value, escapeStrings);
         var text = formatted.Value;
         if (formatted.RequiresDebuggerDisplay) {
-            var context = new EvaluationContext(debugger.GetThread(threadId), threadId, frameDepth, value);
-            using var result = await debugger.GetEvaluator().EvaluateAsync($"$\"{text}\"", context);
-            if (result.Error != null) {
-                DebuggerLoggingService.LogMessage($"DebuggerDisplay evaluation error: {result.Error}");
-                return new ValueDisplay(formatted.TypeName, result.Error, null, true);
+            if (limitImplicitEvals && implicitEvalTime.ElapsedMilliseconds >= ImplicitEvalBudgetMilliseconds) {
+                // The budget ran out, the value falls back to the display it would have without the override
+                text = $"{{{formatted.TypeName}}}";
             }
-            text = ValueFormatter.Format(result.Value!, false).Value;
+            else {
+                implicitEvalTime.Start();
+                try {
+                    var context = new EvaluationContext(debugger.GetThread(threadId), threadId, frameDepth, value);
+                    using var result = await debugger.GetEvaluator().EvaluateAsync($"$\"{text}\"", context);
+                    if (result.Error != null) {
+                        DebuggerLoggingService.LogMessage($"DebuggerDisplay evaluation error: {result.Error}");
+                        return new ValueDisplay(formatted.TypeName, result.Error, null, true);
+                    }
+                    text = ValueFormatter.Format(result.Value!, false).Value;
+                }
+                finally {
+                    implicitEvalTime.Stop();
+                }
+            }
         }
 
         ICorDebugValue? proxyValue = null;
@@ -216,12 +252,12 @@ internal class VariableProvider {
         return null;
     }
 
-    private async Task AddChildrenAsync(VariableReference reference, List<VariableInfo> result) {
+    private async Task AddChildrenAsync(VariableReference reference, List<VariableInfo> result, bool includeResultsView) {
         var value = reference.Value!;
         if (reference.ProxyValue != null) {
             // The public members of the DebuggerTypeProxy stand in for the value's own, which stay reachable through 'Raw View'
             await AddMembersAndGroupsAsync(reference.ProxyValue, reference.ProxyValue.UnwrapDebugValueToObject().GetExactType(), reference, result, includeNonPublicGroup: false);
-            var rawViewReference = variableManager.Create(new VariableReference(VariableReferenceKind.Members, reference.ThreadId, reference.FrameDepth, value, null, reference.EvaluateName));
+            var rawViewReference = variableManager.Create(new VariableReference(VariableReferenceKind.RawMembers, reference.ThreadId, reference.FrameDepth, value, null, reference.EvaluateName));
             result.Add(CreateGroup(RawViewGroup, rawViewReference));
             SortMembers(result);
             return;
@@ -232,7 +268,10 @@ internal class VariableProvider {
             await AddArrayElementsAsync(arrayValue, reference, result, reference.EvaluateName);
         }
         else if (unwrapped is ICorDebugObjectValue objectValue) {
-            await AddMembersAndGroupsAsync(value, objectValue.GetExactType(), reference, result, includeNonPublicGroup: true);
+            var type = objectValue.GetExactType();
+            await AddMembersAndGroupsAsync(value, type, reference, result, includeNonPublicGroup: true);
+            if (includeResultsView && IsEnumerableType(type))
+                result.Add(CreateResultsViewNode(reference));
             SortMembers(result);
         }
         else {
@@ -269,7 +308,7 @@ internal class VariableProvider {
         var typeToken = corClass.GetToken();
         var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
         var instanceFields = metadataImport.EnumFields(typeToken).Where(it => !it.IsStatic(metadataImport)).ToList();
-        var instanceProperties = metadataImport.EnumProperties(typeToken).Where(it => !it.IsStatic(metadataImport)).ToList();
+        var instanceProperties = metadataImport.EnumProperties(typeToken).Where(it => !it.IsStatic(metadataImport) && !it.IsIndexer(metadataImport)).ToList();
 
         var summary = new MemberSummary();
         summary.HasStaticMembers = metadataImport.EnumFields(typeToken).Any(it => it.IsStatic(metadataImport))
@@ -293,7 +332,7 @@ internal class VariableProvider {
         var typeToken = corClass.GetToken();
         var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
         var staticFields = metadataImport.EnumFields(typeToken).Where(it => it.IsStatic(metadataImport)).ToList();
-        var staticProperties = metadataImport.EnumProperties(typeToken).Where(it => it.IsStatic(metadataImport)).ToList();
+        var staticProperties = metadataImport.EnumProperties(typeToken).Where(it => it.IsStatic(metadataImport) && !it.IsIndexer(metadataImport)).ToList();
         var hasNonPublicMembers = filter == MemberFilter.Public && HasNonPublicMembers(metadataImport, staticFields, staticProperties);
 
         await AddFieldsAsync(FilterFields(metadataImport, staticFields, filter), metadataImport, type, value, reference, result);
@@ -382,6 +421,61 @@ internal class VariableProvider {
                 }
             });
         }
+    }
+    // The node offering deferred enumeration of an IEnumerable value, its expansion runs the enumeration in the debuggee
+    private VariableInfo CreateResultsViewNode(VariableReference reference) {
+        var resultsReference = variableManager.Create(new VariableReference(VariableReferenceKind.ResultsView, reference.ThreadId, reference.FrameDepth, reference.Value, null, reference.EvaluateName));
+        var node = new VariableInfo(ResultsViewGroup, ResultsViewMessage, string.Empty);
+        node.Kind = VariableKind.ResultsView;
+        node.VariablesReference = resultsReference;
+        return node;
+    }
+    private async Task AddResultsViewItemsAsync(VariableReference reference, List<VariableInfo> result) {
+        var value = reference.Value!;
+        var context = new EvaluationContext(debugger.GetThread(reference.ThreadId), reference.ThreadId, reference.FrameDepth, value);
+        await EnsureSystemLinqLoadedAsync(context);
+        var isGeneric = true;
+        var evaluation = await debugger.GetEvaluator().EvaluateAsync("System.Linq.Enumerable.ToArray(this)", context);
+        if (evaluation.Error != null) {
+            // The value only implements the non generic IEnumerable, so the element type cannot be inferred
+            evaluation.Dispose();
+            isGeneric = false;
+            evaluation = await debugger.GetEvaluator().EvaluateAsync("System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Cast<object>(this))", context);
+        }
+        try {
+            if (evaluation.Error != null)
+                throw new EvaluationException(evaluation.Error);
+            if (evaluation.Value!.UnwrapDebugValue() is not ICorDebugArrayValue arrayValue)
+                throw new InvalidOperationException("The enumeration did not produce an array");
+
+            await AddArrayElementsAsync(arrayValue, reference, result, GetResultsViewEvaluateName(reference, arrayValue, isGeneric));
+            if (evaluation.Value is ICorDebugHandleValue handle) {
+                // The elements point into the array, so the handle stays alive behind the variables references
+                evaluation.KeepHandle();
+                variableManager.Keep(handle);
+            }
+        }
+        finally {
+            evaluation.Dispose();
+        }
+    }
+    // The enumeration compiles against System.Linq, which the debuggee may not have loaded. Deliberate divergence:
+    // vsdbg enumerates without loading it (Concord interprets the IL against metadata read from disk), clrdbg loads it
+    private async Task EnsureSystemLinqLoadedAsync(EvaluationContext context) {
+        if (debugger.Modules.Any(it => string.Equals(it.Name, "System.Linq.dll", StringComparison.OrdinalIgnoreCase)))
+            return;
+        using var loadResult = await debugger.GetEvaluator().EvaluateAsync("System.Reflection.Assembly.Load(\"System.Linq\")", context);
+        if (loadResult.Error != null)
+            throw new EvaluationException(loadResult.Error);
+    }
+    // The expression vsdbg reports for enumerated items: 'new System.Linq.SystemCore_EnumerableDebugView<T>(value).Items'
+    private static string? GetResultsViewEvaluateName(VariableReference reference, ICorDebugArrayValue arrayValue, bool isGeneric) {
+        if (reference.EvaluateName == null)
+            return null;
+        if (!isGeneric)
+            return $"new System.Linq.SystemCore_EnumerableDebugView({reference.EvaluateName}).Items";
+        var elementTypeName = TypeNameFormatter.GetTypeName(arrayValue.GetExactType().GetFirstTypeParameter());
+        return $"new System.Linq.SystemCore_EnumerableDebugView<{elementTypeName}>({reference.EvaluateName}).Items";
     }
     private async Task AddArrayElementsAsync(ICorDebugArrayValue arrayValue, VariableReference reference, List<VariableInfo> result, string? parentEvaluateName) {
         if (arrayValue.GetRank() > 1)
@@ -506,6 +600,71 @@ internal class VariableProvider {
         var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
         return metadataImport.GetTypeDefProps(corClass.GetToken()).szTypeDef is "System.Object" or "System.ValueType" or "System.Enum";
     }
+    // The C# compiler emits the transitive closure of implemented interfaces, so checking the base classes is enough
+    private static bool IsEnumerableType(ICorDebugType type) {
+        for (var current = type; current != null && !IsRootType(current); current = current.GetBaseType()) {
+            var corClass = current.GetClass();
+            var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
+            foreach (var impl in metadataImport.EnumInterfaceImpls(corClass.GetToken())) {
+                var interfaceName = GetInterfaceName(metadataImport, metadataImport.GetInterfaceImplProps(impl).ptkIface);
+                if (interfaceName is "System.Collections.IEnumerable" or "System.Collections.Generic.IEnumerable`1")
+                    return true;
+            }
+        }
+        return false;
+    }
+    private static string? GetInterfaceName(IMetaDataImport metadataImport, MetadataToken token) {
+        switch (token.Type) {
+            case CorTokenType.mdtTypeDef:
+                return metadataImport.GetTypeDefProps((int)token).szTypeDef;
+            case CorTokenType.mdtTypeRef:
+                return metadataImport.GetTypeRefProps((int)token).szName;
+            case CorTokenType.mdtTypeSpec:
+                return GetTypeSpecName(metadataImport, (int)token);
+            default:
+                return null;
+        }
+    }
+    // A generic interface ('IEnumerable<string>') is a type spec: GENERICINST, CLASS or VALUETYPE, then the coded type token
+    private static string? GetTypeSpecName(IMetaDataImport metadataImport, TypeSpecToken token) {
+        var (signature, size) = metadataImport.GetTypeSpecFromToken(token);
+        if (size < 3 || Marshal.ReadByte(signature, 0) != (byte)CorElementType.GENERICINST)
+            return null;
+        var offset = 2;
+        var codedToken = ReadCompressedUInt(signature, ref offset, size);
+        if (codedToken == null)
+            return null;
+        var rid = (int)(codedToken.Value >> 2);
+        switch (codedToken.Value & 3) {
+            case 0:
+                return GetInterfaceName(metadataImport, (int)CorTokenType.mdtTypeDef | rid);
+            case 1:
+                return GetInterfaceName(metadataImport, (int)CorTokenType.mdtTypeRef | rid);
+            default:
+                return null;
+        }
+    }
+    private static uint? ReadCompressedUInt(nint data, ref int offset, int size) {
+        if (offset >= size)
+            return null;
+        var first = Marshal.ReadByte(data, offset);
+        if ((first & 0x80) == 0) {
+            offset += 1;
+            return first;
+        }
+        if ((first & 0xC0) == 0x80) {
+            if (offset + 2 > size)
+                return null;
+            var value = ((first & 0x3Fu) << 8) | Marshal.ReadByte(data, offset + 1);
+            offset += 2;
+            return value;
+        }
+        if (offset + 4 > size)
+            return null;
+        var wide = ((first & 0x1Fu) << 24) | ((uint)Marshal.ReadByte(data, offset + 1) << 16) | ((uint)Marshal.ReadByte(data, offset + 2) << 8) | Marshal.ReadByte(data, offset + 3);
+        offset += 4;
+        return wide;
+    }
     private static bool HasNonPublicMembers(IMetaDataImport metadataImport, List<FieldDefToken> fields, List<PropertyToken> properties) {
         return fields.Any(it => !it.IsPublic(metadataImport) && TryGetDisplayName(metadataImport.GetFieldProps(it).szField, out _))
             || properties.Any(it => it.HasGetter(metadataImport) && !it.IsPublic(metadataImport));
@@ -583,6 +742,7 @@ internal class VariableProvider {
             StaticMembersGroup => 1,
             NonPublicMembersGroup => 2,
             RawViewGroup => 3,
+            ResultsViewGroup => 4,
             _ => 0
         };
     }

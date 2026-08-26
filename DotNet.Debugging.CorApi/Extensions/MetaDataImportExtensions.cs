@@ -27,6 +27,38 @@ public static class MetaDataImportExtensions {
         return EnumeratePropertiesCore(instance, td);
     }
 
+    public static IEnumerable<InterfaceImplToken> EnumInterfaceImpls(this IMetaDataImport instance, TypeDefToken td) {
+        return EnumerateInterfaceImplsCore(instance, td);
+    }
+
+    public static (TypeDefToken pClass, MetadataToken ptkIface) GetInterfaceImplProps(this IMetaDataImport instance, InterfaceImplToken iiImpl) {
+        Marshal.ThrowExceptionForHR(instance.TryGetInterfaceImplProps(iiImpl, out var pClass, out var ptkIface));
+        return (pClass: pClass, ptkIface: ptkIface);
+    }
+
+    public static (string szName, MetadataToken ptkResolutionScope) GetTypeRefProps(this IMetaDataImport instance, TypeRefToken tr) {
+        Marshal.ThrowExceptionForHR(instance.TryGetTypeRefProps(tr, out var ptkResolutionScope, null, 0u, out var pchName));
+        if (pchName == 0) {
+            return (szName: string.Empty, ptkResolutionScope: ptkResolutionScope);
+        }
+        for (var i = 0; i < 3; i++) {
+            var num = pchName;
+            var array = new char[checked((int)num)];
+            Marshal.ThrowExceptionForHR(instance.TryGetTypeRefProps(tr, out var ptkResolutionScope2, array, num, out var pchName2));
+            if (pchName2 > num) {
+                pchName = pchName2;
+                continue;
+            }
+            return (szName: CreateString(array, pchName2, trimTerminator: true), ptkResolutionScope: ptkResolutionScope2);
+        }
+        throw new InvalidOperationException("Native buffer size did not stabilize.");
+    }
+
+    public static unsafe (nint ppvSig, int pcbSig) GetTypeSpecFromToken(this IMetaDataImport instance, TypeSpecToken typespec) {
+        Marshal.ThrowExceptionForHR(instance.TryGetTypeSpecFromToken(typespec, out var ppvSig, out var pcbSig));
+        return (ppvSig: unchecked((nint)ppvSig), pcbSig: checked((int)pcbSig));
+    }
+
     public static (string szName, Guid pmvid) GetScopeProps(this IMetaDataImport instance) => QueryGetScopeProps(instance);
 
     public static (string szTypeDef, CorTypeAttr pdwTypeDefFlags, MetadataToken ptkExtends) GetTypeDefProps(this IMetaDataImport instance, TypeDefToken typeDefinition) {
@@ -330,6 +362,29 @@ public static class MetaDataImportExtensions {
                         throw new InvalidOperationException("Native metadata enumerator returned an invalid item count.");
                     case 1u:
                         yield return rProperties;
+                        break;
+                    case 0u:
+                        yield break;
+                }
+            }
+        }
+        finally {
+            if (!handle.IsNull) {
+                instance.TryCloseEnum(handle);
+            }
+        }
+    }
+
+    private static IEnumerable<InterfaceImplToken> EnumerateInterfaceImplsCore(IMetaDataImport instance, TypeDefToken td) {
+        var handle = default(HCorEnum);
+        try {
+            while (true) {
+                Marshal.ThrowExceptionForHR(instance.TryEnumInterfaceImpls(ref handle, td, out var rImpls, 1u, out var pcImpls));
+                switch (pcImpls) {
+                    default:
+                        throw new InvalidOperationException("Native metadata enumerator returned an invalid item count.");
+                    case 1u:
+                        yield return rImpls;
                         break;
                     case 0u:
                         yield break;
