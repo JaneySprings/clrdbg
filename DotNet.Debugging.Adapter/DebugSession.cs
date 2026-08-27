@@ -12,12 +12,8 @@ using Breakpoint = DotNet.Debugging.Engine.Models.Breakpoint;
 namespace DotNet.Debugging.Adapter;
 
 public partial class DebugSession : Session {
-    private const int VariablesPageSize = 25;
-    // Far above any reference number issued by the debugger's variable and frame managers
-    private const int PagingHandlesStart = 1_000_000_000;
-
     private readonly Handles<SourceLocation> gotoHandles = new Handles<SourceLocation>();
-    private readonly Handles<PagedVariablesReference> pagingHandles = new Handles<PagedVariablesReference>(PagingHandlesStart);
+    private readonly Handles<PagedVariablesReference> pagingHandles = new Handles<PagedVariablesReference>(1_000_000_000);
     private readonly Handles<string> moduleHandles = new Handles<string>(StringComparer.InvariantCulture);
     private readonly ExceptionFilterOptions allExceptionsFilter = new ExceptionFilterOptions();
     private readonly ExceptionFilterOptions userUnhandledExceptionsFilter = new ExceptionFilterOptions();

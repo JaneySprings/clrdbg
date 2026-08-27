@@ -76,7 +76,8 @@ internal class FuncEvalRunner {
             var isStatic = metadataImport.GetMethodProps(getter).pdwAttr.IsMdStatic();
             var eval = frame.GetChain().GetThread().CreateEval();
             ICorDebugValue[] arguments = isStatic ? [] : [value];
-            return await CallFunctionAsync(eval, module.GetFunctionFromToken(getter), value.GetExactType().GetTypeParameters(), arguments);
+            // The getter is invoked with the arguments of the type declaring it, which is a base type once the walk went up
+            return await CallFunctionAsync(eval, module.GetFunctionFromToken(getter), type.GetTypeParameters(), arguments);
         }
         return null;
     }

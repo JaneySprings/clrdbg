@@ -40,9 +40,11 @@ internal class VariableProvider {
     private const string RawViewGroup = "Raw View";
     private const string ResultsViewGroup = "Results View";
     private const string ResultsViewMessage = "Expanding the Results View will enumerate the IEnumerable";
+    private const string ResultsViewEmptyName = "Empty";
+    private const string ResultsViewEmptyMessage = "\"Enumeration yielded no results\"";
     // The implicit evaluations (ToString, DebuggerDisplay) of one variables request share this time budget,
     // so a single slow override cannot stall a whole listing - vsdbg cuts the formatting off the same way
-    private const int ImplicitEvalBudgetMilliseconds = 1000;
+    private const int ImplicitEvalBudgetMilliseconds = 2000;
 
     private readonly ManagedDebugger debugger;
     private readonly VariableManager variableManager;
@@ -57,20 +59,31 @@ internal class VariableProvider {
     public int CreateScopeReference(int threadId, int frameDepth) {
         return variableManager.Create(new VariableReference(VariableReferenceKind.Scope, threadId, frameDepth));
     }
-    public async Task<List<VariableInfo>> GetVariablesAsync(int referenceId) {
+    // Lists the variables behind a reference by name, then reads and formats only the ones the requested page holds -
+    // expanding a large collection costs one page of evaluations, not one per member
+    public async Task<VariablePage> GetVariablesAsync(int referenceId, int start, int count) {
         var reference = variableManager.Get(referenceId) ?? throw new ArgumentException("Invalid variables reference");
-        var result = new List<VariableInfo>();
+        var slots = new List<VariableSlot>();
+        await AddVariablesAsync(reference, slots);
+
+        var pageStart = Math.Clamp(start, 0, slots.Count);
+        var pageEnd = Math.Clamp(start + count, pageStart, slots.Count);
+        var variables = new List<VariableInfo>(pageEnd - pageStart);
         limitImplicitEvals = true;
         implicitEvalTime.Reset();
         try {
-            await AddVariablesAsync(reference, result);
+            for (var i = pageStart; i < pageEnd; i++) {
+                var variable = await slots[i].MaterializeAsync();
+                if (variable != null)
+                    variables.Add(variable);
+            }
         }
         finally {
             limitImplicitEvals = false;
         }
-        return result;
+        return new VariablePage(variables, slots.Count);
     }
-    private async Task AddVariablesAsync(VariableReference reference, List<VariableInfo> result) {
+    private async Task AddVariablesAsync(VariableReference reference, List<VariableSlot> result) {
         switch (reference.Kind) {
             case VariableReferenceKind.Scope:
                 await AddScopeVariablesAsync(reference, result);
@@ -147,27 +160,27 @@ internal class VariableProvider {
         return new ValueDisplay(formatted.TypeName, text, proxyValue, false);
     }
 
-    private async Task AddScopeVariablesAsync(VariableReference reference, List<VariableInfo> result) {
+    private async Task AddScopeVariablesAsync(VariableReference reference, List<VariableSlot> result) {
         var frame = debugger.GetILFrame(reference.ThreadId, reference.FrameDepth);
         var function = frame.GetFunction();
         var module = debugger.GetModule(function.GetModule());
 
-        await AddCurrentExceptionAsync(reference, result);
-        var hoistedLocalsContainer = await AddArgumentsAsync(module, function, reference, result);
+        AddCurrentException(reference, result);
+        var hoistedLocalsContainer = AddArguments(module, function, reference, result);
         // Locals captured by a lambda or hoisted into an async state machine live on the generated class,
         // the locals declared inside the lambda body itself are still plain IL locals
         if (hoistedLocalsContainer != null)
             await AddClosureMembersAsync(hoistedLocalsContainer, reference, result);
-        await AddLocalsAsync(module, function, reference, result);
+        AddLocals(module, function, reference, result);
     }
-    private async Task AddCurrentExceptionAsync(VariableReference reference, List<VariableInfo> result) {
+    private void AddCurrentException(VariableReference reference, List<VariableSlot> result) {
         var exception = debugger.GetCurrentException(reference.ThreadId);
         if (exception == null)
             return;
-        await AddVariableAsync(result, "$exception", async () => await CreateVariableAsync("$exception", exception, reference.ThreadId, reference.FrameDepth, "$exception"));
+        result.Add(new VariableSlot("$exception", async () => await CreateVariableAsync("$exception", exception, reference.ThreadId, reference.FrameDepth, "$exception")));
     }
     // Returns the generated closure or state machine instance holding the hoisted locals, when the frame is a lambda or an async method
-    private async Task<ICorDebugValue?> AddArgumentsAsync(ModuleInfo module, ICorDebugFunction function, VariableReference reference, List<VariableInfo> result) {
+    private ICorDebugValue? AddArguments(ModuleInfo module, ICorDebugFunction function, VariableReference reference, List<VariableSlot> result) {
         var frame = debugger.GetILFrame(reference.ThreadId, reference.FrameDepth);
         var arguments = frame.GetArguments();
         if (arguments.Length == 0)
@@ -190,8 +203,10 @@ internal class VariableProvider {
                     thisValue = GetHoistedThis(thisValue, metadataImport);
                 }
             }
-            if (thisValue != null)
-                await AddVariableAsync(result, "this", async () => await CreateVariableAsync("this", thisValue, reference.ThreadId, reference.FrameDepth, "this"));
+            if (thisValue != null) {
+                var capturedThis = thisValue;
+                result.Add(new VariableSlot("this", async () => await CreateVariableAsync("this", capturedThis, reference.ThreadId, reference.FrameDepth, "this")));
+            }
         }
 
         var skipCount = isStatic ? 0 : 1;
@@ -201,11 +216,11 @@ internal class VariableProvider {
             if (name == null)
                 continue;
             var argument = arguments[i];
-            await AddVariableAsync(result, name, async () => await CreateVariableAsync(name, argument, reference.ThreadId, reference.FrameDepth, name));
+            result.Add(new VariableSlot(name, async () => await CreateVariableAsync(name, argument, reference.ThreadId, reference.FrameDepth, name)));
         }
         return hoistedLocalsContainer;
     }
-    private async Task AddLocalsAsync(ModuleInfo module, ICorDebugFunction function, VariableReference reference, List<VariableInfo> result) {
+    private void AddLocals(ModuleInfo module, ICorDebugFunction function, VariableReference reference, List<VariableSlot> result) {
         var frame = debugger.GetILFrame(reference.ThreadId, reference.FrameDepth);
         var locals = frame.GetLocalVariables();
         if (locals.Length == 0)
@@ -218,11 +233,11 @@ internal class VariableProvider {
             if (name == null)
                 continue;
             var local = locals[i];
-            await AddVariableAsync(result, name, async () => await CreateVariableAsync(name, local, reference.ThreadId, reference.FrameDepth, name));
+            result.Add(new VariableSlot(name, async () => await CreateVariableAsync(name, local, reference.ThreadId, reference.FrameDepth, name)));
         }
     }
     // Lists the hoisted locals of a closure and of the closures enclosing it, linked through their '<>8__' fields
-    private async Task AddClosureMembersAsync(ICorDebugValue closure, VariableReference reference, List<VariableInfo> result) {
+    private async Task AddClosureMembersAsync(ICorDebugValue closure, VariableReference reference, List<VariableSlot> result) {
         await AddMembersAsync(closure, closure.GetExactType(), MemberFilter.All, reference, result);
 
         var objectValue = closure.UnwrapDebugValueToObject();
@@ -252,7 +267,7 @@ internal class VariableProvider {
         return null;
     }
 
-    private async Task AddChildrenAsync(VariableReference reference, List<VariableInfo> result, bool includeResultsView) {
+    private async Task AddChildrenAsync(VariableReference reference, List<VariableSlot> result, bool includeResultsView) {
         var value = reference.Value!;
         if (reference.ProxyValue != null) {
             // The public members of the DebuggerTypeProxy stand in for the value's own, which stay reachable through 'Raw View'
@@ -264,8 +279,8 @@ internal class VariableProvider {
         }
 
         var unwrapped = value.UnwrapDebugValue();
-        if (unwrapped is ICorDebugArrayValue arrayValue) {
-            await AddArrayElementsAsync(arrayValue, reference, result, reference.EvaluateName);
+        if (unwrapped is ICorDebugArrayValue) {
+            AddArrayElementSlots(value, reference, result, reference.EvaluateName);
         }
         else if (unwrapped is ICorDebugObjectValue objectValue) {
             var type = objectValue.GetExactType();
@@ -278,7 +293,7 @@ internal class VariableProvider {
             throw new InvalidOperationException("The value has no children");
         }
     }
-    private async Task AddMembersAndGroupsAsync(ICorDebugValue value, ICorDebugType type, VariableReference reference, List<VariableInfo> result, bool includeNonPublicGroup) {
+    private async Task AddMembersAndGroupsAsync(ICorDebugValue value, ICorDebugType type, VariableReference reference, List<VariableSlot> result, bool includeNonPublicGroup) {
         // User code types show all their members inline, library types get the 'Non-Public members' group
         var filter = includeNonPublicGroup && IsUserCodeType(type) ? MemberFilter.All : MemberFilter.Public;
         var summary = await AddMembersAsync(value, type, filter, reference, result);
@@ -291,7 +306,7 @@ internal class VariableProvider {
             result.Add(CreateGroup(NonPublicMembersGroup, nonPublicReference));
         }
     }
-    private async Task AddStaticMembersAndGroupAsync(VariableReference reference, List<VariableInfo> result) {
+    private async Task AddStaticMembersAndGroupAsync(VariableReference reference, List<VariableSlot> result) {
         var value = reference.Value!;
         var type = value.UnwrapDebugValueToObject().GetExactType();
         var filter = IsUserCodeType(type) ? MemberFilter.All : MemberFilter.Public;
@@ -303,7 +318,7 @@ internal class VariableProvider {
         SortMembers(result);
     }
     // Lists the instance members declared by the type and its base types, reporting whether the 'Static members' and 'Non-Public members' groups are needed
-    private async Task<MemberSummary> AddMembersAsync(ICorDebugValue value, ICorDebugType type, MemberFilter filter, VariableReference reference, List<VariableInfo> result) {
+    private async Task<MemberSummary> AddMembersAsync(ICorDebugValue value, ICorDebugType type, MemberFilter filter, VariableReference reference, List<VariableSlot> result) {
         var corClass = type.GetClass();
         var typeToken = corClass.GetToken();
         var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
@@ -327,7 +342,7 @@ internal class VariableProvider {
         return summary;
     }
     // Returns whether the 'Non-Public members' group is needed
-    private async Task<bool> AddStaticMembersAsync(ICorDebugValue value, ICorDebugType type, MemberFilter filter, VariableReference reference, List<VariableInfo> result) {
+    private async Task<bool> AddStaticMembersAsync(ICorDebugValue value, ICorDebugType type, MemberFilter filter, VariableReference reference, List<VariableSlot> result) {
         var corClass = type.GetClass();
         var typeToken = corClass.GetToken();
         var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
@@ -343,19 +358,19 @@ internal class VariableProvider {
             return hasNonPublicMembers;
         return hasNonPublicMembers | await AddStaticMembersAsync(value, baseType, filter, reference, result);
     }
-    private async Task AddFieldsAsync(List<FieldDefToken> fields, IMetaDataImport metadataImport, ICorDebugType type, ICorDebugValue value, VariableReference reference, List<VariableInfo> result) {
+    private async Task AddFieldsAsync(List<FieldDefToken> fields, IMetaDataImport metadataImport, ICorDebugType type, ICorDebugValue value, VariableReference reference, List<VariableSlot> result) {
         var corClass = type.GetClass();
         foreach (var field in fields) {
+            // Which fields the listing holds and how they are named comes from metadata alone, no value is read here
             var fieldProps = metadataImport.GetFieldProps(field);
             if (fieldProps.szField == null)
                 continue;
-
-            await AddVariableAsync(result, fieldProps.szField, async () => {
+            try {
                 if (!TryGetDisplayName(fieldProps.szField, out var name))
-                    return null;
+                    continue;
                 var browsable = GetDebuggerBrowsableState(metadataImport, field);
                 if (browsable == DebuggerBrowsableState.Never)
-                    return null;
+                    continue;
 
                 var isStatic = fieldProps.pdwAttr.IsFdStatic();
                 var visibility = GetVisibility(fieldProps.pdwAttr);
@@ -364,73 +379,109 @@ internal class VariableProvider {
                     var literal = new VariableInfo(name, ValueFormatter.FormatLiteral(fieldProps.ppValue, fieldProps.pcchValue, fieldProps.pdwCPlusTypeFlag), TypeNameFormatter.GetPrimitiveTypeName(fieldProps.pdwCPlusTypeFlag));
                     literal.Visibility = visibility;
                     literal.EvaluateName = evaluateName;
-                    return literal;
+                    result.Add(new VariableSlot(literal));
+                    continue;
                 }
 
-                var fieldValue = isStatic
+                Func<Task<ICorDebugValue?>> readValueAsync = async () => isStatic
                     ? await debugger.FuncEval.GetStaticFieldValueAsync(type, field, debugger.GetILFrame(reference.ThreadId, reference.FrameDepth))
                     : value.UnwrapDebugValueToObject().GetFieldValue(corClass, field);
-                if (browsable == DebuggerBrowsableState.RootHidden && fieldValue.UnwrapDebugValue() is ICorDebugArrayValue arrayValue) {
-                    await AddArrayElementsAsync(arrayValue, reference, result, evaluateName);
-                    return null;
+                if (browsable == DebuggerBrowsableState.RootHidden) {
+                    await AddRootHiddenMemberAsync(name, readValueAsync, reference, result, evaluateName, VariableKind.Data, visibility);
+                    continue;
                 }
-                return await CreateVariableAsync(name, fieldValue, reference.ThreadId, reference.FrameDepth, evaluateName, VariableKind.Data, visibility);
-            });
+                result.Add(new VariableSlot(name, async () => await CreateVariableAsync(name, (await readValueAsync())!, reference.ThreadId, reference.FrameDepth, evaluateName, VariableKind.Data, visibility)));
+            }
+            catch (Exception ex) {
+                // A member that cannot even be listed is shown with the error as its value, like one that cannot be read
+                result.Add(new VariableSlot(VariableInfo.CreateError(fieldProps.szField, ex.Message)));
+            }
         }
     }
-    private async Task AddPropertiesAsync(List<PropertyToken> properties, IMetaDataImport metadataImport, ICorDebugType type, ICorDebugValue value, VariableReference reference, List<VariableInfo> result) {
+    private async Task AddPropertiesAsync(List<PropertyToken> properties, IMetaDataImport metadataImport, ICorDebugType type, ICorDebugValue value, VariableReference reference, List<VariableSlot> result) {
         var module = type.GetClass().GetModule();
         foreach (var property in properties) {
+            // No getter runs here, a property only costs a func eval once the page holding it is requested
             var propertyProps = metadataImport.GetPropertyProps(property);
             var name = propertyProps.szProperty;
             if (name == null || propertyProps.pmdGetter.IsNil)
                 continue;
-
-            await AddVariableAsync(result, name, async () => {
+            try {
                 var browsable = GetDebuggerBrowsableState(metadataImport, property);
                 if (browsable == DebuggerBrowsableState.Never)
-                    return null;
+                    continue;
 
                 var getterAttributes = metadataImport.GetMethodProps(propertyProps.pmdGetter).pdwAttr;
                 var isStatic = getterAttributes.IsMdStatic();
                 var visibility = GetVisibility(getterAttributes);
                 var evaluateName = GetMemberEvaluateName(name, isStatic, reference.EvaluateName, type);
 
-                // The getter is invoked with the original reference value, not the dereferenced object
-                var getter = module.GetFunctionFromToken(propertyProps.pmdGetter);
-                var eval = debugger.GetThread(reference.ThreadId).CreateEval();
-                ICorDebugValue[] arguments = isStatic ? [] : [value];
-                var propertyValue = await debugger.FuncEval.CallFunctionAsync(eval, getter, value.GetExactType().GetTypeParameters(), arguments);
-                if (propertyValue == null)
-                    return null;
-
-                var keepHandle = false;
-                try {
-                    if (browsable == DebuggerBrowsableState.RootHidden && propertyValue.UnwrapDebugValue() is ICorDebugArrayValue arrayValue) {
-                        await AddArrayElementsAsync(arrayValue, reference, result, evaluateName);
+                // The getter is invoked with the original reference value, not the dereferenced object, and with the
+                // arguments of the type declaring it - the members of a base type are listed while walking up from the
+                // value, and a non-generic type deriving from a generic base has no arguments of its own to invoke them with
+                Func<Task<ICorDebugValue?>> invokeGetterAsync = () => {
+                    var getter = module.GetFunctionFromToken(propertyProps.pmdGetter);
+                    var eval = debugger.GetThread(reference.ThreadId).CreateEval();
+                    ICorDebugValue[] arguments = isStatic ? [] : [value];
+                    return debugger.FuncEval.CallFunctionAsync(eval, getter, type.GetTypeParameters(), arguments);
+                };
+                if (browsable == DebuggerBrowsableState.RootHidden) {
+                    await AddRootHiddenMemberAsync(name, invokeGetterAsync, reference, result, evaluateName, VariableKind.Property, visibility);
+                    continue;
+                }
+                result.Add(new VariableSlot(name, async () => {
+                    var propertyValue = await invokeGetterAsync();
+                    if (propertyValue == null)
                         return null;
+
+                    var keepHandle = false;
+                    try {
+                        var variable = await CreateVariableAsync(name, propertyValue, reference.ThreadId, reference.FrameDepth, evaluateName, VariableKind.Property, visibility);
+                        // A value with children stays alive behind its variables reference
+                        keepHandle = variable.VariablesReference != 0;
+                        return variable;
                     }
-                    var variable = await CreateVariableAsync(name, propertyValue, reference.ThreadId, reference.FrameDepth, evaluateName, VariableKind.Property, visibility);
-                    // A value with children stays alive behind its variables reference
-                    keepHandle = variable.VariablesReference != 0;
-                    return variable;
-                }
-                finally {
-                    if (!keepHandle && propertyValue is ICorDebugHandleValue handle)
-                        handle.TryDispose();
-                }
-            });
+                    finally {
+                        if (!keepHandle && propertyValue is ICorDebugHandleValue handle)
+                            handle.TryDispose();
+                    }
+                }));
+            }
+            catch (Exception ex) {
+                result.Add(new VariableSlot(VariableInfo.CreateError(name, ex.Message)));
+            }
+        }
+    }
+    // A 'RootHidden' member is replaced in the listing by its own elements, so unlike the other members it is read
+    // while the listing is built - what it holds decides how many entries the listing has and how they are named
+    private async Task AddRootHiddenMemberAsync(string name, Func<Task<ICorDebugValue?>> readValueAsync, VariableReference reference, List<VariableSlot> result, string? evaluateName, VariableKind kind, VariableVisibility? visibility) {
+        try {
+            var memberValue = await readValueAsync();
+            if (memberValue == null)
+                return;
+            // The value is read now but its elements only once their page is requested, so it has to stay alive
+            if (memberValue is ICorDebugHandleValue handle)
+                variableManager.Keep(handle);
+
+            if (memberValue.UnwrapDebugValue() is ICorDebugArrayValue) {
+                AddArrayElementSlots(memberValue, reference, result, evaluateName);
+                return;
+            }
+            result.Add(new VariableSlot(name, async () => await CreateVariableAsync(name, memberValue, reference.ThreadId, reference.FrameDepth, evaluateName, kind, visibility)));
+        }
+        catch (Exception ex) {
+            result.Add(new VariableSlot(VariableInfo.CreateError(name, ex.Message)));
         }
     }
     // The node offering deferred enumeration of an IEnumerable value, its expansion runs the enumeration in the debuggee
-    private VariableInfo CreateResultsViewNode(VariableReference reference) {
+    private VariableSlot CreateResultsViewNode(VariableReference reference) {
         var resultsReference = variableManager.Create(new VariableReference(VariableReferenceKind.ResultsView, reference.ThreadId, reference.FrameDepth, reference.Value, null, reference.EvaluateName));
         var node = new VariableInfo(ResultsViewGroup, ResultsViewMessage, string.Empty);
         node.Kind = VariableKind.ResultsView;
         node.VariablesReference = resultsReference;
-        return node;
+        return new VariableSlot(node);
     }
-    private async Task AddResultsViewItemsAsync(VariableReference reference, List<VariableInfo> result) {
+    private async Task AddResultsViewItemsAsync(VariableReference reference, List<VariableSlot> result) {
         var value = reference.Value!;
         var context = new EvaluationContext(debugger.GetThread(reference.ThreadId), reference.ThreadId, reference.FrameDepth, value);
         await EnsureSystemLinqLoadedAsync(context);
@@ -448,7 +499,14 @@ internal class VariableProvider {
             if (evaluation.Value!.UnwrapDebugValue() is not ICorDebugArrayValue arrayValue)
                 throw new InvalidOperationException("The enumeration did not produce an array");
 
-            await AddArrayElementsAsync(arrayValue, reference, result, GetResultsViewEvaluateName(reference, arrayValue, isGeneric));
+            // The row VS shows through SystemCore_EnumerableDebugView's 'Empty' exception property - without
+            // it an empty enumeration expands to nothing, which reads as a listing that never finished loading
+            if (arrayValue.GetCount() == 0) {
+                result.Add(new VariableSlot(new VariableInfo(ResultsViewEmptyName, ResultsViewEmptyMessage, "string")));
+                return;
+            }
+
+            AddArrayElementSlots(evaluation.Value!, reference, result, GetResultsViewEvaluateName(reference, arrayValue, isGeneric));
             if (evaluation.Value is ICorDebugHandleValue handle) {
                 // The elements point into the array, so the handle stays alive behind the variables references
                 evaluation.KeepHandle();
@@ -477,33 +535,25 @@ internal class VariableProvider {
         var elementTypeName = TypeNameFormatter.GetTypeName(arrayValue.GetExactType().GetFirstTypeParameter());
         return $"new System.Linq.SystemCore_EnumerableDebugView<{elementTypeName}>({reference.EvaluateName}).Items";
     }
-    private async Task AddArrayElementsAsync(ICorDebugArrayValue arrayValue, VariableReference reference, List<VariableInfo> result, string? parentEvaluateName) {
+    // The elements are named by their index alone, so only the ones of the requested page are ever read and formatted
+    private void AddArrayElementSlots(ICorDebugValue arraySource, VariableReference reference, List<VariableSlot> result, string? parentEvaluateName) {
+        var arrayValue = (ICorDebugArrayValue)arraySource.UnwrapDebugValue();
         if (arrayValue.GetRank() > 1)
             throw new NotImplementedException("Multidimensional arrays are not supported yet");
 
-        // The elements are read up front, a DebuggerDisplay evaluation below may neuter the array value
         var count = arrayValue.GetCount();
-        var elements = new List<ICorDebugValue>(count);
-        for (var i = 0; i < count; i++)
-            elements.Add(arrayValue.GetElement(1, [checked((uint)i)]));
-
-        for (var i = 0; i < elements.Count; i++) {
-            var name = $"[{i}]";
-            var element = elements[i];
+        for (var i = 0; i < count; i++) {
+            var index = i;
+            var name = $"[{index}]";
             var evaluateName = parentEvaluateName == null ? name : parentEvaluateName + name;
-            await AddVariableAsync(result, name, async () => await CreateVariableAsync(name, element, reference.ThreadId, reference.FrameDepth, evaluateName));
+            result.Add(new VariableSlot(name, async () => await CreateVariableAsync(name, ReadArrayElement(arraySource, index), reference.ThreadId, reference.FrameDepth, evaluateName)));
         }
     }
-    // A member that cannot be read is shown with the error as its value
-    private static async Task AddVariableAsync(List<VariableInfo> result, string name, Func<Task<VariableInfo?>> create) {
-        try {
-            var variable = await create();
-            if (variable != null)
-                result.Add(variable);
-        }
-        catch (Exception ex) {
-            result.Add(VariableInfo.CreateError(name, ex.Message));
-        }
+    // An evaluation neuters a dereferenced array value, so every element read dereferences the source value again -
+    // the source itself (a local's reference, a kept handle) stays valid while the debuggee is stopped
+    private static ICorDebugValue ReadArrayElement(ICorDebugValue arraySource, int index) {
+        var arrayValue = (ICorDebugArrayValue)arraySource.UnwrapDebugValue();
+        return arrayValue.GetElement(1, [checked((uint)index)]);
     }
 
     private async Task<ICorDebugValue> CreateDebuggerProxyAsync(ICorDebugValue value, string proxyTypeName, int threadId) {
@@ -724,20 +774,29 @@ internal class VariableProvider {
             _ => VariableVisibility.Private
         };
     }
-    private static VariableInfo CreateGroup(string name, int variablesReference) {
+    private static VariableSlot CreateGroup(string name, int variablesReference) {
         var group = new VariableInfo(name, string.Empty, string.Empty);
         group.Kind = VariableKind.Group;
         group.VariablesReference = variablesReference;
-        return group;
+        return new VariableSlot(group);
     }
-    // Ordinal order ('AAA AAB ... aaa aab') with the groups at the end
-    private static void SortMembers(List<VariableInfo> members) {
+    // Ordinal order ('AAA AAB ... aaa aab') with the groups at the end; the elements a 'RootHidden' member was
+    // replaced with compare by their index, so '[2]' stays before '[10]'
+    private static void SortMembers(List<VariableSlot> members) {
         members.Sort((left, right) => {
             var rankComparison = GetSortRank(left).CompareTo(GetSortRank(right));
-            return rankComparison != 0 ? rankComparison : string.CompareOrdinal(left.Name, right.Name);
+            if (rankComparison != 0)
+                return rankComparison;
+            if (TryGetElementIndex(left.Name, out var leftIndex) && TryGetElementIndex(right.Name, out var rightIndex))
+                return leftIndex.CompareTo(rightIndex);
+            return string.CompareOrdinal(left.Name, right.Name);
         });
     }
-    private static int GetSortRank(VariableInfo member) {
+    private static bool TryGetElementIndex(string name, out uint index) {
+        index = 0;
+        return name.StartsWith('[') && name.EndsWith(']') && uint.TryParse(name.AsSpan(1, name.Length - 2), out index);
+    }
+    private static int GetSortRank(VariableSlot member) {
         return member.Name switch {
             StaticMembersGroup => 1,
             NonPublicMembersGroup => 2,

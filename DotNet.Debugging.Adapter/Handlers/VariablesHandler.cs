@@ -5,6 +5,8 @@ using DebugProtocol = Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages
 namespace DotNet.Debugging.Adapter;
 
 public partial class DebugSession {
+    private const int VariablesPageSize = 25;
+
     protected override VariablesResponse HandleVariablesRequest(VariablesArguments arguments) {
         return Invoke(() => {
             var pageOffset = 0;
@@ -14,20 +16,17 @@ public partial class DebugSession {
                 pageOffset = page.Offset;
             }
 
-            var variables = InvokeDebugger(() => session.GetVariablesAsync(variablesReference));
-            var response = new VariablesResponse(variables
-                .Skip(pageOffset)
-                .Take(VariablesPageSize)
-                .Select(it => it.ToVariable())
-                .ToList());
+            // Only the requested page is read from the debuggee, the rest of the listing stays unevaluated
+            var variables = InvokeDebugger(() => session.GetVariablesAsync(variablesReference, pageOffset, VariablesPageSize));
+            var response = new VariablesResponse(variables.Variables.Select(it => it.ToVariable()).ToList());
 
-            var remainingCount = variables.Count - pageOffset - VariablesPageSize;
-            if (remainingCount > 0) {
+            var nextOffset = pageOffset + VariablesPageSize;
+            if (variables.TotalCount > nextOffset) {
                 response.Variables.Add(new DebugProtocol.Variable {
                     Name = "[More]",
                     Value = string.Empty,
                     PresentationHint = new DebugProtocol.VariablePresentationHint { Attributes = DebugProtocol.VariablePresentationHint.AttributesValue.ReadOnly },
-                    VariablesReference = pagingHandles.Create(new PagedVariablesReference(variablesReference, pageOffset + VariablesPageSize))
+                    VariablesReference = pagingHandles.Create(new PagedVariablesReference(variablesReference, nextOffset))
                 });
             }
 

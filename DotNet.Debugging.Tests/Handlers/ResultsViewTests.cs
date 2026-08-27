@@ -12,7 +12,8 @@ public class ResultsViewTests : BaseDebugTestFixture {
         var collection = new MyCollection();
         collection.Add("first");
         collection.Add("second");
-        Console.WriteLine($"{collection}"); // marker:stop
+        var empty = new MyCollection();
+        Console.WriteLine($"{collection}{empty}"); // marker:stop
         Console.WriteLine("done");
 
         public class MyCollection : IEnumerable<string> {
@@ -31,13 +32,17 @@ public class ResultsViewTests : BaseDebugTestFixture {
         """;
     }
 
-    [Test]
-    public void ResultsViewWithoutSystemLinqLoadedTest() {
+    private int StopAtMarker() {
         Launch();
         SetBreakpoints(GetMarkerLine("marker:stop"));
         ConfigurationDone();
         var stopped = WaitForStopped(StoppedEvent.ReasonValue.Breakpoint);
-        var threadId = stopped.ThreadId!.Value;
+        return stopped.ThreadId!.Value;
+    }
+
+    [Test]
+    public void ResultsViewWithoutSystemLinqLoadedTest() {
+        var threadId = StopAtMarker();
 
         var collection = GetLocalVariables(threadId).First(it => it.Name == "collection [MyCollection]");
         var members = GetVariables(collection.VariablesReference);
@@ -47,5 +52,20 @@ public class ResultsViewTests : BaseDebugTestFixture {
         Assert.That(items.Select(it => it.Name), Is.EqualTo(new[] { "[0] [string]", "[1] [string]" }), "The enumeration loads System.Linq into the debuggee on demand");
         Assert.That(items[0].Value, Is.EqualTo("\"first\""));
         Assert.That(items[1].Value, Is.EqualTo("\"second\""));
+    }
+
+    [Test]
+    public void EmptyResultsViewTest() {
+        var threadId = StopAtMarker();
+
+        var empty = GetLocalVariables(threadId).First(it => it.Name == "empty [MyCollection]");
+        var members = GetVariables(empty.VariablesReference);
+        var resultsView = members.First(it => it.Name == "Results View");
+
+        var items = GetVariables(resultsView.VariablesReference);
+        Assert.That(items, Has.Count.EqualTo(1), "An empty enumeration shows a single message row instead of nothing");
+        Assert.That(items[0].Name, Is.EqualTo("Empty [string]"));
+        Assert.That(items[0].Value, Is.EqualTo("\"Enumeration yielded no results\""));
+        Assert.That(items[0].VariablesReference, Is.Zero, "The message row has no children");
     }
 }

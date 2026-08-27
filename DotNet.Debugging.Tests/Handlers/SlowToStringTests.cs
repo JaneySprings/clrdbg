@@ -21,9 +21,10 @@ public class SlowToStringTests : BaseDebugTestFixture {
         public class MyClass {
             public int ToStringCount;
 
+            // Sleeps just over the budget, so the first evaluation exhausts it alone
             public override string ToString() {
                 ToStringCount++;
-                Thread.Sleep(1200);
+                Thread.Sleep(2200);
                 return "slow";
             }
         }
@@ -47,7 +48,7 @@ public class SlowToStringTests : BaseDebugTestFixture {
         var last = members.First(it => it.Name == "[4] [MyClass]");
         Assert.That(first.Value, Is.EqualTo("{slow}"), "The first value is formatted through its ToString override, braced like vsdbg does");
         Assert.That(last.Value, Is.EqualTo("{MyClass}"), "Values formatted after the budget ran out fall back to the type name");
-        Assert.That(stopwatch.ElapsedMilliseconds, Is.LessThan(4000), "One slow ToString must not stall the whole listing");
+        Assert.That(stopwatch.ElapsedMilliseconds, Is.LessThan(5000), "One slow ToString must not stall the whole listing");
 
         var firstCount = GetVariables(first.VariablesReference).First(it => it.Name.StartsWith("ToStringCount"));
         var lastCount = GetVariables(last.VariablesReference).First(it => it.Name.StartsWith("ToStringCount"));

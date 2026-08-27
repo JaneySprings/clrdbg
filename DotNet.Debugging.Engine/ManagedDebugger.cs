@@ -279,8 +279,9 @@ public partial class ManagedDebugger {
             return 0;
         return variableProvider.CreateScopeReference(reference.ThreadId, reference.Depth);
     }
-    public Task<List<VariableInfo>> GetVariablesAsync(int variablesReference) {
-        return variableProvider.GetVariablesAsync(variablesReference);
+    // One page of the listing, starting at 'start' and holding at most 'count' variables
+    public Task<VariablePage> GetVariablesAsync(int variablesReference, int start, int count) {
+        return variableProvider.GetVariablesAsync(variablesReference, start, count);
     }
     // Only primitive values and 'null' for references can be assigned
     public Task<VariableInfo> SetVariableAsync(int variablesReference, string name, string value) {

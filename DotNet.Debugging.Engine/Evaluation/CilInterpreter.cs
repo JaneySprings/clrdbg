@@ -444,11 +444,13 @@ internal class CilInterpreter {
             callArguments[0] = await MaterializeReceiverAsync(receiver, context, constrainedType, handles);
         }
 
-        // The declaring type's arguments come from the receiver's exact type when there is one, the method's own from the method spec
+        // The declaring type's arguments come from the receiver's exact type when there is one, walked up to the
+        // type declaring the method (an inherited method carries them on the base type), the method's own from the method spec
         var declaringTypeArity = resolver.GetRuntimeTypeGenericArity(method.DeclaringType);
         ICorDebugType[] declaringTypeArguments;
-        if (!method.IsStatic && declaringTypeArity > 0 && callArguments[0].GetExactType() is { } receiverType)
-            declaringTypeArguments = receiverType.GetTypeParameters().Take(declaringTypeArity).ToArray();
+        if (!method.IsStatic && declaringTypeArity > 0 && callArguments[0].GetExactType() is { } receiverType
+                && FindDeclaringType(receiverType, method.DeclaringType) is { } declaringType)
+            declaringTypeArguments = declaringType.GetTypeParameters().Take(declaringTypeArity).ToArray();
         else if (!method.DeclaringType.TypeArguments.IsDefaultOrEmpty)
             declaringTypeArguments = method.DeclaringType.TypeArguments.Select(resolver.GetCorDebugType).ToArray();
         else
@@ -473,6 +475,19 @@ internal class CilInterpreter {
             stack.Push(CilValue.FromLocation(new CorDebugLocation(callResult)));
         else
             stack.Push(CilValue.FromCorValue(callResult));
+    }
+    // The base of the receiver's exact type that is the method's declaring type, carrying its instantiation. Null when
+    // the declaring type is outside the class chain (an interface, an array's methods), leaving the method spec to supply it
+    private static ICorDebugType? FindDeclaringType(ICorDebugType receiverType, ResolvedRuntimeType declaringType) {
+        var declaringToken = (TypeDefToken)MetadataTokens.GetToken(declaringType.Handle);
+        for (var type = (ICorDebugType?)receiverType; type != null; type = type.GetBaseType()) {
+            if (type.GetElementType() is not (CorElementType.VALUETYPE or CorElementType.CLASS))
+                return null;
+            var corClass = type.GetClass();
+            if (corClass.GetToken() == declaringToken && corClass.GetModule().GetBaseAddress() == declaringType.Module.BaseAddress)
+                return type;
+        }
+        return null;
     }
     private async Task ExecuteDebuggerIntrinsicAsync(string name, Stack<CilValue> stack, Dictionary<string, ICilLocation> syntheticVariables, EvaluationMetadataResolver resolver, EvaluationContext context, EvaluationHandleScope handles) {
         switch (name) {
