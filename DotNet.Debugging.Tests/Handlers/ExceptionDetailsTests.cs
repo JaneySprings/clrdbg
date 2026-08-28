@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
 using NUnit.Framework;
 
@@ -55,9 +56,10 @@ public class ExceptionDetailsTests : BaseDebugTestFixture {
         """;
     }
 
-    // A fault raised through the runtime's managed throw helper: it is attributed to the faulting user
-    // method, the helper frame stays in the trace (its type is [StackTraceHidden], its method is not), and
-    // 'Source' reports the core library - the property the exception object itself carries
+    // A divide fault is attributed to the faulting user method on every architecture, but the trace shape
+    // differs: on arm64 the JIT calls a managed throw helper whose type is [StackTraceHidden] - the frame
+    // stays listed (only method-level hiding drops one) and 'Source' follows it to the core library. On
+    // x64 the hardware fault surfaces in the user method itself and no helper frame exists
     [Test]
     public void ThrowHelperAttributionTest() {
         Launch();
@@ -68,8 +70,11 @@ public class ExceptionDetailsTests : BaseDebugTestFixture {
         Assert.That(stopped.Text, Is.EqualTo($"Exception thrown: 'System.DivideByZeroException' in {ProjectName}.dll"));
 
         var details = Host.SendRequestSync(new ExceptionInfoRequest() { ThreadId = stopped.ThreadId!.Value }).Details;
-        Assert.That(details?.StackTrace, Does.StartWith("   at Internal.Runtime.CompilerHelpers.ThrowHelpers.ThrowDivideByZeroException()"));
-        Assert.That(details?.Source, Is.EqualTo("System.Private.CoreLib"));
+        Assert.That(details?.StackTrace, Does.Contain("   at Faulty.Divide(Int32 left, Int32 right) in "), "The faulting user frame carries its source");
+        if (RuntimeInformation.ProcessArchitecture == Architecture.Arm64) {
+            Assert.That(details?.StackTrace, Does.StartWith("   at Internal.Runtime.CompilerHelpers.ThrowHelpers.ThrowDivideByZeroException()"));
+            Assert.That(details?.Source, Is.EqualTo("System.Private.CoreLib"));
+        }
     }
 
     // A wrapper over a wrapper: Microsoft's debugger nests the whole chain in 'innerException', shows the innermost
