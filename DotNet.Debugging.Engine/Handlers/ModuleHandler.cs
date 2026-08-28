@@ -25,8 +25,14 @@ public partial class ManagedDebugger {
         // EnC and disabled optimizations are only enabled for assemblies built by the user, which makes them the user code heuristic
         var jitFlags = corModule.GetJITCompilerFlags();
         var isUserCode = jitFlags == CorDebugJITCompilerFlags.CORDEBUG_JIT_DISABLE_OPTIMIZATION || jitFlags == CorDebugJITCompilerFlags.CORDEBUG_JIT_ENABLE_ENC;
-        if (JustMyCode && isUserCode && metadataReader.HasSymbols)
+        if (JustMyCode && isUserCode && metadataReader.HasSymbols) {
             corModule.SetJMCStatus(true, 0, []);
+            // Methods without sequence points (the compiler's '<Main>' bridge over an async Main) are not
+            // user code: the runtime then raises no user-first-chance dispatch there, the way Microsoft's
+            // debugger has it
+            foreach (var methodToken in metadataReader.GetMethodsWithoutSequencePoints())
+                TrySetMethodNotUserCode(corModule, methodToken);
+        }
 
         var module = new ModuleInfo(corModule, modulePath, metadataReader, isUserCode);
         modules[module.BaseAddress] = module;
@@ -41,6 +47,16 @@ public partial class ManagedDebugger {
         foreach (var breakpoint in breakpointManager.BindPending(module, RequireExactSource))
             OnBreakpointChanged?.Invoke(breakpoint);
         ContinueProcess();
+    }
+
+    private static void TrySetMethodNotUserCode(ICorDebugModule corModule, int methodToken) {
+        try {
+            if (corModule.GetFunctionFromToken(new MethodDefToken((uint)methodToken)) is ICorDebugFunction2 function)
+                function.TrySetJMCStatus(false);
+        }
+        catch {
+            // A method without a body cannot be resolved - nothing to mark
+        }
     }
 
     private ModuleMetadataReader? LoadModuleMetadata(ICorDebugModule corModule, string modulePath) {

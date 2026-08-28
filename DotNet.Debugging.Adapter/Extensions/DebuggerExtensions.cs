@@ -33,7 +33,7 @@ public static class DebuggerExtensions {
             return thread.Name;
         return thread.IsMain ? "Main Thread" : "<No Name>";
     }
-    // vsdbg's '1.00.0.0' form
+    // Microsoft's '1.00.0.0' form
     public static string? ToDisplayVersion(this Version? version) {
         if (version == null)
             return null;

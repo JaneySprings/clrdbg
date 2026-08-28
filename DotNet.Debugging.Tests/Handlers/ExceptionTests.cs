@@ -26,10 +26,12 @@ public class ExceptionTests : BaseDebugTestFixture {
         ConfigurationDone();
 
         var stopped = WaitForStopped(StoppedEvent.ReasonValue.Exception);
-        Assert.That(stopped.Text, Is.EqualTo("System.InvalidOperationException"));
+        Assert.That(stopped.Text, Is.EqualTo($"Exception thrown: 'System.InvalidOperationException' in {ProjectName}.dll"), "The 'stopped' text is the full message with the throwing module");
+        Assert.That(stopped.Description, Is.Null, "Microsoft's debugger sends no 'description' for exception stops");
 
         var exceptionInfo = Host.SendRequestSync(new ExceptionInfoRequest() { ThreadId = stopped.ThreadId!.Value });
         Assert.That(exceptionInfo.ExceptionId, Is.EqualTo("CLR/System.InvalidOperationException"));
+        Assert.That(exceptionInfo.Description, Is.EqualTo($"Exception thrown: 'System.InvalidOperationException' in {ProjectName}.dll: 'comparer boom'"));
         Assert.That(exceptionInfo.Details?.Message, Is.EqualTo("comparer boom"));
     }
 
@@ -45,6 +47,10 @@ public class ExceptionTests : BaseDebugTestFixture {
         Assert.That(details?.HResult, Is.EqualTo(unchecked((int)0x80131509)), "COR_E_INVALIDOPERATION");
         Assert.That(details?.Source, Is.EqualTo(ProjectName), "The assembly that raised it, not a source file");
         Assert.That(details?.FormattedDescription, Does.Contain("comparer boom"));
+        // The trace is built by the debugger from the frames the exception passed through, like Microsoft's debugger does -
+        // the in-process StackTrace property would hide [StackTraceHidden] frames and see no line information
+        Assert.That(details?.StackTrace, Does.StartWith("   at "));
+        Assert.That(details?.StackTrace, Does.Contain(":line "), "The user frame carries its source file and line");
     }
 
     [Test]
@@ -54,8 +60,7 @@ public class ExceptionTests : BaseDebugTestFixture {
         ConfigurationDone();
 
         var stopped = WaitForStopped(StoppedEvent.ReasonValue.Exception);
-        Assert.That(stopped.Text, Is.EqualTo("System.InvalidOperationException"));
-        Assert.That(stopped.Description, Does.Contain("user-unhandled"));
+        Assert.That(stopped.Text, Is.EqualTo($"An exception of type 'System.InvalidOperationException' occurred in {ProjectName}.dll but was not handled in user code"));
 
         // The throwing user frame must be on top of the stack
         var frame = GetTopStackFrame(stopped.ThreadId!.Value);
@@ -65,6 +70,22 @@ public class ExceptionTests : BaseDebugTestFixture {
         WaitForEvent<TerminatedEvent>();
         var exceptionStops = ReceivedEvents.OfType<StoppedEvent>().Count(it => it.Reason == StoppedEvent.ReasonValue.Exception);
         Assert.That(exceptionStops, Is.EqualTo(1), "The exception caught by the user code must not stop the execution");
+    }
+
+    [Test]
+    public void ExceptionVariableTest() {
+        Launch();
+        SetExceptionBreakpoints(new[] { "all" }, ("all", null));
+        ConfigurationDone();
+
+        var stopped = WaitForStopped(StoppedEvent.ReasonValue.Exception);
+        var exception = GetLocalVariables(stopped.ThreadId!.Value).FirstOrDefault(it => it.Name.StartsWith("$exception"));
+        Assert.That(exception, Is.Not.Null, "The stopped frame exposes the '$exception' variable");
+        Assert.That(exception!.Name, Is.EqualTo("$exception [InvalidOperationException]"));
+        // The value shows the exception's ToString: the type, the message and the recorded trace
+        Assert.That(exception.Value, Does.StartWith("{System.InvalidOperationException: comparer boom"));
+        Assert.That(exception.Value, Does.Contain("   at "), "The recorded frames are part of the value");
+        Assert.That(exception.Value, Does.EndWith("}"));
     }
 
     [Test]

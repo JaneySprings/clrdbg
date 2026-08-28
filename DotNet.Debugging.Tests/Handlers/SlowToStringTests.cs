@@ -46,7 +46,7 @@ public class SlowToStringTests : BaseDebugTestFixture {
 
         var first = members.First(it => it.Name == "[0] [MyClass]");
         var last = members.First(it => it.Name == "[4] [MyClass]");
-        Assert.That(first.Value, Is.EqualTo("{slow}"), "The first value is formatted through its ToString override, braced like vsdbg does");
+        Assert.That(first.Value, Is.EqualTo("{slow}"), "The first value is formatted through its ToString override, braced like Microsoft's debugger does");
         Assert.That(last.Value, Is.EqualTo("{MyClass}"), "Values formatted after the budget ran out fall back to the type name");
         Assert.That(stopwatch.ElapsedMilliseconds, Is.LessThan(5000), "One slow ToString must not stall the whole listing");
 

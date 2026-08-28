@@ -10,8 +10,9 @@ public static class RuntimeInfo {
     public static bool IsLinux => RuntimeInformation.IsOSPlatform(OSPlatform.Linux);
     public static bool IsAarch64 => RuntimeInformation.ProcessArchitecture == Architecture.Arm64;
 
-    public static string ExecExtension => IsWindows ? ".exe" : "";
+    public static string ExecExtension => IsWindows ? ".exe" : string.Empty;
     public static string LibExtension => IsWindows ? ".dll" : IsLinux ? ".so" : ".dylib";
+    public static string LibPrefix => IsWindows ? string.Empty : "lib";
     public static string HomeDirectory => IsWindows
         ? Environment.GetEnvironmentVariable("USERPROFILE")!
         : Environment.GetEnvironmentVariable("HOME")!;

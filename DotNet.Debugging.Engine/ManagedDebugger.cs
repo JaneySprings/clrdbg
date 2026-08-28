@@ -32,6 +32,10 @@ public partial class ManagedDebugger {
     private readonly Dictionary<int, ICorDebugThread> threads;
     // Threads whose current exception was thrown in, or passed through, user code
     private readonly HashSet<int> exceptionThreads;
+    private readonly Dictionary<int, ExceptionStopKind> exceptionStopKinds;
+    // The module each thread's current exception is attributed to, captured at the raise: the stop
+    // happens later in the dispatch, when the thread's frames no longer show it
+    private readonly Dictionary<int, string?> exceptionModules;
     private readonly BreakpointManager breakpointManager;
     private readonly VariableManager variableManager;
     private readonly VariableProvider variableProvider;
@@ -88,6 +92,8 @@ public partial class ManagedDebugger {
         modules = new Dictionary<CordbAddress, ModuleInfo>();
         threads = new Dictionary<int, ICorDebugThread>();
         exceptionThreads = new HashSet<int>();
+        exceptionStopKinds = new Dictionary<int, ExceptionStopKind>();
+        exceptionModules = new Dictionary<int, string?>();
         breakpointManager = new BreakpointManager();
         variableManager = new VariableManager();
         variableProvider = new VariableProvider(this, variableManager);
@@ -304,26 +310,65 @@ public partial class ManagedDebugger {
     public async Task<ExceptionInfo> GetExceptionInfoAsync(int threadId) {
         var exception = GetCurrentException(threadId) ?? throw new InvalidOperationException("No current exception on the thread");
         var typeName = ValueFormatter.Format(exception, false).TypeName;
-        var message = await GetPropertyTextAsync("Message") ?? string.Empty;
-        var source = await GetPropertyTextAsync("Source");
-        var stackTrace = await GetPropertyTextAsync("StackTrace");
-        var hresult = int.Parse(await GetPropertyTextAsync("HResult") ?? "0");
-        return new ExceptionInfo(typeName, message, source, stackTrace, hresult);
+        var kind = exceptionStopKinds.GetValueOrDefault(threadId, ExceptionStopKind.FirstChance);
+        // The frames of the raise are gone by the time of the stop, the module was captured back then
+        var moduleName = exceptionModules.GetValueOrDefault(threadId);
+        // The frame dependent parts are read before the property evaluations, which neuter the frames
+        var stackTrace = GetExceptionStackTrace(exception);
+        var message = await GetExceptionPropertyAsync(exception, threadId, "Message") ?? string.Empty;
+        var source = await GetExceptionPropertyAsync(exception, threadId, "Source");
+        var hresult = int.Parse(await GetExceptionPropertyAsync(exception, threadId, "HResult") ?? "0");
+        var innerExceptionChain = await GetInnerExceptionChainAsync(exception, threadId);
+        return new ExceptionInfo(typeName, message, source, stackTrace, hresult, kind, moduleName, innerExceptionChain);
+    }
+    // The whole 'InnerException' chain, the direct inner first - Microsoft's debugger nests them in 'innerException',
+    // shows the innermost exception's recorded trace in place of the reported one and names it in the
+    // description of the stop. An AggregateException contributes its first inner, the property's value
+    private async Task<List<InnerExceptionInfo>> GetInnerExceptionChainAsync(ICorDebugValue exception, int threadId) {
+        var chain = new List<InnerExceptionInfo>();
+        var handles = new List<ICorDebugHandleValue>();
+        try {
+            var current = exception;
+            // The depth guard breaks out of a cyclic chain
+            for (var depth = 0; depth < 32; depth++) {
+                var frame = GetILFrame(threadId, 0);
+                var inner = await FuncEval.GetPropertyValueAsync(current, frame, "InnerException");
+                if (inner == null || (inner is ICorDebugReferenceValue reference && reference.IsNull())) {
+                    if (inner is ICorDebugHandleValue nullHandle)
+                        nullHandle.TryDispose();
+                    break;
+                }
+                if (inner is ICorDebugHandleValue handle)
+                    handles.Add(handle);
 
-        async Task<string?> GetPropertyTextAsync(string propertyName) {
-            // Every func eval neuters the frames, so the frame is re-obtained for each property
-            var frame = GetILFrame(threadId, 0);
-            var value = await FuncEval.GetPropertyValueAsync(exception, frame, propertyName) ?? throw new InvalidOperationException($"The exception property '{propertyName}' returned no value");
-            try {
-                if (value is ICorDebugReferenceValue reference && reference.IsNull())
-                    return null;
-                var display = await variableProvider.FormatValueAsync(value, threadId, 0, false);
-                return display.Value;
+                var typeName = ValueFormatter.Format(inner, false).TypeName;
+                var stackTrace = GetExceptionStackTrace(inner);
+                var message = await GetExceptionPropertyAsync(inner, threadId, "Message") ?? string.Empty;
+                var source = await GetExceptionPropertyAsync(inner, threadId, "Source");
+                var hresult = int.Parse(await GetExceptionPropertyAsync(inner, threadId, "HResult") ?? "0");
+                chain.Add(new InnerExceptionInfo(typeName, message, source, stackTrace, hresult));
+                current = inner;
             }
-            finally {
-                if (value is ICorDebugHandleValue handle)
-                    handle.TryDispose();
-            }
+            return chain;
+        }
+        finally {
+            foreach (var handle in handles)
+                handle.TryDispose();
+        }
+    }
+    private async Task<string?> GetExceptionPropertyAsync(ICorDebugValue exception, int threadId, string propertyName) {
+        // Every func eval neuters the frames, so the frame is re-obtained for each property
+        var frame = GetILFrame(threadId, 0);
+        var value = await FuncEval.GetPropertyValueAsync(exception, frame, propertyName) ?? throw new InvalidOperationException($"The exception property '{propertyName}' returned no value");
+        try {
+            if (value is ICorDebugReferenceValue reference && reference.IsNull())
+                return null;
+            var display = await variableProvider.FormatValueAsync(value, threadId, 0, false);
+            return display.Value;
+        }
+        finally {
+            if (value is ICorDebugHandleValue handle)
+                handle.TryDispose();
         }
     }
     // Moves the instruction pointer of the thread's active frame to the given line ('Set Next Statement')
@@ -594,6 +639,8 @@ public partial class ManagedDebugger {
         ClearEntryPointBreakpoint();
         stopAtEntryPending = false;
         exceptionThreads.Clear();
+        exceptionStopKinds.Clear();
+        exceptionModules.Clear();
         stepController.Disable();
         threads.Clear();
         ClearReferences();
@@ -646,16 +693,16 @@ public partial class ManagedDebugger {
             var metadataImport = function.GetModule().GetMetaDataInterface<IMetaDataImport>();
             var methodName = metadataImport.GetMethodProps(token).szMethod;
             var typeName = metadataImport.GetTypeDefProps(function.GetClass().GetToken()).szTypeDef;
-            return $"{typeName}.{methodName}({GetParameterList(module.MetadataReader.PeMetadataReader, token)})";
+            return $"{typeName}.{methodName}({GetParameterList(module.MetadataReader.PeMetadataReader, token, DisplayNameSignatureProvider.Instance)})";
         }
         catch {
             return "Unknown";
         }
     }
-    private static string GetParameterList(MetadataReader reader, int methodToken) {
+    private static string GetParameterList(MetadataReader reader, int methodToken, ISignatureTypeProvider<string, object?> typeProvider) {
         try {
             var method = reader.GetMethodDefinition(MetadataTokens.MethodDefinitionHandle(methodToken));
-            var parameterTypes = method.DecodeSignature(DisplayNameSignatureProvider.Instance, null).ParameterTypes;
+            var parameterTypes = method.DecodeSignature(typeProvider, null).ParameterTypes;
             // Sequence 0 is the return value, the rest are the 1-based positional parameters
             var parameterNames = method.GetParameters()
                 .Select(reader.GetParameter)

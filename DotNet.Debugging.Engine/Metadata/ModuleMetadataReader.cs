@@ -75,6 +75,18 @@ internal sealed class ModuleMetadataReader : IDisposable {
         return entryPointToken;
     }
 
+    // Methods without any sequence points, like the compiler's '<Main>' bridge over an async Main - Just
+    // My Code treats them as non-user code, the way Microsoft's debugger does
+    public IEnumerable<int> GetMethodsWithoutSequencePoints() {
+        var reader = PdbMetadataReader;
+        if (reader == null)
+            yield break;
+        foreach (var handle in reader.MethodDebugInformation) {
+            if (reader.GetMethodDebugInformation(handle).SequencePointsBlob.IsNil)
+                yield return MetadataTokens.GetToken(handle.ToDefinitionHandle());
+        }
+    }
+
     public SourceLocation? GetSourceLocation(int methodToken, int ilOffset) {
         var reader = PdbMetadataReader;
         if (reader == null)

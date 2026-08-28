@@ -22,7 +22,7 @@ internal static class CorDebugExceptionObjectStackFrameMarshaller {
 
     public unsafe static CorDebugExceptionObjectStackFrame ConvertToManaged(in Native unmanaged) {
         return new CorDebugExceptionObjectStackFrame {
-            pModule = (ComInterfaceMarshaller<ICorDebugModule>.ConvertToManaged((void*)unmanaged.pModule) ?? throw new InvalidOperationException("Native CorDebugExceptionObjectStackFrame.pModule was null.")),
+            pModule = ComInterfaceMarshaller<ICorDebugModule>.ConvertToManaged((void*)unmanaged.pModule),
             ip = unmanaged.ip,
             methodDef = unmanaged.methodDef,
             isLastForeignExceptionFrame = unmanaged.isLastForeignExceptionFrame

@@ -43,7 +43,7 @@ internal class VariableProvider {
     private const string ResultsViewEmptyName = "Empty";
     private const string ResultsViewEmptyMessage = "\"Enumeration yielded no results\"";
     // The implicit evaluations (ToString, DebuggerDisplay) of one variables request share this time budget,
-    // so a single slow override cannot stall a whole listing - vsdbg cuts the formatting off the same way
+    // so a single slow override cannot stall a whole listing - Microsoft's debugger cuts the formatting off the same way
     private const int ImplicitEvalBudgetMilliseconds = 2000;
 
     private readonly ManagedDebugger debugger;
@@ -518,7 +518,7 @@ internal class VariableProvider {
         }
     }
     // The enumeration compiles against System.Linq, which the debuggee may not have loaded. Deliberate divergence:
-    // vsdbg enumerates without loading it (Concord interprets the IL against metadata read from disk), clrdbg loads it
+    // Microsoft's debugger enumerates without loading it (Concord interprets the IL against metadata read from disk), clrdbg loads it
     private async Task EnsureSystemLinqLoadedAsync(EvaluationContext context) {
         if (debugger.Modules.Any(it => string.Equals(it.Name, "System.Linq.dll", StringComparison.OrdinalIgnoreCase)))
             return;
@@ -526,7 +526,7 @@ internal class VariableProvider {
         if (loadResult.Error != null)
             throw new EvaluationException(loadResult.Error);
     }
-    // The expression vsdbg reports for enumerated items: 'new System.Linq.SystemCore_EnumerableDebugView<T>(value).Items'
+    // The expression reported for enumerated items: 'new System.Linq.SystemCore_EnumerableDebugView<T>(value).Items'
     private static string? GetResultsViewEvaluateName(VariableReference reference, ICorDebugArrayValue arrayValue, bool isGeneric) {
         if (reference.EvaluateName == null)
             return null;
@@ -558,16 +558,56 @@ internal class VariableProvider {
 
     private async Task<ICorDebugValue> CreateDebuggerProxyAsync(ICorDebugValue value, string proxyTypeName, int threadId) {
         var valueType = value.GetExactType();
-        var module = valueType.GetClass().GetModule();
-        var metadataImport = module.GetMetaDataInterface<IMetaDataImport>();
-        var proxyTypeDef = metadataImport.FindNestedTypeDef(proxyTypeName) ?? throw new InvalidOperationException($"The debugger proxy type '{proxyTypeName}' was not found");
+        var valueModule = valueType.GetClass().GetModule();
+        var parsedName = SerializedTypeName.Parse(proxyTypeName);
+        var (module, proxyTypeDef) = FindLoadedTypeDef(parsedName.FullName, valueModule)
+            ?? throw new InvalidOperationException($"The debugger proxy type '{proxyTypeName}' was not found");
         // TODO: select the constructor by signature, proxy types may have several
-        var constructorDef = metadataImport.FindMethod(proxyTypeDef, ".ctor", 0, 0);
+        var constructorDef = module.GetMetaDataInterface<IMetaDataImport>().FindMethod(proxyTypeDef, ".ctor", 0, 0);
         var constructor = module.GetFunctionFromToken(constructorDef);
 
+        // An open generic proxy ('ICollectionDebugView`1' on List<T>) is closed over the value's own type
+        // arguments, a closed one ('CollectionDebuggerProxy`1[...Match]' on MatchCollection) names them itself
+        var typeArguments = parsedName.TypeArguments.Count == 0
+            ? valueType.GetTypeParameters()
+            : parsedName.TypeArguments.Select(it => ResolveSerializedType(it, valueModule)).ToArray();
+
         var eval = debugger.GetThread(threadId).CreateEval();
-        var proxy = await debugger.FuncEval.NewObjectAsync(eval, constructor, valueType.GetTypeParameters(), [value]);
+        var proxy = await debugger.FuncEval.NewObjectAsync(eval, constructor, typeArguments, [value]);
         return proxy ?? throw new InvalidOperationException($"The debugger proxy '{proxyTypeName}' could not be created");
+    }
+    private ICorDebugType ResolveSerializedType(SerializedTypeName typeName, ICorDebugModule preferredModule) {
+        var (module, typeDef) = FindLoadedTypeDef(typeName.FullName, preferredModule)
+            ?? throw new InvalidOperationException($"The type '{typeName.FullName}' was not found in the loaded modules");
+        var typeArguments = typeName.TypeArguments.Select(it => ResolveSerializedType(it, module)).ToArray();
+        var elementType = IsValueTypeDef(module.GetMetaDataInterface<IMetaDataImport>(), typeDef) ? CorElementType.VALUETYPE : CorElementType.CLASS;
+        return ((ICorDebugClass2)module.GetClassFromToken(typeDef)).GetParameterizedType(elementType, typeArguments.Length, typeArguments);
+    }
+    // The serialized name is looked up without its assembly qualifier, so a type living elsewhere (e.g. in the
+    // core library) is searched for across the loaded modules, starting from the module the search prefers
+    private (ICorDebugModule, TypeDefToken)? FindLoadedTypeDef(string fullName, ICorDebugModule preferredModule) {
+        var typeDef = preferredModule.GetMetaDataInterface<IMetaDataImport>().FindNestedTypeDef(fullName);
+        if (typeDef != null)
+            return (preferredModule, typeDef.Value);
+        foreach (var moduleInfo in debugger.Modules) {
+            typeDef = moduleInfo.Module.GetMetaDataInterface<IMetaDataImport>().FindNestedTypeDef(fullName);
+            if (typeDef != null)
+                return (moduleInfo.Module, typeDef.Value);
+        }
+        return null;
+    }
+    private static bool IsValueTypeDef(IMetaDataImport metadataImport, TypeDefToken typeDef) {
+        var extends = metadataImport.GetTypeDefProps(typeDef).ptkExtends;
+        if (extends.IsNil)
+            return false;
+        string baseTypeName;
+        if (extends.Type == CorTokenType.mdtTypeDef)
+            baseTypeName = metadataImport.GetTypeDefProps(new TypeDefToken(extends.Value)).szTypeDef;
+        else if (extends.Type == CorTokenType.mdtTypeRef)
+            baseTypeName = metadataImport.GetTypeRefProps(new TypeRefToken(extends.Value)).szName;
+        else
+            return false;
+        return baseTypeName == "System.ValueType" || baseTypeName == "System.Enum";
     }
     // Non-zero for values with members or elements to expand
     private int CreateChildrenReference(ICorDebugValue value, string typeName, int threadId, int frameDepth, ICorDebugValue? proxyValue, string? evaluateName) {

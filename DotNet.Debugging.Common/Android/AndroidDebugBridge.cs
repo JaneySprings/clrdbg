@@ -39,17 +39,6 @@ public static class AndroidDebugBridge {
 
         return string.Join(Environment.NewLine, result.StandardOutput);
     }
-    public static string Reverse(string serial, int target, int destination) {
-        var adb = AndroidSdkLocator.GetAdbPath();
-        var result = new ProcessRunner(adb, new ProcessArgumentBuilder()
-            .Append("-s", serial)
-            .Append("reverse")
-            .Append($"tcp:{target}")
-            .Append($"tcp:{destination}"))
-            .WaitForExit();
-
-        return string.Join(Environment.NewLine, result.StandardOutput);
-    }
     public static string RemoveForward(string serial) {
         var adb = AndroidSdkLocator.GetAdbPath();
         var result = new ProcessRunner(adb, new ProcessArgumentBuilder()
@@ -63,18 +52,27 @@ public static class AndroidDebugBridge {
 
         return string.Join(Environment.NewLine, result.StandardOutput);
     }
-    public static string RemoveReverse(string serial) {
+    public static List<string> GetDevices() {
         var adb = AndroidSdkLocator.GetAdbPath();
-        var result = new ProcessRunner(adb, new ProcessArgumentBuilder()
-            .Append("-s", serial)
-            .Append("reverse")
-            .Append("--remove-all"))
-            .WaitForExit();
+        ProcessResult result = new ProcessRunner(adb, new ProcessArgumentBuilder()
+            .Append("devices")
+            .Append("-l"))
+            .WaitForExit(5000);
 
         if (!result.Success)
             throw new InvalidOperationException(string.Join(Environment.NewLine, result.StandardError));
 
-        return string.Join(Environment.NewLine, result.StandardOutput);
+        var devices = new List<string>();
+        foreach (var line in result.StandardOutput) {
+            if (line.StartsWith("list of", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var data = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (data.Length > 1 && data[1].Equals("device", StringComparison.OrdinalIgnoreCase))
+                devices.Add(data[0]);
+        }
+
+        return devices;
     }
 
     public static void Install(string serial, string apk, IProcessLogger? logger = null) {
@@ -121,16 +119,6 @@ public static class AndroidDebugBridge {
             .Append("logcat")
             .Append("-c"))
             .WaitForExit();
-    }
-    public static Process Logcat(string serial, string buffer, string filter, IProcessLogger logger) {
-        var adb = AndroidSdkLocator.GetAdbPath();
-        var arguments = new ProcessArgumentBuilder()
-            .Append("-s", serial)
-            .Append("logcat")
-            .Append("-s", filter)
-            .Append("-b", buffer)
-            .Append("-v", "tag");
-        return new ProcessRunner(adb, arguments, logger).Start();
     }
     public static Process Logcat(string serial, IProcessLogger logger) {
         var adb = AndroidSdkLocator.GetAdbPath();

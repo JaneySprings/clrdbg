@@ -27,6 +27,12 @@ public static class Resources {
     public const string MsgBreakpointNoFunctions = "No functions matching '{0}' were found.";
     public const string MsgBreakpointError = "Error binding breakpoint: {0}";
 
+    public const string MsgExceptionThrown = "Exception thrown: '{0}' in {1}";
+    public const string MsgExceptionUnhandled = "An unhandled exception of type '{0}' occurred in {1}";
+    public const string MsgExceptionUserUnhandled = "An exception of type '{0}' occurred in {1} but was not handled in user code";
+    // Appended to the exception description when the reported exception wraps another one
+    public const string MsgExceptionInnerFound = "\n Inner exceptions found, see $exception in variables window for more details.\n Innermost exception \t {0} : {1}";
+
     // public const string MsgMissingRuntimeId = $"Missing required property: 'runtimeIdentifier'.";
     public const string MsgMissingAssets = "Missing required property: 'assets'.";
     public const string MsgMissingCoreclrHost =

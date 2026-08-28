@@ -15,6 +15,7 @@ public partial class ManagedDebugger {
         var threadId = callbackEvent.Thread.GetId();
         threads.Remove(threadId);
         exceptionThreads.Remove(threadId);
+        exceptionModules.Remove(threadId);
         OnThreadExited?.Invoke(threadId);
         ContinueProcess();
     }

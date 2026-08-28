@@ -7,6 +7,7 @@ internal static class AttributeNames {
     public const string DebuggerBrowsable = "System.Diagnostics.DebuggerBrowsableAttribute";
     public const string DebuggerDisplay = "System.Diagnostics.DebuggerDisplayAttribute";
     public const string DebuggerTypeProxy = "System.Diagnostics.DebuggerTypeProxyAttribute";
+    public const string StackTraceHidden = "System.Diagnostics.StackTraceHiddenAttribute";
     public const string Extension = "System.Runtime.CompilerServices.ExtensionAttribute";
     public const string Flags = "System.FlagsAttribute";
 

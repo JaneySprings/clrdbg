@@ -37,7 +37,7 @@ public class TerminalLauncher : IDisposable {
             Kind = console == ConsoleType.ExternalTerminal ? RunInTerminalArguments.KindValue.External : RunInTerminalArguments.KindValue.Integrated,
             Cwd = console == ConsoleType.ExternalTerminal ? Path.GetDirectoryName(executablePath) : string.Empty,
         };
-        // vsdbg sends an empty environment for an external terminal and none for an integrated one
+        // Microsoft's debugger sends an empty environment for an external terminal and none for an integrated one
         if (console == ConsoleType.ExternalTerminal)
             request.Env = new Dictionary<string, object>();
         return request;

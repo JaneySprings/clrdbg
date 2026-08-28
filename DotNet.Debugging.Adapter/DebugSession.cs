@@ -64,8 +64,7 @@ public partial class DebugSession : Session {
         }
 
         Protocol.SendEvent(new StoppedEvent(StoppedEvent.ReasonValue.Exception) {
-            Description = exception.Kind == ExceptionStopKind.UserUnhandled ? "Paused on user-unhandled exception" : "Paused on exception",
-            Text = exception.TypeName ?? "Exception",
+            Text = exception.ToDisplayMessage(),
             ThreadId = exception.ThreadId,
             AllThreadsStopped = true,
         });

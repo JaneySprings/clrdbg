@@ -17,7 +17,8 @@ public class VariableTests : BaseDebugTestFixture {
         custom.Add("first");
         custom.Add("second");
         var legacy = new LegacyCollection();
-        Console.WriteLine($"{count} {title} {numbers.Length} {item.PublicProperty} {builder.Length} {custom} {legacy}"); // marker:stop
+        var matches = System.Text.RegularExpressions.Regex.Matches("aa baa", "a+");
+        Console.WriteLine($"{count} {title} {numbers.Length} {item.PublicProperty} {builder.Length} {custom} {legacy} {matches.Count}"); // marker:stop
         Console.WriteLine("done");
 
         public class SampleClass {
@@ -186,6 +187,18 @@ public class VariableTests : BaseDebugTestFixture {
         Assert.That(listMembers.Any(it => it.Name == "Results View"), Is.False, "A value shown through a DebuggerTypeProxy already enumerates through the proxy");
         var rawView = listMembers.First(it => it.Name == "Raw View");
         Assert.That(GetVariables(rawView.VariablesReference).Any(it => it.Name == "Results View"), Is.False, "The 'Raw View' shows the plain members only");
+    }
+
+    [Test]
+    public void ClosedGenericProxyTest() {
+        var threadId = StopAtMarker();
+        var matches = GetLocalVariables(threadId).First(it => it.Name == "matches [MatchCollection]");
+        Assert.That(matches.Value, Is.EqualTo("Count = 2"), "The DebuggerDisplay of MatchCollection must run, not a proxy creation error");
+
+        // MatchCollection's proxy is 'CollectionDebuggerProxy`1[...Match]' - closed over Match in the serialized
+        // name, its type argument comes from that name rather than from the value's own type parameters
+        var members = GetVariables(matches.VariablesReference);
+        Assert.That(members.Select(it => it.Name), Is.EqualTo(new[] { "[0] [Match]", "[1] [Match]", "Raw View" }), "The proxy's 'Items' array stands in for the members");
     }
 
     [Test]

@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Text.RegularExpressions;
 using DotNet.Debugging.Common.Interop;
 
 namespace DotNet.Debugging.Common.Android;
@@ -39,11 +38,11 @@ public static class AndroidEmulator {
         return serial;
     }
     private static string? WaitForSerial() {
-        var currentState = GetDevices();
+        var currentState = AndroidDebugBridge.GetDevices();
 
         for (int i = 0; i < AppearingRetryCount; i++) {
             Thread.Sleep(1000);
-            var newState = GetDevices();
+            var newState = AndroidDebugBridge.GetDevices();
 
             if (newState.Count > currentState.Count) {
                 var newSerial = newState.Find(n => !currentState.Any(o => n.Equals(o)));
@@ -54,34 +53,10 @@ public static class AndroidEmulator {
         return null;
     }
     private static string? SerialIfRunning(string avdName) {
-        var serials = GetDevices().Where(it => it.StartsWith("emulator-"));
+        var serials = AndroidDebugBridge.GetDevices().Where(it => it.StartsWith("emulator-"));
         if (serials.Contains(avdName))
             return avdName; // We allow to use avdName property as serial for running devices
         return serials.FirstOrDefault(it => GetEmulatorName(it) == avdName);
-    }
-
-    public static List<string> GetDevices() {
-        var adb = AndroidSdkLocator.GetAdbPath();
-        ProcessResult result = new ProcessRunner(adb, new ProcessArgumentBuilder()
-            .Append("devices")
-            .Append("-l"))
-            .WaitForExit(5000);
-
-        if (!result.Success)
-            throw new InvalidOperationException(string.Join(Environment.NewLine, result.StandardError));
-
-        string regex = @"^(?<serial>\S+?)(\s+?)\s+(?<state>\S+)";
-        var devices = new List<string>();
-
-        foreach (string line in result.StandardOutput) {
-            MatchCollection matches = Regex.Matches(line, regex, RegexOptions.Singleline);
-            if (matches.Count == 0)
-                continue;
-
-            devices.Add(matches.First().Groups["serial"].Value);
-        }
-
-        return devices;
     }
     public static string GetEmulatorName(string serial) {
         var adb = AndroidSdkLocator.GetAdbPath();

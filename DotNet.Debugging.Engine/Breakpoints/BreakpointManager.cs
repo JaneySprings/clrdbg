@@ -89,11 +89,11 @@ internal class BreakpointManager {
                 var statusBefore = breakpoint.Status;
                 if (TryBind(breakpoint, [module], requireExactSource))
                     changed.Add(breakpoint);
-                // vsdbg also reports a breakpoint rejected because an equally named source did not match
+                // Microsoft's debugger also reports a breakpoint rejected because an equally named source did not match
                 else if (breakpoint.Status == BreakpointStatus.SourceMismatch && statusBefore != BreakpointStatus.SourceMismatch)
                     changed.Add(breakpoint);
             }
-            // vsdbg moves a binding made by file name alone to a module whose document matches exactly
+            // Microsoft's debugger moves a binding made by file name alone to a module whose document matches exactly
             else if (breakpoint.ResolvedLocation != null && !breakpoint.ResolvedLocation.IsExactMatch) {
                 if (TryRebind(breakpoint, module, requireExactSource))
                     changed.Add(breakpoint);

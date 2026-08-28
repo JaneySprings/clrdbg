@@ -1,3 +1,4 @@
+using System.Text;
 using DotNet.Debugging.Adapter.Symbols;
 using DotNet.Debugging.Common.Logging;
 using DotNet.Debugging.Engine.Enums;
@@ -43,26 +44,76 @@ public static class ServerExtensions {
         };
     }
 
+    public static string ToDisplayMessage(this ExceptionStopInfo exception) {
+        return FormatExceptionMessage(exception.Kind, exception.TypeName, exception.ModuleName);
+    }
     public static DebugProtocol.ExceptionInfoResponse ToExceptionInfoResponse(this ExceptionInfo exception) {
-        var shortTypeName = exception.TypeName.Substring(exception.TypeName.LastIndexOf('.') + 1);
-        return new DebugProtocol.ExceptionInfoResponse($"CLR/{exception.TypeName}", DebugProtocol.ExceptionBreakMode.Always) {
-            Description = $"Exception thrown: '{exception.TypeName}' in {exception.Source}.dll: '{exception.Message}'",
+        var description = $"{FormatExceptionMessage(exception.Kind, exception.TypeName, exception.ModuleName)}: '{exception.Message}'";
+        var details = CreateExceptionDetails(exception.TypeName, exception.Message, exception.Source, exception.StackTrace, exception.HResult);
+        if (exception.InnerExceptionChain.Count > 0) {
+            // Microsoft's debugger nests the whole chain and puts the innermost exception forward: the description names
+            // it and its recorded trace replaces the wrapper's, which had barely started when the wrapper
+            // stop was reported - even when the innermost was never thrown and has no trace at all
+            var innermost = exception.InnerExceptionChain[exception.InnerExceptionChain.Count - 1];
+            description += string.Format(Resources.MsgExceptionInnerFound, innermost.TypeName, innermost.Message);
+            details.StackTrace = innermost.StackTrace;
+            var parent = details;
+            foreach (var inner in exception.InnerExceptionChain) {
+                var innerDetails = CreateExceptionDetails(inner.TypeName, inner.Message, inner.Source, inner.StackTrace, inner.HResult);
+                parent.InnerException = new List<DebugProtocol.ExceptionDetails> { innerDetails };
+                parent = innerDetails;
+            }
+        }
+        return new DebugProtocol.ExceptionInfoResponse($"CLR/{exception.TypeName}", exception.Kind.ToBreakMode()) {
+            Description = description,
             Code = 0,
-            Details = new DebugProtocol.ExceptionDetails {
-                Message = exception.Message,
-                TypeName = shortTypeName,
-                FullTypeName = exception.TypeName,
-                EvaluateName = "$exception",
-                StackTrace = exception.StackTrace,
-                InnerException = new List<DebugProtocol.ExceptionDetails>(),
-                FormattedDescription = $"**{exception.TypeName}:** '{exception.Message}'",
-                HResult = exception.HResult,
-                Source = exception.Source,
-            },
+            Details = details,
         };
     }
+    // The library pre-populates 'innerException' with an empty list, which Microsoft's debugger only sends when there is one
+    private static DebugProtocol.ExceptionDetails CreateExceptionDetails(string typeName, string message, string? source, string? stackTrace, int hresult) {
+        var shortTypeName = typeName.Substring(typeName.LastIndexOf('.') + 1);
+        return new DebugProtocol.ExceptionDetails {
+            Message = message,
+            TypeName = shortTypeName,
+            FullTypeName = typeName,
+            EvaluateName = "$exception",
+            StackTrace = stackTrace,
+            InnerException = null,
+            FormattedDescription = $"**{typeName}:** '{EscapeMarkdown(message)}'",
+            HResult = hresult,
+            Source = source,
+        };
+    }
+    public static DebugProtocol.ExceptionBreakMode ToBreakMode(this ExceptionStopKind kind) {
+        return kind switch {
+            ExceptionStopKind.Unhandled => DebugProtocol.ExceptionBreakMode.Unhandled,
+            ExceptionStopKind.UserUnhandled => DebugProtocol.ExceptionBreakMode.UserUnhandled,
+            _ => DebugProtocol.ExceptionBreakMode.Always
+        };
+    }
+    private static string FormatExceptionMessage(ExceptionStopKind kind, string? typeName, string? moduleName) {
+        var format = kind switch {
+            ExceptionStopKind.Unhandled => Resources.MsgExceptionUnhandled,
+            ExceptionStopKind.UserUnhandled => Resources.MsgExceptionUserUnhandled,
+            _ => Resources.MsgExceptionThrown
+        };
+        return string.Format(format, typeName ?? "Exception", moduleName ?? "Unknown Module.");
+    }
+    // The 'formattedDescription' is rendered as markdown, so the characters markdown treats specially are
+    // escaped - and only those: a quote or an apostrophe passes through unescaped
+    private const string MarkdownSpecialCharacters = "\\`*_{}[]()#+-.!|<>~";
+    private static string EscapeMarkdown(string text) {
+        var builder = new StringBuilder(text.Length);
+        foreach (var symbol in text) {
+            if (MarkdownSpecialCharacters.Contains(symbol))
+                builder.Append('\\');
+            builder.Append(symbol);
+        }
+        return builder.ToString();
+    }
     public static DebugProtocol.Source ToSource(this SourceLocation location, SourceLinkResolver? sourceLinkResolver) {
-        // The library pre-populates 'sources' and 'checksums' with empty lists, which vsdbg never sends
+        // The library pre-populates 'sources' and 'checksums' with empty lists, which Microsoft's debugger never sends
         var source = new DebugProtocol.Source {
             Name = Path.GetFileName(location.FilePath),
             Path = location.FilePath,

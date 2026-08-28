@@ -22,4 +22,14 @@ public static class CorDebugCodeExtensions {
         Marshal.ThrowExceptionForHR(instance.TryGetVersionNumber(out var nVersion));
         return checked((int)nVersion);
     }
+
+    public static CorDebugIlToNativeMap[] GetILToNativeMapping(this ICorDebugCode instance) {
+        Marshal.ThrowExceptionForHR(instance.TryGetILToNativeMapping(0u, out var pcMap, null));
+        if (pcMap == 0) {
+            return Array.Empty<CorDebugIlToNativeMap>();
+        }
+        var map = new CorDebugIlToNativeMap[pcMap];
+        Marshal.ThrowExceptionForHR(instance.TryGetILToNativeMapping(pcMap, out _, map));
+        return map;
+    }
 }
