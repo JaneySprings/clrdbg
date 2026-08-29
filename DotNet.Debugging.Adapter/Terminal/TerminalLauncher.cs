@@ -3,6 +3,7 @@ using System.Text.Json;
 using DotNet.Debugging.Engine.Enums;
 using DotNet.Debugging.Engine.Models;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
+using LaunchRequest = DotNet.Debugging.Engine.Models.LaunchRequest;
 
 namespace DotNet.Debugging.Adapter.Terminal;
 
@@ -42,16 +43,16 @@ public class TerminalLauncher : IDisposable {
             request.Env = new Dictionary<string, object>();
         return request;
     }
-    public int LaunchProgram(LaunchInfo launchInfo) {
+    public int LaunchProgram(LaunchRequest launchRequest) {
         WaitForHost();
 
         var reader = new StreamReader(pipeServer);
         var writer = new StreamWriter(pipeServer) { AutoFlush = true };
         writer.WriteLine(JsonSerializer.Serialize(new TerminalLaunchRequest() {
-            Program = launchInfo.Program,
-            Arguments = launchInfo.Arguments,
-            WorkingDirectory = launchInfo.WorkingDirectory,
-            Environment = launchInfo.Environment,
+            Program = launchRequest.Program,
+            Arguments = launchRequest.Arguments,
+            WorkingDirectory = launchRequest.WorkingDirectory,
+            Environment = launchRequest.Environment,
         }));
 
         var readTask = Task.Run(() => reader.ReadLine());

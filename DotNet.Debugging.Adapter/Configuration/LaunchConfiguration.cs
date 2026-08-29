@@ -75,9 +75,9 @@ public class LaunchConfiguration : BaseConfiguration {
         }
     }
 
-    public LaunchInfo GetLaunchInfo() {
+    public LaunchRequest GetLaunchRequest() {
         ArgumentNullException.ThrowIfNull(Program);
-        var info = new LaunchInfo(Program);
+        var info = new LaunchRequest(Program);
         info.Arguments = Arguments;
         info.WorkingDirectory = WorkingDirectory ?? Path.GetDirectoryName(Program);
         info.Environment = EnvironmentVariables;

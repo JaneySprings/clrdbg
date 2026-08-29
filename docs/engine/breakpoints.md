@@ -112,7 +112,7 @@ debuggee or moving on:
 
 ## Entry point
 
-With `LaunchInfo.StopAtEntry`, `ModuleHandler.TrySetEntryPointBreakpoint` places a one-shot
+With `LaunchRequest.StopAtEntry`, `ModuleHandler.TrySetEntryPointBreakpoint` places a one-shot
 `ICorDebugFunctionBreakpoint` on the first loaded assembly that has a managed entry point
 (`CorHeader.EntryPointToken`, a MethodDef), at the entry method's first sequence point. It is not
 tracked by the manager: `TryHandleEntryPointBreakpoint` recognizes it, deactivates it and reports

@@ -24,7 +24,7 @@ Client (VS Code) ──DAP──> DotNet.Debugging.Adapter ──models/events�
 | `Evaluation/` | The expression evaluator: `ExpressionCompiler` compiles C# with the Roslyn expression compiler against the loaded modules' metadata, `CilInterpreter` executes the emitted CIL, running anything that touches the debuggee through `FuncEvalRunner` (`ICorDebugEval`). |
 | `Metadata/` | `ModuleMetadataReader` (PE metadata + portable PDB: sequence points, local names, async stepping info, Source Link, checksums), `SequencePointResolver` (source position → IL offset), `SourceLinkMap`, signature providers. |
 | `Interop/` | `DbgShimHost` (runtime startup registration and the remote transport through dbgshim), `DiagnosticsClientHelper` (resuming a diagnostics-suspended runtime), `NativeThreadNames` (OS thread names). |
-| `Models/` | The objects handed to the host: `StopInfo`, `ExceptionStopInfo`, `ThreadInfo`, `StackFrameInfo`, `SourceLocation`, `VariableInfo`, `Breakpoint`, `ModuleInfo`, `ExceptionInfo`, `LaunchInfo`, `RemoteAttachInfo`, the request objects. |
+| `Models/` | The objects handed to the host: `StopInfo`, `ExceptionStopInfo`, `ThreadInfo`, `StackFrameInfo`, `SourceLocation`, `VariableInfo`, `Breakpoint`, `ModuleInfo`, `ExceptionInfo`, `LaunchRequest`, `RemoteAttachInfo`, the request objects. |
 | `Enums/` | `StopReason`, `StepKind`, `BreakpointStatus`, `VariableKind`, `VariableVisibility`, `ExceptionStopKind`, `StackFrameKind`, `ConsoleType`. |
 | `Extensions/` | Helpers over `CorApi` for the engine: value unwrapping (`UnwrapDebugValue`), field lookup by name, metadata token attributes and type lookup. |
 | `Logging/` | `ICustomLogger` and the static `DebuggerLoggingService` the host plugs its logger into. |
@@ -42,7 +42,7 @@ debugger.OnStopped += stop => SendStopped(stop.ThreadId, stop.Reason, stop.HitBr
 debugger.OnModuleLoaded += module => SendModule(module.ToModule(id, justMyCode));
 
 debugger.JustMyCode = true;
-debugger.Launch(new LaunchInfo(program) { Arguments = args, StopAtEntry = false });
+debugger.Launch(new LaunchRequest(program) { Arguments = args, StopAtEntry = false });
 var breakpoints = debugger.SetBreakpoints(path, requests);   // bound when the module loads
 await debugger.ConfigurationDoneAsync();                     // the launch happens here
 

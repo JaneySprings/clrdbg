@@ -7,6 +7,7 @@ using DotNet.Debugging.Engine.Logging;
 using DotNet.Debugging.Engine.Models;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
 using Breakpoint = DotNet.Debugging.Engine.Models.Breakpoint;
+using LaunchRequest = DotNet.Debugging.Engine.Models.LaunchRequest;
 
 namespace DotNet.Debugging.Adapter;
 
@@ -38,7 +39,7 @@ public partial class DebugSession : Session {
         session.OnOutput += TargetOutput;
         session.OnLogPoint += TargetLogPoint;
         session.OnBreakpointChanged += BreakpointStatusChanged;
-        session.RunInTerminalHandler = RunInTerminal;
+        session.OnTerminalLaunchRequested += TerminalLaunchRequested;
     }
 
     protected override void OnEmergencyStopReceived() => debugAgent?.Dispose();
@@ -111,12 +112,12 @@ public partial class DebugSession : Session {
     private void TargetLogPoint(string message) {
         OnOutputDataReceived($"[LogPoint]: {message}");
     }
-    private int RunInTerminal(LaunchInfo launchInfo) {
+    private void TerminalLaunchRequested(LaunchRequest launchRequest) {
         if (debugAgent is not LaunchDebugAgent launchDebugAgent)
             throw new InvalidOperationException();
 
         ArgumentNullException.ThrowIfNull(launchDebugAgent.TerminalLauncher);
-        return launchDebugAgent.TerminalLauncher.LaunchProgram(launchInfo);
+        launchRequest.ProcessId = launchDebugAgent.TerminalLauncher.LaunchProgram(launchRequest);
     }
 
     private void ResetHandles() {

@@ -17,9 +17,9 @@ first line. The work starts in `ConfigurationDoneAsync`:
   registers with dbgshim *before* `DiagnosticsClientHelper.ResumeRuntimeAsync` lets the runtime go,
   and the attach itself (`Initialize`, `SetManagedHandler`, `DebugActiveProcess`) runs inside
   dbgshim's startup callback while the runtime is still parked in its startup handshake.
-- **Launch in a terminal** (`LaunchInTerminalAsync`): the host starts the program through
-  `RunInTerminalHandler` (the adapter's `runInTerminal` reverse request) and reports the pid; the
-  rest is the launch path above.
+- **Launch in a terminal** (`LaunchInTerminalAsync`): the host starts the program through the
+  `OnTerminalLaunchRequested` event (the adapter's `runInTerminal` reverse request) and reports the
+  pid in `LaunchRequest.ProcessId`; the rest is the launch path above.
 - **Attach** (`AttachAsync`): the same registration by pid; the resume is attempted and its failure
   ignored, since a running process has nothing to resume.
 - **Remote attach** (`AttachToRemote`, mobile/maccatalyst): `DbgShimHost.CreateRemote` builds an

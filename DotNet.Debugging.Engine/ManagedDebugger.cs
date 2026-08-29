@@ -46,7 +46,7 @@ public partial class ManagedDebugger {
     private Process? launchedProcess;
     private StreamWriter? standardInput;
     private ExpressionEvaluator? evaluator;
-    private LaunchInfo? pendingLaunch;
+    private LaunchRequest? pendingLaunch;
     private int? pendingAttachProcessId;
     private RemoteAttachInfo? pendingRemoteAttach;
     private Action? onRemoteListenerReady;
@@ -60,8 +60,6 @@ public partial class ManagedDebugger {
     public bool RequireExactSource { get; set; } = true;
     // 'Step over properties and operators': a step never stops inside an accessor or an operator method
     public bool EnableStepFiltering { get; set; } = true;
-    // Starts the debuggee in the client's terminal and returns its process id, for launches with a terminal console
-    public Func<LaunchInfo, int>? RunInTerminalHandler { get; set; }
     // Whether ICorDebug reports the debuggee as executing. A state that cannot be read counts as not running
     public bool IsRunning => process != null && process.TryIsRunning(out var isRunning) == Cor.S_OK && isRunning;
     // Whether the debuggee's standard input is held open for writing, which only an internal-console launch is
@@ -84,6 +82,8 @@ public partial class ManagedDebugger {
     public event Action<ModuleInfo>? OnModuleLoaded;
     // A module without symbols next to it: the subscriber may locate the PDB and set 'SymbolFilePath'
     public event Action<SymbolsRequest>? OnSymbolsRequested;
+    // A launch with a terminal console: the subscriber starts the debuggee in the client's terminal and sets 'ProcessId'
+    public event Action<LaunchRequest>? OnTerminalLaunchRequested;
     // Output text of a launched debuggee, 'true' for stderr
     public event Action<string, bool>? OnOutput;
     public event Action<string>? OnLogPoint;
@@ -123,9 +123,9 @@ public partial class ManagedDebugger {
     }
 
     // The launch, attach and remote attach are deferred until 'ConfigurationDoneAsync', so the breakpoints are known by then
-    public void Launch(LaunchInfo launchInfo) {
-        DebuggerLoggingService.LogMessage($"Launching program: {launchInfo.Program} {string.Join(' ', launchInfo.Arguments)}");
-        pendingLaunch = launchInfo;
+    public void Launch(LaunchRequest launchRequest) {
+        DebuggerLoggingService.LogMessage($"Launching program: {launchRequest.Program} {string.Join(' ', launchRequest.Arguments)}");
+        pendingLaunch = launchRequest;
     }
     public void Attach(int processId) {
         DebuggerLoggingService.LogMessage($"Storing attach target: {processId}");
@@ -141,14 +141,14 @@ public partial class ManagedDebugger {
     public async Task ConfigurationDoneAsync() {
         DebuggerLoggingService.LogMessage("ConfigurationDone");
         if (pendingLaunch != null && pendingLaunch.Console != ConsoleType.InternalConsole) {
-            var launchInfo = pendingLaunch;
+            var launchRequest = pendingLaunch;
             pendingLaunch = null;
-            await LaunchInTerminalAsync(launchInfo);
+            await LaunchInTerminalAsync(launchRequest);
         }
         else if (pendingLaunch != null) {
-            var launchInfo = pendingLaunch;
+            var launchRequest = pendingLaunch;
             pendingLaunch = null;
-            await LaunchProcessAsync(launchInfo);
+            await LaunchProcessAsync(launchRequest);
         }
         else if (pendingRemoteAttach != null) {
             var attachInfo = pendingRemoteAttach;
@@ -524,40 +524,41 @@ public partial class ManagedDebugger {
         }
     }
 
-    private async Task LaunchProcessAsync(LaunchInfo launchInfo) {
+    private async Task LaunchProcessAsync(LaunchRequest launchRequest) {
         var startInfo = new ProcessStartInfo {
-            FileName = launchInfo.Program,
-            WorkingDirectory = launchInfo.WorkingDirectory ?? Environment.CurrentDirectory,
+            FileName = launchRequest.Program,
+            WorkingDirectory = launchRequest.WorkingDirectory ?? Environment.CurrentDirectory,
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            RedirectStandardInput = launchInfo.Console == ConsoleType.InternalConsole,
+            RedirectStandardInput = launchRequest.Console == ConsoleType.InternalConsole,
         };
-        foreach (var argument in launchInfo.Arguments)
+        foreach (var argument in launchRequest.Arguments)
             startInfo.ArgumentList.Add(argument);
-        foreach (var (key, value) in launchInfo.Environment)
+        foreach (var (key, value) in launchRequest.Environment)
             startInfo.Environment[key] = value;
         // The runtime waits for a diagnostics client before starting, so the attach lands before any managed code runs
         startInfo.Environment[DiagnosticPortSuspendVariable] = "1";
 
         var started = Process.Start(startInfo) ?? throw new InvalidOperationException("The process could not be started");
         launchedProcess = started;
-        if (launchInfo.Console == ConsoleType.InternalConsole)
+        if (launchRequest.Console == ConsoleType.InternalConsole)
             standardInput = started.StandardInput;
         _ = Task.Run(() => PumpOutputAsync(started.StandardOutput, isError: false));
         _ = Task.Run(() => PumpOutputAsync(started.StandardError, isError: true));
         DebuggerLoggingService.LogMessage($"Process created suspended with PID: {started.Id}");
 
-        stopAtEntryPending = launchInfo.StopAtEntry;
+        stopAtEntryPending = launchRequest.StopAtEntry;
         await AttachAsync(started.Id, resumeRuntime: true, ignoreResumeFailure: false);
         OnProcessStarted?.Invoke(started.Id);
     }
-    private async Task LaunchInTerminalAsync(LaunchInfo launchInfo) {
-        var handler = RunInTerminalHandler ?? throw new InvalidOperationException("Launching in a terminal requires a RunInTerminalHandler");
+    private async Task LaunchInTerminalAsync(LaunchRequest launchRequest) {
+        var handler = OnTerminalLaunchRequested ?? throw new InvalidOperationException("Launching in a terminal requires an 'OnTerminalLaunchRequested' subscriber");
         // The handler blocks on the client's response, which must not happen on the thread dispatching requests
-        var processId = await Task.Run(() => handler.Invoke(launchInfo));
-        stopAtEntryPending = launchInfo.StopAtEntry;
+        await Task.Run(() => handler.Invoke(launchRequest));
+        var processId = launchRequest.ProcessId ?? throw new InvalidOperationException("The terminal launch did not provide the id of the started process");
+        stopAtEntryPending = launchRequest.StopAtEntry;
         await AttachAsync(processId, resumeRuntime: true, ignoreResumeFailure: false);
         OnProcessStarted?.Invoke(processId);
     }

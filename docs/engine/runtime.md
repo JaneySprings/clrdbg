@@ -48,8 +48,9 @@ Two details are load-bearing:
 Only one registration can be in flight (a static slot); a second concurrent attach throws.
 
 A **terminal launch** (`ConsoleType.IntegratedTerminal`/`ExternalTerminal`) asks the host to start
-the program through `RunInTerminalHandler` — off the request thread, as the adapter's implementation
-blocks on the client's `runInTerminal` response — and attaches to the pid it reports, the same way.
+the program through the `OnTerminalLaunchRequested` event — off the request thread, as the adapter's
+implementation blocks on the client's `runInTerminal` response — and attaches to the pid the
+subscriber sets on the `LaunchRequest`, the same way.
 
 ### Remote processes: `DbgShimHost.CreateRemote`
 
