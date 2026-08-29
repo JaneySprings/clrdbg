@@ -112,20 +112,21 @@ public static class ServerExtensions {
         }
         return builder.ToString();
     }
-    public static DebugProtocol.Source ToSource(this SourceLocation location, SourceLinkResolver? sourceLinkResolver) {
+    public static DebugProtocol.Source ToSource(this SourceLocation location, SourceLinkResolver sourceLinkResolver, SourceFileMapper sourceFileMapper) {
+        var filePath = sourceFileMapper.ToLocalPath(location.FilePath);
         // The library pre-populates 'sources' and 'checksums' with empty lists, which Microsoft's debugger never sends
         var source = new DebugProtocol.Source {
-            Name = Path.GetFileName(location.FilePath),
-            Path = location.FilePath,
+            Name = Path.GetFileName(filePath),
+            Path = filePath,
             Sources = null,
             Checksums = null,
         };
         if (location.Checksum != null && Enum.TryParse<DebugProtocol.ChecksumAlgorithm>(location.Checksum.Algorithm, out var algorithm))
             source.Checksums = new List<DebugProtocol.Checksum> { new DebugProtocol.Checksum(algorithm, location.Checksum.Value) };
         if (location.SourceLink != null) {
-            source.VsSourceLinkInfo = new DebugProtocol.VSSourceLinkInfo { Url = location.SourceLink, RelativeFilePath = location.FilePath };
+            source.VsSourceLinkInfo = new DebugProtocol.VSSourceLinkInfo { Url = location.SourceLink, RelativeFilePath = filePath };
             // A document that does not exist locally is served through the 'source' request, which downloads it
-            if (sourceLinkResolver != null && !File.Exists(location.FilePath))
+            if (!File.Exists(filePath))
                 source.SourceReference = sourceLinkResolver.GetSourceReference(location.SourceLink);
         }
         return source;
@@ -148,7 +149,7 @@ public static class ServerExtensions {
             SymbolFilePath = module.HasSymbols ? module.SymbolFilePath : null,
         };
     }
-    public static DebugProtocol.Breakpoint ToBreakpoint(this Breakpoint breakpoint, SourceLinkResolver? sourceLinkResolver) {
+    public static DebugProtocol.Breakpoint ToBreakpoint(this Breakpoint breakpoint, SourceLinkResolver sourceLinkResolver, SourceFileMapper sourceFileMapper) {
         var isBoundSourceBreakpoint = !breakpoint.IsFunctionBreakpoint && breakpoint.Verified;
         return new DebugProtocol.Breakpoint() {
             Id = breakpoint.Id,
@@ -158,13 +159,13 @@ public static class ServerExtensions {
             Column = isBoundSourceBreakpoint ? breakpoint.Column : null,
             EndLine = isBoundSourceBreakpoint ? breakpoint.EndLine : null,
             EndColumn = isBoundSourceBreakpoint ? breakpoint.EndColumn : null,
-            Source = isBoundSourceBreakpoint ? breakpoint.Location?.ToSource(sourceLinkResolver) : null,
+            Source = isBoundSourceBreakpoint ? breakpoint.Location?.ToSource(sourceLinkResolver, sourceFileMapper) : null,
         };
     }
-    public static DebugProtocol.StackFrame ToStackFrame(this StackFrameInfo frame, int? moduleId, SourceLinkResolver? sourceLinkResolver) {
+    public static DebugProtocol.StackFrame ToStackFrame(this StackFrameInfo frame, int? moduleId, SourceLinkResolver sourceLinkResolver, SourceFileMapper sourceFileMapper) {
         return new DebugProtocol.StackFrame() {
             Id = frame.Id,
-            Source = frame.Location?.ToSource(sourceLinkResolver),
+            Source = frame.Location?.ToSource(sourceLinkResolver, sourceFileMapper),
             Name = frame.ToDisplayName(),
             Line = frame.Location?.Line ?? 0,
             Column = frame.Location?.Column ?? 0,

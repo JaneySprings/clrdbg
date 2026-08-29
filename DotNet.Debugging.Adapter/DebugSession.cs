@@ -1,7 +1,6 @@
 using DotNet.Debugging.Adapter.Extensions;
 using DotNet.Debugging.Adapter.Logging;
 using DotNet.Debugging.Adapter.Symbols;
-using DotNet.Debugging.Adapter.Terminal;
 using DotNet.Debugging.Engine;
 using DotNet.Debugging.Engine.Enums;
 using DotNet.Debugging.Engine.Logging;
@@ -20,7 +19,9 @@ public partial class DebugSession : Session {
     private readonly ManagedDebugger session;
 
     private IDebugAgent debugAgent = null!;
-    private SourceLinkResolver? sourceLinkResolver;
+    private SourceLinkResolver sourceLinkResolver = null!;
+    private SourceFileMapper sourceFileMapper = null!;
+    private SymbolsResolver symbolsResolver = null!;
 
     public DebugSession(Stream input, Stream output) : base(input, output) {
         DebuggerLoggingService.CustomLogger = new EngineLogger();
@@ -33,15 +34,15 @@ public partial class DebugSession : Session {
         session.OnThreadStarted += TargetThreadStarted;
         session.OnThreadExited += TargetThreadStopped;
         session.OnModuleLoaded += AssemblyLoaded;
+        session.OnSymbolsRequested += SymbolsRequested;
         session.OnOutput += TargetOutput;
         session.OnLogPoint += TargetLogPoint;
         session.OnBreakpointChanged += BreakpointStatusChanged;
         session.RunInTerminalHandler = RunInTerminal;
     }
 
-    protected override void OnUnhandledException(Exception ex) {
-        debugAgent?.Dispose();
-    }
+    protected override void OnEmergencyStopReceived() => debugAgent?.Dispose();
+    protected override bool OnTraceMessageReceived() => debugAgent?.Configuration?.Logging != null;
 
     private void TargetStopped(StopInfo stop) {
         ResetHandles();
@@ -87,6 +88,11 @@ public partial class DebugSession : Session {
     private void TargetThreadStopped(int threadId) {
         Protocol.SendEvent(new ThreadEvent(ThreadEvent.ReasonValue.Exited, threadId));
     }
+    private void SymbolsRequested(SymbolsRequest request) {
+        if (symbolsResolver.HasSymbolServers)
+            OnDebugDataReceived(string.Format(Resources.MsgPdbSearching, request.SymbolFileName));
+        request.SymbolFilePath = symbolsResolver.FindSymbols(request.SymbolFileName, request.PdbGuid);
+    }
     private void AssemblyLoaded(ModuleInfo module) {
         var justMyCode = debugAgent.Configuration.JustMyCode;
         OnDebugDataReceived(module.ToLoadedAssemblyMessage(debugAgent.Configuration.GetApplicationName(), session.ProcessId, justMyCode));
@@ -95,7 +101,7 @@ public partial class DebugSession : Session {
     private void BreakpointStatusChanged(Breakpoint breakpoint) {
         if (breakpoint.Status == BreakpointStatus.SourceMismatch)
             OnDebugDataReceived($"Breakpoint warning: {breakpoint.ToStatusMessage()} - {breakpoint.FilePath}: {breakpoint.Line}");
-        Protocol.SendEvent(new BreakpointEvent(BreakpointEvent.ReasonValue.Changed, breakpoint.ToBreakpoint(sourceLinkResolver)));
+        Protocol.SendEvent(new BreakpointEvent(BreakpointEvent.ReasonValue.Changed, breakpoint.ToBreakpoint(sourceLinkResolver, sourceFileMapper)));
     }
     private void TargetOutput(string output, bool isError) {
         // Print chunks directly, without trimming

@@ -26,6 +26,11 @@ public static class EnumExtensions {
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool IsMdSpecialName(this CorMethodAttr attr) {
+        return (attr & CorMethodAttr.mdSpecialName) != 0;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool IsMdNewSlot(this CorMethodAttr attr) {
         return (attr & CorMethodAttr.mdVtableLayoutMask) == CorMethodAttr.mdVtableLayoutMask;
     }

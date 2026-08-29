@@ -137,6 +137,12 @@ internal static class ValueFormatter {
             return new FormattedValue(typeName, Format(objectValue.GetFieldValue(corClass, valueField), escapeStrings).Value);
         }
 
+        // A byref-like value ('Span<T>' and friends) cannot travel through a func eval - its interior
+        // pointer does not survive the trip and the debuggee can die on it. No display evaluation and
+        // no debugger proxy, the members stay readable directly
+        if (metadataImport.HasAttribute(classToken, AttributeNames.IsByRefLike))
+            return new FormattedValue(typeName, $"{{{typeName}}}");
+
         string? proxyTypeName = null;
         if (metadataImport.TryGetCustomAttributeByName(classToken, AttributeNames.DebuggerTypeProxy, out var proxyData, out var proxySize) == Cor.S_OK)
             proxyTypeName = CustomAttributeReader.ReadStringArgument(proxyData, proxySize);

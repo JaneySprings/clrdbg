@@ -18,8 +18,6 @@ public abstract class Session : DebugAdapterBase, IProcessLogger {
         InitializeProtocolClient(input, output);
     }
 
-    protected abstract void OnUnhandledException(Exception ex);
-
     public void Start() {
         Protocol.LogMessage += LogMessage;
         Protocol.DispatcherError += LogError;
@@ -37,6 +35,8 @@ public abstract class Session : DebugAdapterBase, IProcessLogger {
         }
     }
 
+    protected abstract void OnEmergencyStopReceived();
+    protected abstract bool OnTraceMessageReceived();
     public void OnOutputDataReceived(string stdout) {
         SendMessageEvent(OutputEvent.CategoryValue.Stdout, stdout);
     }
@@ -55,13 +55,15 @@ public abstract class Session : DebugAdapterBase, IProcessLogger {
     }
     private void LogMessage(object? sender, LogEventArgs args) {
         logger.Debug(args.Message);
+        if (OnTraceMessageReceived())
+            OnDebugDataReceived(args.Message);
     }
     private void LogError(object? sender, DispatcherErrorEventArgs args) {
         logger.Error(args.Exception);
-        OnUnhandledException(args.Exception);
+        OnEmergencyStopReceived();
     }
 
     public static ProtocolException GetProtocolException(string message) {
-        return new ProtocolException(message, 0, message, url: $"file://{LogConfig.DebugLogFile}");
+        return new ProtocolException(message, message.GetHashCode(), message, url: $"file://{LogConfig.DebugLogFile}");
     }
 }

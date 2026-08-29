@@ -13,7 +13,7 @@ public partial class DebugSession {
             }).ToList();
 
             var breakpoints = InvokeDebugger(() => session.SetFunctionBreakpoints(requests));
-            return new SetFunctionBreakpointsResponse(breakpoints.Select(it => it.ToBreakpoint(sourceLinkResolver)).ToList());
+            return new SetFunctionBreakpointsResponse(breakpoints.Select(it => it.ToBreakpoint(sourceLinkResolver, sourceFileMapper)).ToList());
         });
     }
 }

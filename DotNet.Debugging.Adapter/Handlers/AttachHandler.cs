@@ -10,12 +10,15 @@ public partial class DebugSession {
             configuration.VerifyMissingProperties();
 
             sourceLinkResolver = new SourceLinkResolver(configuration.SourceLinkOptions);
+            sourceFileMapper = new SourceFileMapper(configuration.SourceFileMap);
+            symbolsResolver = new SymbolsResolver(configuration.SymbolOptions);
             debugAgent = configuration.CreateDebugAgent(this);
 
             OnDebugDataReceived(Resources.MsgLicenseBanner);
             InvokeDebugger(() => {
                 session.JustMyCode = configuration.JustMyCode;
                 session.RequireExactSource = configuration.RequireExactSource;
+                session.EnableStepFiltering = configuration.EnableStepFiltering;
                 debugAgent.Connect(session);
             });
             // Breakpoints arrive after this event and the attach itself is deferred until 'ConfigurationDone'

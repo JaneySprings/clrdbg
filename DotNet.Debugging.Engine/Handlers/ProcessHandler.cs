@@ -21,6 +21,9 @@ public partial class ManagedDebugger {
         // The runtime is shutting down, the OS process follows right after
         if (launchedProcess != null && launchedProcess.WaitForExit(2000))
             exitCode = launchedProcess.ExitCode;
+        // ExitProcess is the runtime's final callback. Completing the queue fails a request stuck in
+        // a func eval the debuggee died under, so it releases the lock instead of waiting forever
+        eventQueue.Writer.TryComplete();
         OnExited?.Invoke(exitCode);
     }
     private void HandleLogMessage(LogMessageCorDebugManagedCallbackEventArgs callbackEvent) {

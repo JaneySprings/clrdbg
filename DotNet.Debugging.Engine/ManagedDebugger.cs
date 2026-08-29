@@ -58,6 +58,8 @@ public partial class ManagedDebugger {
     public bool JustMyCode { get; set; } = true;
     // A source file matched by name alone (PDBs built from a different location) must also match the PDB's content checksum
     public bool RequireExactSource { get; set; } = true;
+    // 'Step over properties and operators': a step never stops inside an accessor or an operator method
+    public bool EnableStepFiltering { get; set; } = true;
     // Starts the debuggee in the client's terminal and returns its process id, for launches with a terminal console
     public Func<LaunchInfo, int>? RunInTerminalHandler { get; set; }
     // Whether ICorDebug reports the debuggee as executing. A state that cannot be read counts as not running
@@ -80,6 +82,8 @@ public partial class ManagedDebugger {
     public event Action<int>? OnThreadStarted;
     public event Action<int>? OnThreadExited;
     public event Action<ModuleInfo>? OnModuleLoaded;
+    // A module without symbols next to it: the subscriber may locate the PDB and set 'SymbolFilePath'
+    public event Action<SymbolsRequest>? OnSymbolsRequested;
     // Output text of a launched debuggee, 'true' for stderr
     public event Action<string, bool>? OnOutput;
     public event Action<string>? OnLogPoint;
@@ -646,9 +650,10 @@ public partial class ManagedDebugger {
         ClearReferences();
 
         // No further callbacks are dispatched. The event loop waits for the lock held here, so the queue is
-        // drained by hand and the loop exits once the lock is released
+        // drained by hand and the loop exits once the lock is released. The queue is already completed
+        // when the debuggee exited on its own
         callbacks.OnAnyEvent -= QueueEvent;
-        eventQueue.Writer.Complete();
+        eventQueue.Writer.TryComplete();
         while (eventQueue.Reader.TryRead(out _)) { }
 
         process?.TryDetach();

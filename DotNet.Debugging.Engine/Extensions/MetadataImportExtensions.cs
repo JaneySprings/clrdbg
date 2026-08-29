@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using DotNet.Debugging.CorApi;
 using DotNet.Debugging.CorApi.Extensions;
+using DotNet.Debugging.Engine.Metadata;
 
 namespace DotNet.Debugging.Engine.Extensions;
 
@@ -29,6 +30,22 @@ internal static class MetadataImportExtensions {
     public static bool IsIndexer(this PropertyToken property, IMetaDataImport metadataImport) {
         var getter = metadataImport.GetPropertyProps(property).pmdGetter;
         return !getter.IsNil && Marshal.ReadByte(metadataImport.GetMethodProps(getter).ppvSigBlob, 1) != 0;
+    }
+
+    // A method the stepper must not stop in: [DebuggerStepThrough] or [DebuggerHidden] on the method or its
+    // type, plus [DebuggerNonUserCode] while Just My Code is on
+    public static bool IsNonUserMethod(this IMetaDataImport metadataImport, MethodDefToken methodToken, bool justMyCode) {
+        var attributeNames = justMyCode ? AttributeNames.JustMyCodeNonUserMethodAttributes : AttributeNames.NonUserMethodAttributes;
+        if (metadataImport.HasAnyAttribute(methodToken, attributeNames))
+            return true;
+        return metadataImport.HasAnyAttribute(metadataImport.GetMethodProps(methodToken).pClass, attributeNames);
+    }
+    // A property accessor or an operator method, what 'step over properties and operators' filters out
+    public static bool IsPropertyOrOperator(this IMetaDataImport metadataImport, MethodDefToken methodToken) {
+        var methodProps = metadataImport.GetMethodProps(methodToken);
+        if (!methodProps.pdwAttr.IsMdSpecialName())
+            return false;
+        return methodProps.szMethod.StartsWith("get_") || methodProps.szMethod.StartsWith("set_") || methodProps.szMethod.StartsWith("op_");
     }
 
     public static bool HasAttribute(this IMetaDataImport metadataImport, MetadataToken token, string attributeName) {

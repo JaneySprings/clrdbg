@@ -11,6 +11,7 @@ public partial class DebugSession {
             var sourcePath = arguments.Source?.Path;
             if (string.IsNullOrEmpty(sourcePath))
                 throw new ProtocolException("No source available for the breakpoint");
+            sourcePath = sourceFileMapper.ToCompilerPath(sourcePath);
 
             var requests = (arguments.Breakpoints ?? new List<SourceBreakpoint>()).Select(it => new BreakpointRequest(it.Line) {
                 Column = it.Column,
@@ -20,7 +21,7 @@ public partial class DebugSession {
             }).ToList();
 
             var breakpoints = InvokeDebugger(() => session.SetBreakpoints(sourcePath, requests));
-            return new SetBreakpointsResponse(breakpoints.Select(it => it.ToBreakpoint(sourceLinkResolver)).ToList());
+            return new SetBreakpointsResponse(breakpoints.Select(it => it.ToBreakpoint(sourceLinkResolver, sourceFileMapper)).ToList());
         });
     }
 }

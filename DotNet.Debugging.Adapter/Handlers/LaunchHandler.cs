@@ -13,6 +13,8 @@ public partial class DebugSession {
             configuration.VerifyMissingProperties();
 
             sourceLinkResolver = new SourceLinkResolver(configuration.SourceLinkOptions);
+            sourceFileMapper = new SourceFileMapper(configuration.SourceFileMap);
+            symbolsResolver = new SymbolsResolver(configuration.SymbolOptions);
             debugAgent = configuration.CreateDebugAgent(this);
 
             if (configuration.Console != ConsoleType.InternalConsole && debugAgent is LaunchDebugAgent launchDebugAgent) {
@@ -23,6 +25,7 @@ public partial class DebugSession {
             InvokeDebugger(() => {
                 session.JustMyCode = configuration.JustMyCode;
                 session.RequireExactSource = configuration.RequireExactSource;
+                session.EnableStepFiltering = configuration.EnableStepFiltering;
                 debugAgent.Connect(session);
             });
             // Breakpoints arrive after this event and the launch itself is deferred until 'ConfigurationDone'

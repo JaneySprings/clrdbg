@@ -72,16 +72,38 @@ public class CoreClrMobileDebuggerOptions {
 
 public class SourceLinkOptions {
     [JsonPropertyName("enabled")]
-    public bool Enabled { get; set; }
+    public bool Enabled { get; set; } = true;
+}
+
+public class SymbolOptions {
+    [JsonPropertyName("searchPaths")]
+    public List<string> SearchPaths { get; set; } = new List<string>();
+
+    [JsonPropertyName("searchMicrosoftSymbolServer")]
+    public bool SearchMicrosoftSymbolServer { get; set; }
+
+    [JsonPropertyName("searchNuGetOrgSymbolServer")]
+    public bool SearchNuGetSymbolServer { get; set; }
+
+    [JsonPropertyName("cachePath")]
+    public string? CachePath { get; set; }
+
+    // "moduleFilter": {
+    //     "mode": "loadAllButExcluded",
+    //     "excludedModules": [ "DoNotLookForThisOne*.dll" ]
+    // }
 }
 
 public class LoggingOptions {
-    [JsonPropertyName("enableLogging")]
-    public bool EnableLogging { get; set; }
+    [JsonPropertyName("exceptions")]
+    public bool Exceptions { get; set; }
 
-    [JsonPropertyName("trace")]
-    public bool Trace { get; set; }
+    [JsonPropertyName("engineLogging")]
+    public bool EngineLogging { get; set; }
 
-    [JsonPropertyName("traceResponse")]
-    public bool TraceResponse { get; set; }
+    [JsonPropertyName("elapsedTiming")]
+    public bool ElapsedTiming { get; set; }
+
+    // [JsonPropertyName("browserStdOut")]
+    // public bool BrowserStdOut { get; set; }
 }

@@ -20,6 +20,7 @@ internal sealed class ModuleMetadataReader : IDisposable {
     private MetadataReaderProvider? pdbProvider;
     private SourceLinkMap? sourceLinkMap;
     private bool sourceLinkMapLoaded;
+    private DebugDirectoryEntry codeViewEntry;
 
     public MetadataReader PeMetadataReader { get; }
     public MetadataReader? PdbMetadataReader { get; private set; }
@@ -272,8 +273,30 @@ internal sealed class ModuleMetadataReader : IDisposable {
             return null;
         }
     }
+    // The file name and signature of the PDB the module was linked against, from the CodeView debug directory
+    public bool TryGetPdbSignature(out string symbolFileName, out Guid pdbGuid) {
+        symbolFileName = string.Empty;
+        pdbGuid = Guid.Empty;
+        if (codeViewEntry.DataSize == 0)
+            return false;
+        try {
+            var codeViewData = peReader.ReadCodeViewDebugDirectoryData(codeViewEntry);
+            symbolFileName = Path.GetFileName(codeViewData.Path);
+            pdbGuid = codeViewData.Guid;
+            return symbolFileName.Length > 0;
+        }
+        catch {
+            return false;
+        }
+    }
+    // Loads the symbols from a PDB the host located elsewhere (a search path or a symbol server)
+    public bool TryLoadSymbols(string pdbPath) {
+        if (HasSymbols || codeViewEntry.DataSize == 0)
+            return false;
+        return TryLoadPdbFile(pdbPath);
+    }
+
     private void LoadSymbols(string? assemblyPath) {
-        var codeViewEntry = default(DebugDirectoryEntry);
         var embeddedPdbEntry = default(DebugDirectoryEntry);
         foreach (var entry in peReader.ReadDebugDirectory()) {
             if (entry.Type == DebugDirectoryEntryType.CodeView && entry.MinorVersion == PortableCodeViewVersionMagic)
@@ -282,23 +305,31 @@ internal sealed class ModuleMetadataReader : IDisposable {
                 embeddedPdbEntry = entry;
         }
 
-        if (codeViewEntry.DataSize != 0 && TryLoadPdbFile(codeViewEntry, assemblyPath))
+        if (codeViewEntry.DataSize != 0 && TryLoadReferencedPdbFile(assemblyPath))
             return;
         if (embeddedPdbEntry.DataSize != 0)
             TryLoadEmbeddedPdb(embeddedPdbEntry);
     }
-    private bool TryLoadPdbFile(DebugDirectoryEntry codeViewEntry, string? assemblyPath) {
-        MetadataReaderProvider? provider = null;
+    // The PDB is expected next to the assembly, wherever it was built
+    private bool TryLoadReferencedPdbFile(string? assemblyPath) {
         try {
-            var codeViewData = peReader.ReadCodeViewDebugDirectoryData(codeViewEntry);
-            var pdbPath = codeViewData.Path;
-            // The PDB is expected next to the assembly, wherever it was built
+            var pdbPath = peReader.ReadCodeViewDebugDirectoryData(codeViewEntry).Path;
             var assemblyDirectory = Path.GetDirectoryName(assemblyPath);
             if (assemblyDirectory != null)
                 pdbPath = Path.Combine(assemblyDirectory, Path.GetFileName(pdbPath));
+            return TryLoadPdbFile(pdbPath);
+        }
+        catch {
+            return false;
+        }
+    }
+    private bool TryLoadPdbFile(string pdbPath) {
+        MetadataReaderProvider? provider = null;
+        try {
             if (!File.Exists(pdbPath))
                 return false;
 
+            var codeViewData = peReader.ReadCodeViewDebugDirectoryData(codeViewEntry);
             provider = MetadataReaderProvider.FromPortablePdbStream(File.OpenRead(pdbPath));
             var reader = provider.GetMetadataReader();
             var pdbId = new BlobContentId(reader.DebugMetadataHeader!.Id);

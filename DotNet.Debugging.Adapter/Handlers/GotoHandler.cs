@@ -7,7 +7,8 @@ namespace DotNet.Debugging.Adapter;
 
 public partial class DebugSession {
     protected override GotoTargetsResponse HandleGotoTargetsRequest(GotoTargetsArguments arguments) {
-        var targetId = gotoHandles.Create(new SourceLocation(arguments.Source.Path, arguments.Line, arguments.Column ?? 0, arguments.Line, 0));
+        var sourcePath = sourceFileMapper.ToCompilerPath(arguments.Source.Path);
+        var targetId = gotoHandles.Create(new SourceLocation(sourcePath, arguments.Line, arguments.Column ?? 0, arguments.Line, 0));
         return arguments.ToJumpToCursorTarget(targetId);
     }
     protected override GotoResponse HandleGotoRequest(GotoArguments arguments) {

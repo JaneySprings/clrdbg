@@ -331,7 +331,9 @@ internal class VariableProvider {
         summary.HasNonPublicMembers = filter == MemberFilter.Public && HasNonPublicMembers(metadataImport, instanceFields, instanceProperties);
 
         await AddFieldsAsync(FilterFields(metadataImport, instanceFields, filter), metadataImport, type, value, reference, result);
-        await AddPropertiesAsync(FilterProperties(metadataImport, instanceProperties, filter), metadataImport, type, value, reference, result);
+        // A property getter cannot be func-evaled with a byref-like 'this' (the debuggee can die on it), such a value lists its fields only
+        if (!metadataImport.HasAttribute(typeToken, AttributeNames.IsByRefLike))
+            await AddPropertiesAsync(FilterProperties(metadataImport, instanceProperties, filter), metadataImport, type, value, reference, result);
 
         var baseType = type.GetBaseType();
         if (baseType == null || IsRootType(baseType))
@@ -351,7 +353,9 @@ internal class VariableProvider {
         var hasNonPublicMembers = filter == MemberFilter.Public && HasNonPublicMembers(metadataImport, staticFields, staticProperties);
 
         await AddFieldsAsync(FilterFields(metadataImport, staticFields, filter), metadataImport, type, value, reference, result);
-        await AddPropertiesAsync(FilterProperties(metadataImport, staticProperties, filter), metadataImport, type, value, reference, result);
+        // A static getter of a byref-like type returns a value a func eval cannot carry either
+        if (!metadataImport.HasAttribute(typeToken, AttributeNames.IsByRefLike))
+            await AddPropertiesAsync(FilterProperties(metadataImport, staticProperties, filter), metadataImport, type, value, reference, result);
 
         var baseType = type.GetBaseType();
         if (baseType == null || IsRootType(baseType))

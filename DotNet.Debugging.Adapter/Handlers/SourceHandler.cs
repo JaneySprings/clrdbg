@@ -7,7 +7,7 @@ public partial class DebugSession {
     protected override SourceResponse HandleSourceRequest(SourceArguments arguments) {
         return Invoke(() => {
             var sourceReference = arguments.Source?.SourceReference ?? arguments.SourceReference;
-            var content = sourceLinkResolver?.GetSourceContent(sourceReference);
+            var content = sourceLinkResolver.GetSourceContent(sourceReference);
             if (content == null)
                 throw new ProtocolException("No source available");
 

@@ -8,16 +8,17 @@ public abstract class BaseConfiguration {
     public bool RequireExactSource { get; }
     public bool EnableStepFiltering { get; }
     public Dictionary<string, SourceLinkOptions> SourceLinkOptions { get; }
+    public Dictionary<string, string> SourceFileMap { get; }
+    public SymbolOptions SymbolOptions { get; }
     public LoggingOptions? Logging { get; }
-    // TODO: implement
-    public object? SourceFileMap { get; }
-    public object? SymbolOptions { get; }
 
     protected BaseConfiguration(Dictionary<string, JToken> properties) {
         JustMyCode = properties.TryGetValue("justMyCode").ToValue<bool>(true);
         RequireExactSource = properties.TryGetValue("requireExactSource").ToValue<bool>(true);
-        EnableStepFiltering = properties.TryGetValue("enableStepFiltering").ToValue<bool>(false);
+        EnableStepFiltering = properties.TryGetValue("enableStepFiltering").ToValue<bool>(true);
         Logging = properties.TryGetValue("logging").ToClass<LoggingOptions>();
+        SymbolOptions = properties.TryGetValue("symbolOptions").ToClass<SymbolOptions>() ?? new SymbolOptions();
+        SourceFileMap = properties.TryGetValue("sourceFileMap").ToClass<Dictionary<string, string>>() ?? new Dictionary<string, string>();
         SourceLinkOptions = properties.TryGetValue("sourceLinkOptions").ToClass<Dictionary<string, SourceLinkOptions>>()
             ?? new Dictionary<string, SourceLinkOptions> { ["*"] = new SourceLinkOptions() };
     }

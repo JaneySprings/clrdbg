@@ -8,7 +8,7 @@ public class SourceLinkResolverTests {
     [Test]
     public void DefaultOptionsEnableEverythingTest() {
         var resolver = new SourceLinkResolver(new Dictionary<string, SourceLinkOptions> { ["*"] = new SourceLinkOptions() });
-        Assert.That(resolver.IsEnabled("https://raw.githubusercontent.com/org/repo/sha/File.cs"), Is.False);
+        Assert.That(resolver.IsEnabled("https://raw.githubusercontent.com/org/repo/sha/File.cs"), Is.True);
     }
 
     [Test]

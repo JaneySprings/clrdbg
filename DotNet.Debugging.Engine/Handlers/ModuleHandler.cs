@@ -20,11 +20,14 @@ public partial class ManagedDebugger {
             ContinueProcess();
             return;
         }
-        DebuggerLoggingService.LogMessage(metadataReader.HasSymbols ? $"  Symbols loaded for {moduleName}" : $"  No symbols found for {moduleName}");
-
         // EnC and disabled optimizations are only enabled for assemblies built by the user, which makes them the user code heuristic
         var jitFlags = corModule.GetJITCompilerFlags();
         var isUserCode = jitFlags == CorDebugJITCompilerFlags.CORDEBUG_JIT_DISABLE_OPTIMIZATION || jitFlags == CorDebugJITCompilerFlags.CORDEBUG_JIT_ENABLE_ENC;
+        // Under Just My Code only user assemblies get their symbols searched, without it every module does
+        if (!metadataReader.HasSymbols && (isUserCode || !JustMyCode))
+            TryLoadExternalSymbols(metadataReader, modulePath);
+        DebuggerLoggingService.LogMessage(metadataReader.HasSymbols ? $"  Symbols loaded for {moduleName}" : $"  No symbols found for {moduleName}");
+
         if (JustMyCode && isUserCode && metadataReader.HasSymbols) {
             corModule.SetJMCStatus(true, 0, []);
             // Methods without sequence points (the compiler's '<Main>' bridge over an async Main) are not
@@ -47,6 +50,23 @@ public partial class ManagedDebugger {
         foreach (var breakpoint in breakpointManager.BindPending(module, RequireExactSource))
             OnBreakpointChanged?.Invoke(breakpoint);
         ContinueProcess();
+    }
+
+    // Symbols missing next to the module: the host may find them in a search path or on a symbol server
+    private void TryLoadExternalSymbols(ModuleMetadataReader metadataReader, string modulePath) {
+        if (OnSymbolsRequested == null)
+            return;
+        if (!metadataReader.TryGetPdbSignature(out var symbolFileName, out var pdbGuid))
+            return;
+
+        var request = new SymbolsRequest(modulePath, symbolFileName, pdbGuid);
+        OnSymbolsRequested.Invoke(request);
+        if (request.SymbolFilePath == null)
+            return;
+        if (metadataReader.TryLoadSymbols(request.SymbolFilePath))
+            DebuggerLoggingService.LogMessage($"  Symbols for {Path.GetFileName(modulePath)} located at {request.SymbolFilePath}");
+        else
+            DebuggerLoggingService.LogMessage($"  The PDB at {request.SymbolFilePath} does not match {Path.GetFileName(modulePath)}");
     }
 
     private static void TrySetMethodNotUserCode(ICorDebugModule corModule, int methodToken) {

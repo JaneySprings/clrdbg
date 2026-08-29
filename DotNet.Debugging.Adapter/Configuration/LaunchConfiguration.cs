@@ -13,7 +13,6 @@ public class LaunchConfiguration : BaseConfiguration {
     public List<string> Arguments { get; private set; }
     public Dictionary<string, string> EnvironmentVariables { get; private set; }
     public ConsoleType Console { get; }
-    public bool SuppressJITOptimizations { get; }
     public bool StopAtEntry { get; }
     public string? LaunchSettingsFilePath { get; }
     public string? LaunchSettingsProfile { get; }
@@ -21,6 +20,7 @@ public class LaunchConfiguration : BaseConfiguration {
     public string? RemoteHostDirectory { get; }
     public string? RemoteTargetDirectory { get; }
     // TODO: implement
+    public bool SuppressJITOptimizations { get; }
     public object? PipeTransport { get; }
 
     public LaunchConfiguration(Dictionary<string, JToken> properties) : base(properties) {
@@ -29,7 +29,6 @@ public class LaunchConfiguration : BaseConfiguration {
         Arguments = properties.TryGetValue("args").ToClass<List<string>>() ?? new List<string>();
         EnvironmentVariables = properties.TryGetValue("env").ToClass<Dictionary<string, string>>() ?? new Dictionary<string, string>();
         Console = properties.TryGetValue("console").ToValue<ConsoleType>(ConsoleType.InternalConsole);
-        SuppressJITOptimizations = properties.TryGetValue("suppressJITOptimizations").ToValue<bool>(false);
         StopAtEntry = properties.TryGetValue("stopAtEntry").ToValue<bool>(false);
         LaunchSettingsFilePath = properties.TryGetValue("launchSettingsFilePath").ToClass<string>().ToPlatformPath();
         LaunchSettingsProfile = properties.TryGetValue("launchSettingsProfile").ToClass<string>();
@@ -111,7 +110,7 @@ public class LaunchConfiguration : BaseConfiguration {
         if (!string.IsNullOrEmpty(profile.workingDirectory))
             WorkingDirectory = profile.workingDirectory.ToPlatformPath();
         if (!string.IsNullOrEmpty(profile.CommandLineArgs))
-            Arguments = profile.CommandLineArgs.Split(' ').ToList(); //TODO: update split!!!
+            Arguments = profile.CommandLineArgs.Split(' ').ToList(); //TODO: update split
         if (profile.EnvironmentVariables != null)
             EnvironmentVariables = profile.EnvironmentVariables;
     }

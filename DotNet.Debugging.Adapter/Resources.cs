@@ -17,6 +17,7 @@ public static class Resources {
 
     public const string MsgCannotFindPdb = "Cannot find or open the PDB file.";
     public const string MsgPdbLoaded = "Symbols loaded.";
+    public const string MsgPdbSearching = "* Searching for '{0}' on the configured symbol servers.";
     public const string MsgPdbSkipped = "Skipped loading symbols. Module is optimized and the debugger option 'Just My Code' is enabled.";
     public const string MsgPdbSkippedShort = "Skipped loading symbols.";
 
