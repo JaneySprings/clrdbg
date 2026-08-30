@@ -82,11 +82,14 @@ Breakpoint callback → AsyncStepper.TryHandleBreakpointAsync
                                                          (another invocation: keep waiting → Continue)
 ```
 
-"Same invocation" is the thread that yielded, or — since continuations run on any thread — the same
-`ObjectIdForDebugger` on the method builder (`AsyncTaskMethodBuilder<T>` and friends expose it for
-exactly this). The id is read once at the yield point through a func eval, kept in a strong handle,
-and compared by address at the resume point; an address of zero on either side is accepted as a
-match. The yield breakpoint is only honoured on the thread that set the step up.
+"Same invocation" means the same `ObjectIdForDebugger` on the method builder
+(`AsyncTaskMethodBuilder<T>` and friends expose it for exactly this). The id is read once at the
+yield point through a func eval, kept in a strong handle, and compared by address at the resume
+point; an address of zero on either side is accepted as a match, and only when the id cannot be
+read does a matching thread id stand in. A matching thread id alone proves nothing — the pool
+reuses threads, so another invocation of the same method can resume on the stepping thread. The
+yield breakpoint is only honoured on the thread that set the step up, which is safe there: until
+the stepped invocation yields, it occupies that thread itself.
 
 "Next await" is the first await whose yield offset is at or after the IP; when the IP is inside an
 await block (between a yield and its resume) there is no next await and the plain stepper handles

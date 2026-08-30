@@ -211,8 +211,11 @@ internal class AsyncStepper {
     }
     private async Task HandleResumeBreakpointAsync(ICorDebugThread thread, ICorDebugILFrame frame) {
         var step = currentStep!;
+        // A matching thread id proves nothing: the pool reuses threads, so another invocation of the same
+        // method can resume on the stepping thread. The builder's id decides whenever it is available,
+        // the thread id only stands in when it cannot be read
         var isSameInvocation = step.ThreadId == thread.GetId();
-        if (!isSameInvocation && step.AsyncIdHandle != null) {
+        if (step.AsyncIdHandle != null) {
             var asyncId = await GetAsyncIdAsync(frame);
             if (asyncId != null) {
                 var currentAddress = asyncId.Dereference().GetAddress();
