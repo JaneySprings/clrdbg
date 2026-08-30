@@ -18,10 +18,7 @@ public class ThreadTests : BaseDebugTestFixture {
 
     [Test]
     public void ThreadNamesTest() {
-        Launch();
-        SetBreakpoints(GetMarkerLine("marker:stop"));
-        ConfigurationDone();
-        WaitForStopped(StoppedEvent.ReasonValue.Breakpoint);
+        LaunchToMarker();
 
         var threads = Host.SendRequestSync(new ThreadsRequest()).Threads;
         var names = threads.Select(it => it.Name).ToList();

@@ -145,8 +145,8 @@ through user code and is about to be swallowed by a library.
   generated closure or state machine, whose captured `this` and hoisted locals are listed instead),
   then the IL locals named by the PDB scopes at the current offset.
 - Expanding a value lists its instance fields and properties, base types included up to
-  `Object`/`ValueType`/`Enum`; properties are read by evaluating their getters. User-code types show
-  everything inline, library types show public members plus a `Non-Public members` group, and
+  `Object`/`ValueType`/`Enum`; properties are read by evaluating their getters. Every type shows its
+  public members inline plus a `Non-Public members` group when non-public ones exist, and
   statics go into a `Static members` group. A `DebuggerTypeProxy` instance stands in for the
   value's own members with the real ones under `Raw View`; `DebuggerBrowsable(Never)` hides,
   `RootHidden` inlines an array's elements.

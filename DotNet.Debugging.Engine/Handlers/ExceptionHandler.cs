@@ -26,14 +26,11 @@ public partial class ManagedDebugger {
         }
 
         var threadId = callbackEvent.Thread.GetId();
-        stepController.Disable();
         if (callbackEvent.Unhandled)
             exceptionThreads.Remove(threadId);
-        var kind = callbackEvent.Unhandled ? ExceptionStopKind.Unhandled : ExceptionStopKind.FirstChance;
-        exceptionStopKinds[threadId] = kind;
         // This callback arrives at the raise itself, the thread's frames still show it
         exceptionModules[threadId] = GetExceptionModuleName(callbackEvent.Thread);
-        OnExceptionThrown.Invoke(CreateStopInfo(threadId, kind));
+        RaiseExceptionStop(threadId, callbackEvent.Unhandled ? ExceptionStopKind.Unhandled : ExceptionStopKind.FirstChance);
     }
     // Follows the exception dispatch: the first chance stop under Just My Code happens when the dispatch reaches
     // user code, and an exception that passed through user code and is about to be caught in non-user code
@@ -58,18 +55,14 @@ public partial class ManagedDebugger {
                 // Every dispatch of the exception entering user code stops again, the way Microsoft's
                 // debugger re-breaks on each rethrow of an exception propagating through an async chain
                 if (JustMyCode && OnExceptionThrown != null) {
-                    stepController.Disable();
-                    exceptionStopKinds[threadId] = ExceptionStopKind.FirstChance;
-                    OnExceptionThrown.Invoke(CreateStopInfo(threadId, ExceptionStopKind.FirstChance));
+                    RaiseExceptionStop(threadId, ExceptionStopKind.FirstChance);
                     return;
                 }
                 break;
             case CorDebugExceptionCallbackType.DEBUG_EXCEPTION_CATCH_HANDLER_FOUND:
                 var passedThroughUserCode = exceptionThreads.Remove(threadId);
                 if (passedThroughUserCode && IsNonUserCodeFrame(callbackEvent.Frame) && OnExceptionThrown != null) {
-                    stepController.Disable();
-                    exceptionStopKinds[threadId] = ExceptionStopKind.UserUnhandled;
-                    OnExceptionThrown.Invoke(CreateStopInfo(threadId, ExceptionStopKind.UserUnhandled));
+                    RaiseExceptionStop(threadId, ExceptionStopKind.UserUnhandled);
                     return;
                 }
                 break;
@@ -77,8 +70,14 @@ public partial class ManagedDebugger {
         ContinueProcess();
     }
 
-    private ExceptionStopInfo CreateStopInfo(int threadId, ExceptionStopKind kind) {
-        return new ExceptionStopInfo(threadId, kind, GetExceptionTypeName(threadId), exceptionModules.GetValueOrDefault(threadId));
+    private void RaiseExceptionStop(int threadId, ExceptionStopKind kind) {
+        exceptionStopKinds[threadId] = kind;
+        OnExceptionThrown!.Invoke(new ExceptionStopInfo(threadId, kind, GetExceptionTypeName(threadId), exceptionModules.GetValueOrDefault(threadId)));
+        // The subscriber continued: its filters did not match and no stop was taken, so a step in flight
+        // (e.g. over an await whose task faulted, or over a call that throws and catches internally)
+        // keeps going. A stop that was taken abandons the step instead
+        if (!IsRunning)
+            stepController.Disable();
     }
     private bool IsUserCodeFrame(ICorDebugFrame? frame) {
         return GetFrameModule(frame) is { IsUserCode: true };

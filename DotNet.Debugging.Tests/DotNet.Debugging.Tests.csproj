@@ -1,6 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
 	<Import Project="..\Common.Build.props" />
 
+	<PropertyGroup>
+		<NoWarn>$(NoWarn);CA1861</NoWarn>
+		<RunSettingsFilePath>$(MSBuildThisFileDirectory)test.runsettings</RunSettingsFilePath>
+	</PropertyGroup>
+
 	<ItemGroup>
 		<ProjectReference Include="..\DotNet.Debugging.Adapter\DotNet.Debugging.Adapter.csproj" />
 		<PackageReference Include="Microsoft.NET.Test.Sdk" />

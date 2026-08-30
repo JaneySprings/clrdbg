@@ -8,6 +8,9 @@ namespace DotNet.Debugging.Tests;
 public class SymbolSearchPathTests : BaseDebugTestFixture {
     public SymbolSearchPathTests() : base(nameof(SymbolSearchPathTests)) { }
 
+    // The test moves the PDB out of the build output, a reused sandbox would be left without one
+    protected override bool ReuseSandbox => false;
+
     protected override string CreateProgramFileContent() {
         return """
         var value = 1; // marker:first
@@ -23,14 +26,10 @@ public class SymbolSearchPathTests : BaseDebugTestFixture {
         var movedPdbPath = Path.Combine(symbolsDirectory, Path.GetFileName(pdbPath));
         File.Move(pdbPath, movedPdbPath, true);
 
-        Launch(properties: new Dictionary<string, JToken> {
+        var threadId = LaunchToMarker("marker:first", properties: new Dictionary<string, JToken> {
             ["symbolOptions"] = JToken.FromObject(new Dictionary<string, object> { ["searchPaths"] = new[] { symbolsDirectory } }),
         });
-        SetBreakpoints(GetMarkerLine("marker:first"));
-        ConfigurationDone();
-
-        var stopped = WaitForStopped(StoppedEvent.ReasonValue.Breakpoint);
-        var frame = GetTopStackFrame(stopped.ThreadId!.Value);
+        var frame = GetTopStackFrame(threadId);
         Assert.That(frame.Line, Is.EqualTo(GetMarkerLine("marker:first")));
         Assert.That(frame.Source?.Path, Is.EqualTo(ProgramFilePath));
     }

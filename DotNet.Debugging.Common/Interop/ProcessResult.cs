@@ -10,7 +10,6 @@ public class ProcessResult {
     public string GetAllOutput() {
         return string.Join(Environment.NewLine, this.StandardOutput.Concat(this.StandardError));
     }
-
     public string GetOutput() {
         return string.Join(Environment.NewLine, this.StandardOutput);
     }

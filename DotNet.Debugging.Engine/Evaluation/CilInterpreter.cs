@@ -141,7 +141,7 @@ internal class CilInterpreter {
                     continue;
                 }
 
-                if (TryGetArgumentIndex(op, instruction.Operand, out var argumentIndex)) {
+                if (TryGetSlotIndex(op, instruction.Operand, OpCodes.Ldarg_0, OpCodes.Ldarg, OpCodes.Ldarg_S, out var argumentIndex)) {
                     stack.Push(handles.Root(arguments[argumentIndex].Read()));
                     continue;
                 }
@@ -153,7 +153,7 @@ internal class CilInterpreter {
                     arguments[(int)instruction.Operand!].Write(await MaterializeForStoreAsync(stack.Pop(), context, handles));
                     continue;
                 }
-                if (TryGetLocalIndex(op, instruction.Operand, out var localIndex)) {
+                if (TryGetSlotIndex(op, instruction.Operand, OpCodes.Ldloc_0, OpCodes.Ldloc, OpCodes.Ldloc_S, out var localIndex)) {
                     stack.Push(handles.Root(locals[localIndex].Read()));
                     continue;
                 }
@@ -161,7 +161,7 @@ internal class CilInterpreter {
                     stack.Push(CilValue.FromLocation(locals[(int)instruction.Operand!]));
                     continue;
                 }
-                if (TryGetStoreLocalIndex(op, instruction.Operand, out localIndex)) {
+                if (TryGetSlotIndex(op, instruction.Operand, OpCodes.Stloc_0, OpCodes.Stloc, OpCodes.Stloc_S, out localIndex)) {
                     locals[localIndex].Write(await MaterializeForStoreAsync(stack.Pop(), context, handles));
                     continue;
                 }
@@ -300,7 +300,17 @@ internal class CilInterpreter {
                     continue;
                 }
                 if (op == OpCodes.Unbox_Any) {
-                    var boxed = GetBoxedValue(stack.Pop());
+                    var source = stack.Pop();
+                    if (source.Location != null)
+                        source = source.Dereference();
+                    // A host primitive or an unboxed value type is already what the unbox would produce - a
+                    // synthetic variable read (GetObjectByAlias) hands back the plain value rather than a boxed object
+                    var isHostValue = source.Value != null && source.Value is not ResolvedCilType;
+                    if (isHostValue || (source.CorValue != null && source.CorValue is not ICorDebugReferenceValue)) {
+                        stack.Push(source);
+                        continue;
+                    }
+                    var boxed = GetBoxedValue(source);
                     var targetType = resolver.ResolveTypeToken((int)instruction.Operand!);
                     if (!IsUnboxCompatible(boxed.GetObject(), targetType))
                         throw new InvalidCastException($"InvalidCastException: Cannot unbox the debuggee value to '{GetTypeDisplayName(resolver, targetType)}'");
@@ -392,13 +402,8 @@ internal class CilInterpreter {
     private async Task<CilValue> NewObjectAsync(int token, Stack<CilValue> stack, EvaluationMetadataResolver resolver, EvaluationContext context, EvaluationHandleScope handles) {
         var constructor = resolver.ResolveMethod(token);
         var constructorArguments = PopArguments(stack, constructor.Signature.ParameterTypes.Length);
-        var argumentValues = new ICorDebugValue[constructorArguments.Length];
         var byRefArguments = new List<ByRefArgument>();
-        for (var i = 0; i < argumentValues.Length; i++) {
-            argumentValues[i] = constructor.Signature.ParameterTypes[i].EndsWith('&')
-                ? await MaterializeByRefArgumentAsync(constructorArguments[i], context, handles, byRefArguments)
-                : await MaterializeForCallAsync(constructorArguments[i], context, handles);
-        }
+        var argumentValues = await MaterializeArgumentsAsync(constructor, constructorArguments, receiverOffset: 0, context, handles, byRefArguments);
 
         var typeArguments = constructor.DeclaringType.TypeArguments.IsDefaultOrEmpty
             ? []
@@ -429,14 +434,8 @@ internal class CilInterpreter {
         if (receiverValue?.Value is StringBuilder || receiverValue?.Location?.Read().Value is StringBuilder || argumentValues.Any(it => it.Value is StringBuilder))
             throw new InvalidOperationException($"Unhandled interpolated-string call '{resolver.GetRuntimeTypeName(method.DeclaringType)}.{method.Name}'");
 
-        var receiverOffset = method.IsStatic ? 0 : 1;
-        var callArguments = new ICorDebugValue[argumentValues.Length + receiverOffset];
         var byRefArguments = new List<ByRefArgument>();
-        for (var i = 0; i < argumentValues.Length; i++) {
-            callArguments[i + receiverOffset] = method.Signature.ParameterTypes[i].EndsWith('&')
-                ? await MaterializeByRefArgumentAsync(argumentValues[i], context, handles, byRefArguments)
-                : await MaterializeForCallAsync(argumentValues[i], context, handles);
-        }
+        var callArguments = await MaterializeArgumentsAsync(method, argumentValues, method.IsStatic ? 0 : 1, context, handles, byRefArguments);
         if (receiverValue != null) {
             var receiver = receiverValue.Location != null ? receiverValue.Dereference() : receiverValue;
             if (receiver.IsNull)
@@ -573,6 +572,16 @@ internal class CilInterpreter {
             return CilValue.FromDebuggeeValue(materialized);
         }
         return value;
+    }
+    // Materializes the call arguments after 'receiverOffset' reserved slots, honouring by-reference parameters
+    private async Task<ICorDebugValue[]> MaterializeArgumentsAsync(ResolvedRuntimeMethod method, CilValue[] arguments, int receiverOffset, EvaluationContext context, EvaluationHandleScope handles, List<ByRefArgument> byRefArguments) {
+        var result = new ICorDebugValue[arguments.Length + receiverOffset];
+        for (var i = 0; i < arguments.Length; i++) {
+            result[i + receiverOffset] = method.Signature.ParameterTypes[i].EndsWith('&')
+                ? await MaterializeByRefArgumentAsync(arguments[i], context, handles, byRefArguments)
+                : await MaterializeForCallAsync(arguments[i], context, handles);
+        }
+        return result;
     }
     private async Task<ICorDebugValue> MaterializeByRefArgumentAsync(CilValue value, EvaluationContext context, EvaluationHandleScope handles, List<ByRefArgument> byRefArguments) {
         if (value.Location is CorDebugLocation location)
@@ -844,26 +853,9 @@ internal class CilInterpreter {
         value = null!;
         if (op == OpCodes.Ldnull)
             value = CilValue.Null();
-        else if (op == OpCodes.Ldc_I4_M1)
-            value = CilValue.FromPrimitive(-1);
-        else if (op == OpCodes.Ldc_I4_0)
-            value = CilValue.FromPrimitive(0);
-        else if (op == OpCodes.Ldc_I4_1)
-            value = CilValue.FromPrimitive(1);
-        else if (op == OpCodes.Ldc_I4_2)
-            value = CilValue.FromPrimitive(2);
-        else if (op == OpCodes.Ldc_I4_3)
-            value = CilValue.FromPrimitive(3);
-        else if (op == OpCodes.Ldc_I4_4)
-            value = CilValue.FromPrimitive(4);
-        else if (op == OpCodes.Ldc_I4_5)
-            value = CilValue.FromPrimitive(5);
-        else if (op == OpCodes.Ldc_I4_6)
-            value = CilValue.FromPrimitive(6);
-        else if (op == OpCodes.Ldc_I4_7)
-            value = CilValue.FromPrimitive(7);
-        else if (op == OpCodes.Ldc_I4_8)
-            value = CilValue.FromPrimitive(8);
+        // 'ldc.i4.m1' through 'ldc.i4.8' are consecutive opcodes loading -1 through 8
+        else if (op.Value >= OpCodes.Ldc_I4_M1.Value && op.Value <= OpCodes.Ldc_I4_8.Value)
+            value = CilValue.FromPrimitive(op.Value - OpCodes.Ldc_I4_0.Value);
         else if (op == OpCodes.Ldc_I4 || op == OpCodes.Ldc_I4_S)
             value = CilValue.FromPrimitive(System.Convert.ToInt32(operand));
         else if (op == OpCodes.Ldc_I8)
@@ -874,45 +866,12 @@ internal class CilInterpreter {
             value = CilValue.FromPrimitive((double)operand!);
         return value != null;
     }
-    private static bool TryGetArgumentIndex(OpCode op, object? operand, out int index) {
+    // The '.0' through '.3' short forms of ldarg/ldloc/stloc are consecutive opcodes encoding the slot index
+    private static bool TryGetSlotIndex(OpCode op, object? operand, OpCode shortFormZero, OpCode longForm, OpCode shortOperandForm, out int index) {
         index = -1;
-        if (op == OpCodes.Ldarg_0)
-            index = 0;
-        else if (op == OpCodes.Ldarg_1)
-            index = 1;
-        else if (op == OpCodes.Ldarg_2)
-            index = 2;
-        else if (op == OpCodes.Ldarg_3)
-            index = 3;
-        else if (op == OpCodes.Ldarg || op == OpCodes.Ldarg_S)
-            index = (int)operand!;
-        return index >= 0;
-    }
-    private static bool TryGetLocalIndex(OpCode op, object? operand, out int index) {
-        index = -1;
-        if (op == OpCodes.Ldloc_0)
-            index = 0;
-        else if (op == OpCodes.Ldloc_1)
-            index = 1;
-        else if (op == OpCodes.Ldloc_2)
-            index = 2;
-        else if (op == OpCodes.Ldloc_3)
-            index = 3;
-        else if (op == OpCodes.Ldloc || op == OpCodes.Ldloc_S)
-            index = (int)operand!;
-        return index >= 0;
-    }
-    private static bool TryGetStoreLocalIndex(OpCode op, object? operand, out int index) {
-        index = -1;
-        if (op == OpCodes.Stloc_0)
-            index = 0;
-        else if (op == OpCodes.Stloc_1)
-            index = 1;
-        else if (op == OpCodes.Stloc_2)
-            index = 2;
-        else if (op == OpCodes.Stloc_3)
-            index = 3;
-        else if (op == OpCodes.Stloc || op == OpCodes.Stloc_S)
+        if (op.Value >= shortFormZero.Value && op.Value < shortFormZero.Value + 4)
+            index = op.Value - shortFormZero.Value;
+        else if (op == longForm || op == shortOperandForm)
             index = (int)operand!;
         return index >= 0;
     }

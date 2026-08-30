@@ -62,14 +62,12 @@ public class ExceptionDetailsTests : BaseDebugTestFixture {
     // x64 the hardware fault surfaces in the user method itself and no helper frame exists
     [Test]
     public void ThrowHelperAttributionTest() {
-        Launch();
-        SetExceptionBreakpoints(new[] { "all" }, ("all", null));
-        ConfigurationDone();
+        LaunchWithExceptionFilters("all");
 
         var stopped = WaitForStopped(StoppedEvent.ReasonValue.Exception);
         Assert.That(stopped.Text, Is.EqualTo($"Exception thrown: 'System.DivideByZeroException' in {ProjectName}.dll"));
 
-        var details = Host.SendRequestSync(new ExceptionInfoRequest() { ThreadId = stopped.ThreadId!.Value }).Details;
+        var details = GetExceptionInfo(stopped.ThreadId!.Value).Details;
         Assert.That(details?.StackTrace, Does.Contain("   at Faulty.Divide(Int32 left, Int32 right) in "), "The faulting user frame carries its source");
         if (RuntimeInformation.ProcessArchitecture == Architecture.Arm64) {
             Assert.That(details?.StackTrace, Does.StartWith("   at Internal.Runtime.CompilerHelpers.ThrowHelpers.ThrowDivideByZeroException()"));
@@ -81,15 +79,13 @@ public class ExceptionDetailsTests : BaseDebugTestFixture {
     // exception's recorded trace as the top-level trace and names the innermost in the description
     [Test]
     public void WrappedExceptionReportsChainTest() {
-        Launch();
-        SetExceptionBreakpoints(new[] { "all" }, ("all", null));
-        ConfigurationDone();
+        LaunchWithExceptionFilters("all");
 
         // The divide fault, the innermost throw, the middle wrapper - then the outermost wrapper
         var stopped = WaitForStopped(StoppedEvent.ReasonValue.Exception);
         Continue(stopped.ThreadId!.Value);
         stopped = WaitForStopped(StoppedEvent.ReasonValue.Exception);
-        var innermostStop = Host.SendRequestSync(new ExceptionInfoRequest() { ThreadId = stopped.ThreadId!.Value });
+        var innermostStop = GetExceptionInfo(stopped.ThreadId!.Value);
         Assert.That(innermostStop.ExceptionId, Is.EqualTo("CLR/System.ArgumentOutOfRangeException"));
         Assert.That(innermostStop.Details?.InnerException, Is.Null.Or.Empty, "An exception without an inner one sends no 'innerException'");
         Continue(stopped.ThreadId!.Value);
@@ -97,7 +93,7 @@ public class ExceptionDetailsTests : BaseDebugTestFixture {
         Continue(stopped.ThreadId!.Value);
 
         stopped = WaitForStopped(StoppedEvent.ReasonValue.Exception);
-        var wrapperInfo = Host.SendRequestSync(new ExceptionInfoRequest() { ThreadId = stopped.ThreadId!.Value });
+        var wrapperInfo = GetExceptionInfo(stopped.ThreadId!.Value);
         Assert.That(wrapperInfo.ExceptionId, Is.EqualTo("CLR/System.InvalidOperationException"));
         Assert.That(wrapperInfo.Description, Does.StartWith($"Exception thrown: 'System.InvalidOperationException' in {ProjectName}.dll: 'failed to open document'"));
         Assert.That(wrapperInfo.Description, Does.Contain("\n Inner exceptions found, see $exception in variables window for more details."));
@@ -125,15 +121,13 @@ public class ExceptionDetailsTests : BaseDebugTestFixture {
     // everywhere - an accepted difference, the property appends the inner messages
     [Test]
     public void AggregateExceptionTest() {
-        Launch();
-        SetExceptionBreakpoints(new[] { "all" }, ("all", null));
-        ConfigurationDone();
+        LaunchWithExceptionFilters("all");
 
         StoppedEvent stopped;
         ExceptionInfoResponse info;
         while (true) {
             stopped = WaitForStopped(StoppedEvent.ReasonValue.Exception);
-            info = Host.SendRequestSync(new ExceptionInfoRequest() { ThreadId = stopped.ThreadId!.Value });
+            info = GetExceptionInfo(stopped.ThreadId!.Value);
             if (info.ExceptionId == "CLR/System.AggregateException")
                 break;
             Continue(stopped.ThreadId!.Value);

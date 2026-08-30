@@ -61,17 +61,9 @@ public class GenericBaseMemberTests : BaseDebugTestFixture {
         """;
     }
 
-    private int StopAtMarker() {
-        Launch();
-        SetBreakpoints(GetMarkerLine("marker:stop"));
-        ConfigurationDone();
-        var stopped = WaitForStopped(StoppedEvent.ReasonValue.Breakpoint);
-        return stopped.ThreadId!.Value;
-    }
-
     [Test]
     public void GenericBasePropertyTest() {
-        var threadId = StopAtMarker();
+        var threadId = LaunchToMarker();
         var rows = GetLocalVariables(threadId).First(it => it.Name.StartsWith("rows"));
 
         var members = GetVariables(rows.VariablesReference);
@@ -83,7 +75,7 @@ public class GenericBaseMemberTests : BaseDebugTestFixture {
 
     [Test]
     public void GenericBaseStaticPropertyTest() {
-        var threadId = StopAtMarker();
+        var threadId = LaunchToMarker();
         var rows = GetLocalVariables(threadId).First(it => it.Name.StartsWith("rows"));
 
         var staticGroup = GetVariables(rows.VariablesReference).First(it => it.Name == "Static members");
@@ -93,7 +85,7 @@ public class GenericBaseMemberTests : BaseDebugTestFixture {
 
     [Test]
     public void NestedGenericBasePropertyTest() {
-        var threadId = StopAtMarker();
+        var threadId = LaunchToMarker();
         var pairs = GetLocalVariables(threadId).First(it => it.Name.StartsWith("pairs"));
 
         var members = GetVariables(pairs.VariablesReference);
@@ -103,7 +95,7 @@ public class GenericBaseMemberTests : BaseDebugTestFixture {
 
     [Test]
     public void GenericDerivedPropertyTest() {
-        var threadId = StopAtMarker();
+        var threadId = LaunchToMarker();
         var closed = GetLocalVariables(threadId).First(it => it.Name.StartsWith("closed"));
 
         var members = GetVariables(closed.VariablesReference);
@@ -113,7 +105,7 @@ public class GenericBaseMemberTests : BaseDebugTestFixture {
 
     [Test]
     public void EvaluateGenericBasePropertyTest() {
-        var threadId = StopAtMarker();
+        var threadId = LaunchToMarker();
         Assert.That(Evaluate("rows.Count", threadId).Result, Is.EqualTo("2"), "The same call is made when the property is evaluated by name");
         Assert.That(Evaluate("pairs.Extra", threadId).Result, Is.EqualTo("42"));
     }

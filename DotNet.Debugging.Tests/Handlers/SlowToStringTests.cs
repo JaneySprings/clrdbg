@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
 using NUnit.Framework;
 
 namespace DotNet.Debugging.Tests;
@@ -33,12 +32,7 @@ public class SlowToStringTests : BaseDebugTestFixture {
 
     [Test]
     public void SlowToStringBudgetTest() {
-        Launch();
-        SetBreakpoints(GetMarkerLine("marker:stop"));
-        ConfigurationDone();
-        var stopped = WaitForStopped(StoppedEvent.ReasonValue.Breakpoint);
-        var threadId = stopped.ThreadId!.Value;
-
+        var threadId = LaunchToMarker();
         var items = GetLocalVariables(threadId).First(it => it.Name.StartsWith("items"));
         var stopwatch = Stopwatch.StartNew();
         var members = GetVariables(items.VariablesReference);

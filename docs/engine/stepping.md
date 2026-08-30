@@ -50,8 +50,10 @@ Re-steps go through `CreateStepper` and `ContinueProcess` without reporting anyt
 step has completed at the breakpoint's location and its `StepComplete` callback is queued behind the
 breakpoint — the breakpoint is continued and the step reports the stop. If the stepper is still
 active the breakpoint was hit before the step destination (inside a stepped-over call) and wins: the
-step is cancelled and the breakpoint stop is reported. `Pause`, `Debugger.Break()` and exception stops
-cancel everything (`Disable`).
+step is cancelled and the breakpoint stop is reported. `Pause`, `Debugger.Break()` and *taken*
+exception stops cancel everything (`Disable`); an exception the subscriber's filters let run on (it
+calls `Continue`) leaves the step in flight - a step over an await whose task faults, or over a call
+that throws and catches internally, still completes.
 
 ## Stepping across `await`
 
@@ -94,12 +96,16 @@ the step.
 
 Stepping out has to wait for the method's *task* to complete, not for `MoveNext` to return. The
 builder (the `<>t__builder` field of the state machine `this`) is asked to
-`SetNotificationForWaitCompletion(true)` — a func eval — which makes the runtime call
+`SetNotificationForWaitCompletion(true)` — a func eval of the *instance* overload, picked by its
+attributes: the builder also has a static `(bool, ref Task<T>)` overload, and starting the eval
+against it with the instance arguments wedges the debuggee forever — which makes the runtime call
 `Task.NotifyDebuggerOfWaitCompletion` when the awaiting code resumes; a breakpoint at IL offset 0 of
 that method (in `System.Private.CoreLib`) catches it, and the handler turns the hit into an ordinary
-step out, which lands in the resumed caller. `AsyncVoidMethodBuilder` has no task to wait for, so
-`async void` methods get a plain step out; if any part of the setup fails the plain step out is
-used as well.
+step out, which lands in the resumed caller. The `ValueTask` builders declare no notification
+method at all: there the builder's `m_task` field (the state machine box, present once the method
+has yielded) takes the call on its non-generic `Task` base instead. `AsyncVoidMethodBuilder` has no
+task to wait for, so `async void` methods get a plain step out; if any part of the setup fails the
+plain step out is used as well.
 
 ## Cleanup
 

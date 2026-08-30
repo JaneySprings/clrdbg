@@ -27,14 +27,12 @@ public class UnhandledExceptionTests : BaseDebugTestFixture {
     // the 'unhandled' stop fires regardless of the filters
     [Test]
     public void UnhandledStopTest() {
-        Launch();
-        SetExceptionBreakpoints(new[] { "user-unhandled" }, ("user-unhandled", null));
-        ConfigurationDone();
+        LaunchWithExceptionFilters("user-unhandled");
 
         var stopped = WaitForStopped(StoppedEvent.ReasonValue.Exception);
         Assert.That(stopped.Text, Is.EqualTo("An unhandled exception of type 'System.InvalidOperationException' occurred in System.Private.CoreLib.dll"),
             "The 'unhandled' stop names the module of the last rethrow - the core library's await machinery");
-        var info = Host.SendRequestSync(new ExceptionInfoRequest() { ThreadId = stopped.ThreadId!.Value });
+        var info = GetExceptionInfo(stopped.ThreadId!.Value);
         Assert.That(info.BreakMode, Is.EqualTo(ExceptionBreakMode.Unhandled));
         Assert.That(info.Details?.StackTrace, Does.Contain("Worker.ProcessRequest()"));
         Assert.That(info.Details?.StackTrace, Does.Contain(".<Main>("), "The recorded trace reaches through the bridge rethrow");
@@ -48,19 +46,9 @@ public class UnhandledExceptionTests : BaseDebugTestFixture {
     // not user code - and the 'user-unhandled' report stays hidden without its filter
     [Test]
     public void BreakOnAllCrashStopsTest() {
-        Launch();
-        SetExceptionBreakpoints(new[] { "all" }, ("all", null));
-        ConfigurationDone();
+        LaunchWithExceptionFilters("all");
 
-        var stops = new List<StoppedEvent>();
-        for (var i = 0; i < 10; i++) {
-            var debugEvent = WaitForEvent<DebugEvent>(it => it is TerminatedEvent || it is StoppedEvent { Reason: StoppedEvent.ReasonValue.Exception });
-            if (debugEvent is TerminatedEvent)
-                break;
-            var stopped = (StoppedEvent)debugEvent;
-            stops.Add(stopped);
-            Continue(stopped.ThreadId!.Value);
-        }
+        var stops = CollectStopsUntilExit();
 
         Assert.That(stops.Select(it => it.Text), Is.EqualTo(new[] {
             $"Exception thrown: 'System.InvalidOperationException' in {ProjectName}.dll",

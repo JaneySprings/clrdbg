@@ -64,9 +64,9 @@ placeholder over the remote (mobile) transport:
   dereferenced object cannot be passed to a func eval) and the exact type's type arguments; properties
   without a getter are skipped. A getter that throws shows the error as the value.
 - **Visibility.** `Kind` (`Data`/`Property`) and `Visibility` (`Public`/`Private`/`Protected`/`Internal`)
-  come from the field/getter attributes. A user-code type shows all its members inline; a library
-  type shows the public ones and a `Non-Public members` group when non-public ones exist. Static
-  members of either go into a `Static members` group; group nodes have `Kind = Group`.
+  come from the field/getter attributes. Every type shows its public members inline and groups the
+  non-public ones under `Non-Public members` when they exist. Static members go into a
+  `Static members` group; group nodes have `Kind = Group`.
 - **`DebuggerBrowsable`**: `Never` hides the member, `RootHidden` replaces an array-valued member by
   its elements.
 - **`DebuggerTypeProxy`**: the proxy is instantiated in the debuggee (`.ctor(value)`, the

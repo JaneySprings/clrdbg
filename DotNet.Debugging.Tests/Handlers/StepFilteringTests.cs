@@ -70,16 +70,7 @@ public class StepFilteringTests : BaseDebugTestFixture {
     }
 
     private int StopAtMarker(string marker, bool enableStepFiltering = true, bool justMyCode = true) {
-        Launch(justMyCode: justMyCode, properties: new Dictionary<string, JToken> { ["enableStepFiltering"] = enableStepFiltering });
-        SetBreakpoints(GetMarkerLine(marker));
-        ConfigurationDone();
-        var stopped = WaitForStopped(StoppedEvent.ReasonValue.Breakpoint);
-        return stopped.ThreadId!.Value;
-    }
-    private StackFrame StepIn(int threadId) {
-        Host.SendRequestSync(new StepInRequest() { ThreadId = threadId });
-        var stopped = WaitForStopped(StoppedEvent.ReasonValue.Step);
-        return GetTopStackFrame(stopped.ThreadId!.Value);
+        return LaunchToMarker(marker, justMyCode, new Dictionary<string, JToken> { ["enableStepFiltering"] = enableStepFiltering });
     }
 
     [Test]
@@ -169,9 +160,7 @@ public class StepFilteringTests : BaseDebugTestFixture {
     [Test]
     public void NextOverPropertyLineTest() {
         var threadId = StopAtMarker("marker:getProperty");
-        Host.SendRequestSync(new NextRequest() { ThreadId = threadId });
-        var stopped = WaitForStopped(StoppedEvent.ReasonValue.Step);
-        var frame = GetTopStackFrame(stopped.ThreadId!.Value);
+        var frame = StepOver(threadId);
         Assert.That(frame.Line, Is.EqualTo(GetMarkerLine("marker:afterGet")));
     }
 }

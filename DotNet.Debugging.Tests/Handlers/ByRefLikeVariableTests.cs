@@ -19,12 +19,7 @@ public class ByRefLikeVariableTests : BaseDebugTestFixture {
 
     [Test]
     public void SpanIsShownWithoutFuncEvalsTest() {
-        Launch();
-        SetBreakpoints(GetMarkerLine("marker:stop"));
-        ConfigurationDone();
-        var stopped = WaitForStopped(StoppedEvent.ReasonValue.Breakpoint);
-        var threadId = stopped.ThreadId!.Value;
-
+        var threadId = LaunchToMarker();
         var span = GetLocalVariables(threadId).Single(it => it.Name.StartsWith("span"));
         Assert.That(span.Value, Does.StartWith("{").And.Contain("ReadOnlySpan"));
 

@@ -88,7 +88,7 @@ internal class AsyncStepper {
         if (currentStep.Status == AsyncStepStatus.YieldBreakpoint) {
             if (currentStep.ThreadId != thread.GetId())
                 return AsyncBreakpointResult.NotHandled;
-            await HandleYieldBreakpointAsync(thread, frame);
+            await HandleYieldBreakpointAsync(frame);
             return AsyncBreakpointResult.Continue;
         }
         await HandleResumeBreakpointAsync(thread, frame);
@@ -123,19 +123,51 @@ internal class AsyncStepper {
             var objectValue = builder.UnwrapDebugValueToObject();
             var corClass = objectValue.GetClass();
             var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
-            var methodDef = metadataImport.FindMethod(corClass.GetToken(), "SetNotificationForWaitCompletion", 0, 0);
-            if (methodDef.IsNil)
-                return false;
+            var methodDef = FindNotificationMethod(metadataImport, corClass.GetToken());
+            if (!methodDef.IsNil)
+                return await CallNotificationAsync(builder, corClass, methodDef, objectValue.GetExactType().GetTypeParameters(), thread);
 
-            var eval = thread.CreateEval();
-            var enabled = CreateBooleanValue(eval, true);
-            var function = corClass.GetModule().GetFunctionFromToken(methodDef);
-            var result = await debugger.FuncEval.CallFunctionAsync(eval, function, objectValue.GetExactType().GetTypeParameters(), [builder, enabled]);
-            return result == null;
+            // The ValueTask builders have no notification method of their own; their 'm_task' (the state
+            // machine box, present once the method has yielded) takes the call on its Task base instead
+            var task = GetBuilderTask(objectValue, corClass, metadataImport);
+            return task != null && await SetNotificationOnTaskAsync(task, thread);
         }
         catch {
             return false;
         }
+    }
+    // 'SetNotificationForWaitCompletion(bool)' is declared on the non-generic Task, the walk goes up from
+    // the state machine box's own type. The method is invoked with the declaring type's arguments
+    private async Task<bool> SetNotificationOnTaskAsync(ICorDebugValue task, ICorDebugThread thread) {
+        for (var type = task.UnwrapDebugValueToObject().GetExactType(); type != null; type = type.GetBaseType()) {
+            var corClass = type.GetClass();
+            var methodDef = FindNotificationMethod(corClass.GetModule().GetMetaDataInterface<IMetaDataImport>(), corClass.GetToken());
+            if (!methodDef.IsNil)
+                return await CallNotificationAsync(task, corClass, methodDef, type.GetTypeParameters(), thread);
+        }
+        return false;
+    }
+    // The builder also has a static 'SetNotificationForWaitCompletion(bool, ref Task<T>)' overload: a lookup
+    // by name alone can land on it, and the mismatched arguments wedge the evaluation in the debuggee forever
+    private static MethodDefToken FindNotificationMethod(IMetaDataImport metadataImport, TypeDefToken typeToken) {
+        return metadataImport.EnumMethodsWithName(typeToken, "SetNotificationForWaitCompletion")
+            .FirstOrDefault(it => !metadataImport.GetMethodProps(it).pdwAttr.IsMdStatic());
+    }
+    private async Task<bool> CallNotificationAsync(ICorDebugValue receiver, ICorDebugClass corClass, MethodDefToken methodDef, ICorDebugType[] typeArguments, ICorDebugThread thread) {
+        var eval = thread.CreateEval();
+        var enabled = CreateBooleanValue(eval, true);
+        var function = corClass.GetModule().GetFunctionFromToken(methodDef);
+        var result = await debugger.FuncEval.CallFunctionAsync(eval, function, typeArguments, [receiver, enabled]);
+        return result == null;
+    }
+    private static ICorDebugValue? GetBuilderTask(ICorDebugObjectValue objectValue, ICorDebugClass corClass, IMetaDataImport metadataImport) {
+        var taskField = metadataImport.EnumFieldsWithName(corClass.GetToken(), "m_task").SingleOrDefault();
+        if (taskField.IsNil)
+            return null;
+        var task = objectValue.GetFieldValue(corClass, taskField);
+        if (task is ICorDebugReferenceValue reference && reference.IsNull())
+            return null;
+        return task;
     }
     private bool SetupNotifyDebuggerBreakpoint() {
         try {
@@ -163,7 +195,7 @@ internal class AsyncStepper {
     }
 
     // The method yielded: the plain stepper is done and the resume point is awaited, possibly on another thread
-    private async Task HandleYieldBreakpointAsync(ICorDebugThread thread, ICorDebugILFrame frame) {
+    private async Task HandleYieldBreakpointAsync(ICorDebugILFrame frame) {
         var step = currentStep!;
         stepController.CancelStep();
 
@@ -186,6 +218,7 @@ internal class AsyncStepper {
                 var currentAddress = asyncId.Dereference().GetAddress();
                 var storedAddress = step.AsyncIdHandle.Dereference().GetAddress();
                 isSameInvocation = currentAddress == storedAddress || currentAddress.Value == 0 || storedAddress.Value == 0;
+                asyncId.TryDispose();
             }
         }
         if (!isSameInvocation)

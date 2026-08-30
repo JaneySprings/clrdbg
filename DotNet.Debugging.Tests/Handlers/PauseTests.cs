@@ -51,21 +51,17 @@ public class PauseTests : BaseDebugTestFixture {
     /// </summary>
     [Test]
     public void PauseWhileStoppedAtBreakpointIsRefusedTest() {
-        Launch();
-        SetBreakpoints(GetMarkerLine("marker:tick"));
-        ConfigurationDone();
-
-        var stopped = WaitForStopped(StoppedEvent.ReasonValue.Breakpoint);
+        var threadId = LaunchToMarker("marker:tick");
 
         var refusal = Assert.Throws<ProtocolException>(
-            () => Host.SendRequestSync(new PauseRequest() { ThreadId = stopped.ThreadId!.Value }));
+            () => Host.SendRequestSync(new PauseRequest() { ThreadId = threadId }));
         Assert.That(refusal!.Message, Does.Contain("not running"));
 
         // Still stopped where it was, and still able to carry on from there
-        var frame = GetTopStackFrame(stopped.ThreadId!.Value);
+        var frame = GetTopStackFrame(threadId);
         Assert.That(frame.Line, Is.EqualTo(GetMarkerLine("marker:tick")));
 
-        Continue(stopped.ThreadId!.Value);
+        Continue(threadId);
         WaitForStopped(StoppedEvent.ReasonValue.Breakpoint);
     }
 

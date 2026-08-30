@@ -33,14 +33,19 @@ internal class ExpressionCompiler {
     }
 
     public CompiledExpression Compile(string expression, EvaluationContext context) {
+        // A type context (DebuggerDisplay) evaluation binds against the value alone, no IL frame is needed for it
+        ICorDebugILFrame? frame = null;
+        ICorDebugModule preferredModule;
         if (context.RootValue != null) {
             // DebuggerDisplay format specifiers ({Name,nq}) are not valid interpolation alignments
             var syntax = SyntaxFactory.ParseExpression(expression);
             expression = new RemoveFormatSpecifierRewriter().Visit(syntax)!.ToFullString();
+            preferredModule = context.RootValue.GetExactType().GetClass().GetModule();
         }
-
-        var frame = debugger.GetILFrame(context.ThreadId, context.FrameDepth);
-        var preferredModule = context.RootValue != null ? context.RootValue.GetExactType().GetClass().GetModule() : frame.GetFunction().GetModule();
+        else {
+            frame = debugger.GetILFrame(context.ThreadId, context.FrameDepth);
+            preferredModule = frame.GetFunction().GetModule();
+        }
         var hasException = debugger.GetCurrentException(context.ThreadId) != null;
 
         InvalidateCacheOnModuleChange();
@@ -53,7 +58,7 @@ internal class ExpressionCompiler {
 
         var blocks = GetMetadataBlocks(preferredModule);
         var evaluationContext = context.RootValue == null
-            ? CreateMethodContext(blocks, frame)
+            ? CreateMethodContext(blocks, frame!)
             : CreateTypeContext(blocks, context.RootValue);
 
         var diagnostics = DiagnosticBag.GetInstance();
@@ -70,12 +75,12 @@ internal class ExpressionCompiler {
         }
     }
 
-    private static string CreateCacheKey(string expression, EvaluationContext context, ICorDebugILFrame frame, ICorDebugModule preferredModule, bool hasException) {
+    private static string CreateCacheKey(string expression, EvaluationContext context, ICorDebugILFrame? frame, ICorDebugModule preferredModule, bool hasException) {
         if (context.RootValue != null)
             return $"type|{preferredModule.GetBaseAddress().Value}|{context.RootValue.GetExactType().GetClass().GetToken()}|{hasException}|{expression}";
 
-        var ilOffset = EvaluationContextBase.NormalizeILOffset((uint)frame.GetIP().pnOffset);
-        return $"method|{preferredModule.GetBaseAddress().Value}|{frame.GetFunction().GetToken()}|{ilOffset}|{hasException}|{expression}";
+        var ilOffset = EvaluationContextBase.NormalizeILOffset((uint)frame!.GetIP().pnOffset);
+        return $"method|{preferredModule.GetBaseAddress().Value}|{frame!.GetFunction().GetToken()}|{ilOffset}|{hasException}|{expression}";
     }
     private CompiledExpression AddToCache(string key, CompiledExpression compiled) {
         if (compileCache.Count >= CacheCapacity) {

@@ -13,9 +13,9 @@ public static class AndroidDebugBridge {
             .WaitForExit();
 
         if (!result.Success)
-            return string.Join(Environment.NewLine, result.StandardError);
+            return string.Empty;
 
-        return string.Join(Environment.NewLine, result.StandardOutput);
+        return result.GetOutput().Trim();
     }
     public static ProcessResult ShellResult(string serial, params string[] args) {
         var adb = AndroidSdkLocator.GetAdbPath();
@@ -67,7 +67,7 @@ public static class AndroidDebugBridge {
             if (line.StartsWith("list of", StringComparison.OrdinalIgnoreCase))
                 continue;
 
-            var data = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            var data = line.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
             if (data.Length > 1 && data[1].Equals("device", StringComparison.OrdinalIgnoreCase))
                 devices.Add(data[0]);
         }
@@ -97,8 +97,8 @@ public static class AndroidDebugBridge {
     public static void Launch(string serial, string pkg, IProcessLogger? logger = null) {
         // This is a legacy method that is no longer used (device auto-rotation issue).
         // string result = Shell(serial, "monkey", "--pct-syskeys", "0", "-p", pkg, "1");
-        string result = Shell(serial, "am", "start", $"{pkg}/$(cmd package resolve-activity -c android.intent.category.LAUNCHER {pkg} | sed -n '/name=/s/^.*name=//p')");
-        logger?.OnOutputDataReceived(result);
+        var result = ShellResult(serial, "am", "start", $"{pkg}/$(cmd package resolve-activity -c android.intent.category.LAUNCHER {pkg} | sed -n '/name=/s/^.*name=//p')");
+        logger?.OnOutputDataReceived(result.GetAllOutput());
     }
     public static void Push(string serial, string source, string destination, IProcessLogger? logger = null) {
         var adb = AndroidSdkLocator.GetAdbPath();
@@ -129,7 +129,7 @@ public static class AndroidDebugBridge {
         return new ProcessRunner(adb, arguments, logger).Start();
     }
     public static Process Logcat(string serial, string applicationId, IProcessLogger logger) {
-        string applicationProcessId = Shell(serial, "pidof", "-s", applicationId).Trim();
+        string applicationProcessId = Shell(serial, "pidof", "-s", applicationId);
 
         // If we can't get the current app PID, return full logcat
         if (string.IsNullOrEmpty(applicationProcessId))

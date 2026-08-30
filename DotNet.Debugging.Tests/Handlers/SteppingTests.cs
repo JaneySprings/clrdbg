@@ -1,4 +1,3 @@
-using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
 using NUnit.Framework;
 
 namespace DotNet.Debugging.Tests;
@@ -19,44 +18,24 @@ public class SteppingTests : BaseDebugTestFixture {
         """;
     }
 
-    private int StopAtFirstLine() {
-        Launch();
-        SetBreakpoints(GetMarkerLine("marker:first"));
-        ConfigurationDone();
-        var stopped = WaitForStopped(StoppedEvent.ReasonValue.Breakpoint);
-        return stopped.ThreadId!.Value;
-    }
-
     [Test]
     public void NextTest() {
-        var threadId = StopAtFirstLine();
-        Host.SendRequestSync(new NextRequest() { ThreadId = threadId });
-
-        var stopped = WaitForStopped(StoppedEvent.ReasonValue.Step);
-        Assert.That(GetTopStackFrame(stopped.ThreadId!.Value).Line, Is.EqualTo(GetMarkerLine("marker:second")));
+        var threadId = LaunchToMarker("marker:first");
+        var frame = StepOver(threadId);
+        Assert.That(frame.Line, Is.EqualTo(GetMarkerLine("marker:second")));
     }
 
     [Test]
     public void StepInTest() {
-        var threadId = StopAtFirstLine();
-        Host.SendRequestSync(new StepInRequest() { ThreadId = threadId });
-
-        var stopped = WaitForStopped(StoppedEvent.ReasonValue.Step);
-        var frame = GetTopStackFrame(stopped.ThreadId!.Value);
+        var threadId = LaunchToMarker("marker:first");
+        var frame = StepIn(threadId);
         Assert.That(frame.Name, Does.Contain("Add"));
     }
 
     [Test]
     public void StepOutTest() {
-        Launch();
-        SetBreakpoints(GetMarkerLine("marker:inside"));
-        ConfigurationDone();
-        var stopped = WaitForStopped(StoppedEvent.ReasonValue.Breakpoint);
-
-        Host.SendRequestSync(new StepOutRequest() { ThreadId = stopped.ThreadId!.Value });
-
-        var stepStopped = WaitForStopped(StoppedEvent.ReasonValue.Step);
-        var frame = GetTopStackFrame(stepStopped.ThreadId!.Value);
+        var threadId = LaunchToMarker("marker:inside");
+        var frame = StepOut(threadId);
         Assert.That(frame.Name, Does.Contain("Main"));
         Assert.That(frame.Line, Is.EqualTo(GetMarkerLine("marker:first")));
     }

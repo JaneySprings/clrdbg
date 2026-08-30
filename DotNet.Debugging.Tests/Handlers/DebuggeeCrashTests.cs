@@ -17,11 +17,7 @@ public class DebuggeeCrashTests : BaseDebugTestFixture {
 
     [Test]
     public void EvalKillingTheDebuggeeTerminatesTheSessionTest() {
-        Launch();
-        SetBreakpoints(GetMarkerLine("marker:stop"));
-        ConfigurationDone();
-        var stopped = WaitForStopped(StoppedEvent.ReasonValue.Breakpoint);
-        var threadId = stopped.ThreadId!.Value;
+        var threadId = LaunchToMarker();
 
         // The evaluation kills the debuggee; the request must come back (as an error), not hang
         var evaluation = Task.Run(() => {

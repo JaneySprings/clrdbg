@@ -67,13 +67,10 @@ public class SourceLinkTests : BaseDebugTestFixture {
     [Test]
     public void MissingSourceIsServedOnRequestTest() {
         var sourceLinkOptions = JObject.Parse("""{"*": {"enabled": true}}""");
-        Launch(properties: new Dictionary<string, JToken> { ["sourceLinkOptions"] = sourceLinkOptions });
-        SetBreakpoints(GetMarkerLine("marker:stop"));
-        ConfigurationDone();
-        var stopped = WaitForStopped(StoppedEvent.ReasonValue.Breakpoint);
+        var threadId = LaunchToMarker(properties: new Dictionary<string, JToken> { ["sourceLinkOptions"] = sourceLinkOptions });
 
         // The mapped document does not exist, the frame refers to a source the client has to ask for
-        var frame = GetTopStackFrame(stopped.ThreadId!.Value);
+        var frame = GetTopStackFrame(threadId);
         Assert.That(frame.Source?.Path?.Replace('\\', '/'), Is.EqualTo($"{MappedSourceRoot}/Program.cs"));
         Assert.That(frame.Source!.SourceReference, Is.GreaterThan(0));
         Assert.That(frame.Source.VsSourceLinkInfo?.Url, Is.EqualTo($"http://127.0.0.1:{port}/Program.cs"));
@@ -93,7 +90,7 @@ public class SourceLinkTests : BaseDebugTestFixture {
         Assert.That(breakpoints[0].Verified, Is.True, breakpoints[0].Message);
         Assert.That(breakpoints[0].Source?.SourceReference, Is.EqualTo(frame.Source.SourceReference));
 
-        Continue(stopped.ThreadId!.Value);
+        Continue(threadId);
         var endStopped = WaitForStopped(StoppedEvent.ReasonValue.Breakpoint);
         var endFrame = GetTopStackFrame(endStopped.ThreadId!.Value);
         Assert.That(endFrame.Line, Is.EqualTo(GetMarkerLine("marker:end")));
@@ -103,12 +100,9 @@ public class SourceLinkTests : BaseDebugTestFixture {
     [Test]
     public void DisabledSourceLinkKeepsThePlainPathTest() {
         var sourceLinkOptions = JObject.Parse("""{"*": {"enabled": false}}""");
-        Launch(properties: new Dictionary<string, JToken> { ["sourceLinkOptions"] = sourceLinkOptions });
-        SetBreakpoints(GetMarkerLine("marker:stop"));
-        ConfigurationDone();
-        var stopped = WaitForStopped(StoppedEvent.ReasonValue.Breakpoint);
+        var threadId = LaunchToMarker(properties: new Dictionary<string, JToken> { ["sourceLinkOptions"] = sourceLinkOptions });
 
-        var frame = GetTopStackFrame(stopped.ThreadId!.Value);
+        var frame = GetTopStackFrame(threadId);
         Assert.That(frame.Source?.Path?.Replace('\\', '/'), Is.EqualTo($"{MappedSourceRoot}/Program.cs"));
         Assert.That(frame.Source?.SourceReference ?? 0, Is.Zero);
         Assert.That(Volatile.Read(ref servedRequests), Is.Zero);

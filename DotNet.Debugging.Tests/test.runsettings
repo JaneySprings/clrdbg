@@ -1,0 +1,6 @@
+<RunSettings>
+	<NUnit>
+		<!-- A hung request must fail the test rather than wedge the whole run: SendRequestSync has no timeout of its own -->
+		<DefaultTimeout>120000</DefaultTimeout>
+	</NUnit>
+</RunSettings>

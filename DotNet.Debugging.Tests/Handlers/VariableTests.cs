@@ -52,17 +52,9 @@ public class VariableTests : BaseDebugTestFixture {
         """;
     }
 
-    private int StopAtMarker() {
-        Launch();
-        SetBreakpoints(GetMarkerLine("marker:stop"));
-        ConfigurationDone();
-        var stopped = WaitForStopped(StoppedEvent.ReasonValue.Breakpoint);
-        return stopped.ThreadId!.Value;
-    }
-
     [Test]
     public void DisplayNameTest() {
-        var threadId = StopAtMarker();
+        var threadId = LaunchToMarker();
         var locals = GetLocalVariables(threadId);
 
         var count = locals.FirstOrDefault(it => it.Name == "count [int]");
@@ -88,7 +80,7 @@ public class VariableTests : BaseDebugTestFixture {
 
     [Test]
     public void EvaluateNamesArePathsTest() {
-        var threadId = StopAtMarker();
+        var threadId = LaunchToMarker();
         var locals = GetLocalVariables(threadId);
 
         var item = locals.First(it => it.Name == "item [SampleClass]");
@@ -97,8 +89,9 @@ public class VariableTests : BaseDebugTestFixture {
         Assert.That(publicField.EvaluateName, Is.EqualTo("item.PublicField"));
         Assert.That(publicField.PresentationHint?.Kind, Is.EqualTo(VariablePresentationHint.KindValue.Data));
         Assert.That(publicField.PresentationHint?.Visibility, Is.EqualTo(VariablePresentationHint.VisibilityValue.Public));
-        var privateProperty = members.First(it => it.Name == "PrivateProperty [int]");
-        Assert.That(privateProperty.EvaluateName, Is.EqualTo("item.PrivateProperty"));
+        var nonPublicGroup = members.First(it => it.Name == "Non-Public members");
+        var privateProperty = GetVariables(nonPublicGroup.VariablesReference).First(it => it.Name == "PrivateProperty [int]");
+        Assert.That(privateProperty.EvaluateName, Is.EqualTo("item.PrivateProperty"), "Members of a group build their expression from the grouped value");
         Assert.That(privateProperty.PresentationHint?.Kind, Is.EqualTo(VariablePresentationHint.KindValue.Property));
         Assert.That(privateProperty.PresentationHint?.Visibility, Is.EqualTo(VariablePresentationHint.VisibilityValue.Private));
 
@@ -119,7 +112,7 @@ public class VariableTests : BaseDebugTestFixture {
 
     [Test]
     public void VariablesPagingTest() {
-        var threadId = StopAtMarker();
+        var threadId = LaunchToMarker();
         var numbers = GetLocalVariables(threadId).First(it => it.Name == "numbers [int[]]");
 
         var firstPage = GetVariables(numbers.VariablesReference);
@@ -138,23 +131,23 @@ public class VariableTests : BaseDebugTestFixture {
         Assert.That(thirdPage[^1].Name, Is.EqualTo("[59] [int]"));
     }
 
-    private static readonly string[] expected = new[] {
-            "PrivateProperty [int]", "PublicField [int]", "PublicProperty [int]", "privateField [int]", "Static members"
-        };
-
     [Test]
-    public void UserTypeMembersAreFlatTest() {
-        var threadId = StopAtMarker();
+    public void UserTypeNonPublicMembersGroupTest() {
+        var threadId = LaunchToMarker();
         var item = GetLocalVariables(threadId).First(it => it.Name == "item [SampleClass]");
 
         var members = GetVariables(item.VariablesReference);
-        var names = members.Select(it => it.Name).ToList();
-        Assert.That(names, Is.EqualTo(expected), "User code types show all members inline in ordinal order");
+        Assert.That(members.Select(it => it.Name), Is.EqualTo(new[] { "PublicField [int]", "PublicProperty [int]", "Static members", "Non-Public members" }),
+            "User code types group their non-public members like library types");
+
+        var nonPublicGroup = members.First(it => it.Name == "Non-Public members");
+        var nonPublicNames = GetVariables(nonPublicGroup.VariablesReference).Select(it => it.Name);
+        Assert.That(nonPublicNames, Is.EqualTo(new[] { "PrivateProperty [int]", "privateField [int]" }), "The group holds the non-public members in ordinal order");
     }
 
     [Test]
     public void SystemTypeNonPublicMembersGroupTest() {
-        var threadId = StopAtMarker();
+        var threadId = LaunchToMarker();
         var builder = GetLocalVariables(threadId).First(it => it.Name == "builder [StringBuilder]");
 
         var members = GetVariables(builder.VariablesReference);
@@ -169,7 +162,7 @@ public class VariableTests : BaseDebugTestFixture {
 
     [Test]
     public void ResultsViewTest() {
-        var threadId = StopAtMarker();
+        var threadId = LaunchToMarker();
         var custom = GetLocalVariables(threadId).First(it => it.Name == "custom [CustomCollection]");
 
         var members = GetVariables(custom.VariablesReference);
@@ -182,7 +175,8 @@ public class VariableTests : BaseDebugTestFixture {
         Assert.That(items[0].Value, Is.EqualTo("\"first\""));
         Assert.That(items[1].Value, Is.EqualTo("\"second\""));
 
-        var innerList = members.First(it => it.Name.StartsWith("innerItems"));
+        var nonPublicGroup = members.First(it => it.Name == "Non-Public members");
+        var innerList = GetVariables(nonPublicGroup.VariablesReference).First(it => it.Name.StartsWith("innerItems"));
         var listMembers = GetVariables(innerList.VariablesReference);
         Assert.That(listMembers.Any(it => it.Name == "Results View"), Is.False, "A value shown through a DebuggerTypeProxy already enumerates through the proxy");
         var rawView = listMembers.First(it => it.Name == "Raw View");
@@ -191,7 +185,7 @@ public class VariableTests : BaseDebugTestFixture {
 
     [Test]
     public void ClosedGenericProxyTest() {
-        var threadId = StopAtMarker();
+        var threadId = LaunchToMarker();
         var matches = GetLocalVariables(threadId).First(it => it.Name == "matches [MatchCollection]");
         Assert.That(matches.Value, Is.EqualTo("Count = 2"), "The DebuggerDisplay of MatchCollection must run, not a proxy creation error");
 
@@ -203,7 +197,7 @@ public class VariableTests : BaseDebugTestFixture {
 
     [Test]
     public void NonGenericResultsViewTest() {
-        var threadId = StopAtMarker();
+        var threadId = LaunchToMarker();
         var legacy = GetLocalVariables(threadId).First(it => it.Name == "legacy [LegacyCollection]");
 
         var members = GetVariables(legacy.VariablesReference);
@@ -215,7 +209,7 @@ public class VariableTests : BaseDebugTestFixture {
 
     [Test]
     public void SetVariableTest() {
-        var threadId = StopAtMarker();
+        var threadId = LaunchToMarker();
         var frame = GetTopStackFrame(threadId);
         var scopes = Host.SendRequestSync(new ScopesRequest() { FrameId = frame.Id });
 
@@ -229,5 +223,62 @@ public class VariableTests : BaseDebugTestFixture {
 
         var result = Evaluate("count", threadId);
         Assert.That(result.Result, Is.EqualTo("100"));
+    }
+
+    [Test]
+    public void SetArrayElementTest() {
+        var threadId = LaunchToMarker();
+        var numbers = GetLocalVariables(threadId).First(it => it.Name == "numbers [int[]]");
+
+        var response = Host.SendRequestSync(new SetVariableRequest() {
+            VariablesReference = numbers.VariablesReference,
+            Name = "[0] [int]",
+            Value = "99",
+        });
+        Assert.That(response.Value, Is.EqualTo("99"));
+        Assert.That(Evaluate("numbers[0]", threadId).Result, Is.EqualTo("99"));
+    }
+
+    [Test]
+    public void SetMemberFieldTest() {
+        var threadId = LaunchToMarker();
+        var item = GetLocalVariables(threadId).First(it => it.Name == "item [SampleClass]");
+
+        var response = Host.SendRequestSync(new SetVariableRequest() {
+            VariablesReference = item.VariablesReference,
+            Name = "PublicField [int]",
+            Value = "77",
+        });
+        Assert.That(response.Value, Is.EqualTo("77"));
+        Assert.That(Evaluate("item.PublicField", threadId).Result, Is.EqualTo("77"));
+    }
+
+    [Test]
+    public void SetReferenceToNullTest() {
+        var threadId = LaunchToMarker();
+        var frame = GetTopStackFrame(threadId);
+        var scopes = Host.SendRequestSync(new ScopesRequest() { FrameId = frame.Id });
+
+        var response = Host.SendRequestSync(new SetVariableRequest() {
+            VariablesReference = scopes.Scopes[0].VariablesReference,
+            Name = "title [string]",
+            Value = "null",
+        });
+        Assert.That(response.Value, Is.EqualTo("null"));
+        Assert.That(Evaluate("title", threadId).Result, Is.EqualTo("null"));
+    }
+
+    [Test]
+    public void SetVariableWithInvalidValueFailsTest() {
+        var threadId = LaunchToMarker();
+        var frame = GetTopStackFrame(threadId);
+        var scopes = Host.SendRequestSync(new ScopesRequest() { FrameId = frame.Id });
+
+        Assert.Throws<Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.ProtocolException>(() => Host.SendRequestSync(new SetVariableRequest() {
+            VariablesReference = scopes.Scopes[0].VariablesReference,
+            Name = "count [int]",
+            Value = "abc",
+        }));
+        Assert.That(Evaluate("count", threadId).Result, Is.EqualTo("42"), "A failed assignment leaves the value untouched");
     }
 }

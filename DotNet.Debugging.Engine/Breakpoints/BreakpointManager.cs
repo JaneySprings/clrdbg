@@ -235,9 +235,7 @@ internal class BreakpointManager {
         return !wasVerified && breakpoint.Verified;
     }
     private void Deactivate(Breakpoint breakpoint) {
-        var corBreakpoints = breakpoint.IsFunctionBreakpoint
-            ? breakpoint.FunctionBindings.Select(it => it.CorBreakpoint).ToList()
-            : new List<ICorDebugFunctionBreakpoint>();
+        var corBreakpoints = breakpoint.FunctionBindings.Select(it => it.CorBreakpoint).ToList();
         if (breakpoint.CorBreakpoint != null)
             corBreakpoints.Add(breakpoint.CorBreakpoint);
 

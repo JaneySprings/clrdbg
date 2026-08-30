@@ -32,17 +32,9 @@ public class ResultsViewTests : BaseDebugTestFixture {
         """;
     }
 
-    private int StopAtMarker() {
-        Launch();
-        SetBreakpoints(GetMarkerLine("marker:stop"));
-        ConfigurationDone();
-        var stopped = WaitForStopped(StoppedEvent.ReasonValue.Breakpoint);
-        return stopped.ThreadId!.Value;
-    }
-
     [Test]
     public void ResultsViewWithoutSystemLinqLoadedTest() {
-        var threadId = StopAtMarker();
+        var threadId = LaunchToMarker();
 
         var collection = GetLocalVariables(threadId).First(it => it.Name == "collection [MyCollection]");
         var members = GetVariables(collection.VariablesReference);
@@ -56,7 +48,7 @@ public class ResultsViewTests : BaseDebugTestFixture {
 
     [Test]
     public void EmptyResultsViewTest() {
-        var threadId = StopAtMarker();
+        var threadId = LaunchToMarker();
 
         var empty = GetLocalVariables(threadId).First(it => it.Name == "empty [MyCollection]");
         var members = GetVariables(empty.VariablesReference);

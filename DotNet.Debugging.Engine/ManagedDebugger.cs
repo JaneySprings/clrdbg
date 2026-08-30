@@ -140,15 +140,13 @@ public partial class ManagedDebugger {
     }
     public async Task ConfigurationDoneAsync() {
         DebuggerLoggingService.LogMessage("ConfigurationDone");
-        if (pendingLaunch != null && pendingLaunch.Console != ConsoleType.InternalConsole) {
+        if (pendingLaunch != null) {
             var launchRequest = pendingLaunch;
             pendingLaunch = null;
-            await LaunchInTerminalAsync(launchRequest);
-        }
-        else if (pendingLaunch != null) {
-            var launchRequest = pendingLaunch;
-            pendingLaunch = null;
-            await LaunchProcessAsync(launchRequest);
+            if (launchRequest.Console == ConsoleType.InternalConsole)
+                await LaunchProcessAsync(launchRequest);
+            else
+                await LaunchInTerminalAsync(launchRequest);
         }
         else if (pendingRemoteAttach != null) {
             var attachInfo = pendingRemoteAttach;
@@ -210,12 +208,7 @@ public partial class ManagedDebugger {
         DebuggerLoggingService.LogMessage("Terminate");
         if (process != null) {
             try {
-                // Terminate needs the process synchronized, on a running one it fails with CORDBG_E_PROCESS_NOT_SYNCHRONIZED
-                if (IsRunning) {
-                    var result = process.TryStop(0);
-                    if (result != Cor.S_OK && result != Cor.CORDBG_E_PROCESS_TERMINATED)
-                        DebuggerLoggingService.LogMessage($"Error stopping the process before terminating: 0x{result:X8}");
-                }
+                StopBeforeShutdown("terminating");
                 process.Terminate(0);
             }
             catch (Exception ex) {
@@ -230,12 +223,16 @@ public partial class ManagedDebugger {
             Terminate();
             return;
         }
-        if (process != null && IsRunning) {
-            var result = process.TryStop(0);
-            if (result != Cor.S_OK && result != Cor.CORDBG_E_PROCESS_TERMINATED)
-                DebuggerLoggingService.LogMessage($"Error stopping the process before detaching: 0x{result:X8}");
-        }
+        StopBeforeShutdown("detaching");
         Dispose(killLaunchedProcess: false);
+    }
+    // Terminate and Detach need the process synchronized, on a running one they fail with CORDBG_E_PROCESS_NOT_SYNCHRONIZED
+    private void StopBeforeShutdown(string action) {
+        if (process == null || !IsRunning)
+            return;
+        var result = process.TryStop(0);
+        if (result != Cor.S_OK && result != Cor.CORDBG_E_PROCESS_TERMINATED)
+            DebuggerLoggingService.LogMessage($"Error stopping the process before {action}: 0x{result:X8}");
     }
 
     public List<Breakpoint> SetBreakpoints(string filePath, List<BreakpointRequest> requests) {
@@ -313,17 +310,21 @@ public partial class ManagedDebugger {
     }
     public async Task<ExceptionInfo> GetExceptionInfoAsync(int threadId) {
         var exception = GetCurrentException(threadId) ?? throw new InvalidOperationException("No current exception on the thread");
-        var typeName = ValueFormatter.Format(exception, false).TypeName;
         var kind = exceptionStopKinds.GetValueOrDefault(threadId, ExceptionStopKind.FirstChance);
         // The frames of the raise are gone by the time of the stop, the module was captured back then
         var moduleName = exceptionModules.GetValueOrDefault(threadId);
-        // The frame dependent parts are read before the property evaluations, which neuter the frames
+        var details = await ReadExceptionDetailsAsync(exception, threadId);
+        var innerExceptionChain = await GetInnerExceptionChainAsync(exception, threadId);
+        return new ExceptionInfo(details.TypeName, details.Message, details.Source, details.StackTrace, details.HResult, kind, moduleName, innerExceptionChain);
+    }
+    // The frame dependent parts (type name, recorded trace) are read before the property evaluations, which neuter the frames
+    private async Task<InnerExceptionInfo> ReadExceptionDetailsAsync(ICorDebugValue exception, int threadId) {
+        var typeName = ValueFormatter.Format(exception, false).TypeName;
         var stackTrace = GetExceptionStackTrace(exception);
         var message = await GetExceptionPropertyAsync(exception, threadId, "Message") ?? string.Empty;
         var source = await GetExceptionPropertyAsync(exception, threadId, "Source");
         var hresult = int.Parse(await GetExceptionPropertyAsync(exception, threadId, "HResult") ?? "0");
-        var innerExceptionChain = await GetInnerExceptionChainAsync(exception, threadId);
-        return new ExceptionInfo(typeName, message, source, stackTrace, hresult, kind, moduleName, innerExceptionChain);
+        return new InnerExceptionInfo(typeName, message, source, stackTrace, hresult);
     }
     // The whole 'InnerException' chain, the direct inner first - Microsoft's debugger nests them in 'innerException',
     // shows the innermost exception's recorded trace in place of the reported one and names it in the
@@ -345,12 +346,7 @@ public partial class ManagedDebugger {
                 if (inner is ICorDebugHandleValue handle)
                     handles.Add(handle);
 
-                var typeName = ValueFormatter.Format(inner, false).TypeName;
-                var stackTrace = GetExceptionStackTrace(inner);
-                var message = await GetExceptionPropertyAsync(inner, threadId, "Message") ?? string.Empty;
-                var source = await GetExceptionPropertyAsync(inner, threadId, "Source");
-                var hresult = int.Parse(await GetExceptionPropertyAsync(inner, threadId, "HResult") ?? "0");
-                chain.Add(new InnerExceptionInfo(typeName, message, source, stackTrace, hresult));
+                chain.Add(await ReadExceptionDetailsAsync(inner, threadId));
                 current = inner;
             }
             return chain;

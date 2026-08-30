@@ -39,22 +39,12 @@ public class ExceptionStackTraceTests : BaseDebugTestFixture {
 
     [Test]
     public void RecordedStackTraceAcrossAsyncRethrowTest() {
-        Launch();
-        SetExceptionBreakpoints(new[] { "all" }, ("all", null));
-        ConfigurationDone();
+        LaunchWithExceptionFilters("all");
 
         // Break-on-all stops on every dispatch of the exception entering user code, like Microsoft's debugger does -
         // collect the recorded stack trace reported at each stop until the debuggee runs to completion
         var stackTraces = new List<string>();
-        for (var i = 0; i < 20; i++) {
-            var debugEvent = WaitForEvent<DebugEvent>(it => it is TerminatedEvent || it is StoppedEvent { Reason: StoppedEvent.ReasonValue.Exception });
-            if (debugEvent is TerminatedEvent)
-                break;
-            var stopped = (StoppedEvent)debugEvent;
-            var details = Host.SendRequestSync(new ExceptionInfoRequest() { ThreadId = stopped.ThreadId!.Value }).Details;
-            stackTraces.Add(details?.StackTrace ?? string.Empty);
-            Continue(stopped.ThreadId!.Value);
-        }
+        CollectStopsUntilExit(stopped => stackTraces.Add(GetExceptionInfo(stopped.ThreadId!.Value).Details?.StackTrace ?? string.Empty));
 
         Assert.That(stackTraces, Is.Not.Empty, "Break-on-all must stop at the exception");
         Assert.That(stackTraces[0], Does.Contain("ExceptionRelay.<InnerAsync>"), "The first stop shows the throw site inside the state machine");
@@ -72,19 +62,9 @@ public class ExceptionStackTraceTests : BaseDebugTestFixture {
 
     [Test]
     public void ModuleAttributionAcrossAsyncHopsTest() {
-        Launch();
-        SetExceptionBreakpoints(new[] { "all" }, ("all", null));
-        ConfigurationDone();
+        LaunchWithExceptionFilters("all");
 
-        var moduleNames = new List<string>();
-        for (var i = 0; i < 20; i++) {
-            var debugEvent = WaitForEvent<DebugEvent>(it => it is TerminatedEvent || it is StoppedEvent { Reason: StoppedEvent.ReasonValue.Exception });
-            if (debugEvent is TerminatedEvent)
-                break;
-            var stopped = (StoppedEvent)debugEvent;
-            moduleNames.Add(stopped.Text!.Split(" in ").Last());
-            Continue(stopped.ThreadId!.Value);
-        }
+        var moduleNames = CollectStopsUntilExit().Select(it => it.Text!.Split(" in ").Last()).ToList();
 
         // The stop names the module raising the exception at each dispatch: the throw and the 'throw e' rethrow
         // happen in user code, the hops in between are raised by the core library's await machinery
@@ -99,21 +79,11 @@ public class ExceptionStackTraceTests : BaseDebugTestFixture {
 
     [Test]
     public void UserUnhandledSkipsAsyncRelayTest() {
-        Launch();
-        SetExceptionBreakpoints(new[] { "user-unhandled" }, ("user-unhandled", null));
-        ConfigurationDone();
+        LaunchWithExceptionFilters("user-unhandled");
 
         // Every catch on the way is user code: the explicit handlers and the async state machines' own
         // catch blocks compiled into 'MoveNext'. Microsoft's debugger reports no user-unhandled stop for this program
-        var stops = new List<StoppedEvent>();
-        for (var i = 0; i < 20; i++) {
-            var debugEvent = WaitForEvent<DebugEvent>(it => it is TerminatedEvent || it is StoppedEvent);
-            if (debugEvent is TerminatedEvent)
-                break;
-            var stopped = (StoppedEvent)debugEvent;
-            stops.Add(stopped);
-            Continue(stopped.ThreadId!.Value);
-        }
+        var stops = CollectStopsUntilExit();
         Assert.That(stops.Where(it => it.Reason == StoppedEvent.ReasonValue.Exception), Is.Empty,
             $"An exception caught inside user code (including a state machine's catch) must not stop: {string.Join(" | ", stops.Select(it => it.Text))}");
     }

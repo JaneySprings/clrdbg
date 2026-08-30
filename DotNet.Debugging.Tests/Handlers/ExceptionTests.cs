@@ -21,15 +21,13 @@ public class ExceptionTests : BaseDebugTestFixture {
 
     [Test]
     public void BreakOnAllExceptionsTest() {
-        Launch();
-        SetExceptionBreakpoints(new[] { "all" }, ("all", null));
-        ConfigurationDone();
+        LaunchWithExceptionFilters("all");
 
         var stopped = WaitForStopped(StoppedEvent.ReasonValue.Exception);
         Assert.That(stopped.Text, Is.EqualTo($"Exception thrown: 'System.InvalidOperationException' in {ProjectName}.dll"), "The 'stopped' text is the full message with the throwing module");
         Assert.That(stopped.Description, Is.Null, "Microsoft's debugger sends no 'description' for exception stops");
 
-        var exceptionInfo = Host.SendRequestSync(new ExceptionInfoRequest() { ThreadId = stopped.ThreadId!.Value });
+        var exceptionInfo = GetExceptionInfo(stopped.ThreadId!.Value);
         Assert.That(exceptionInfo.ExceptionId, Is.EqualTo("CLR/System.InvalidOperationException"));
         Assert.That(exceptionInfo.Description, Is.EqualTo($"Exception thrown: 'System.InvalidOperationException' in {ProjectName}.dll: 'comparer boom'"));
         Assert.That(exceptionInfo.Details?.Message, Is.EqualTo("comparer boom"));
@@ -37,12 +35,10 @@ public class ExceptionTests : BaseDebugTestFixture {
 
     [Test]
     public void ExceptionDetailsAreReportedInFullTest() {
-        Launch();
-        SetExceptionBreakpoints(new[] { "all" }, ("all", null));
-        ConfigurationDone();
+        LaunchWithExceptionFilters("all");
 
         var stopped = WaitForStopped(StoppedEvent.ReasonValue.Exception);
-        var details = Host.SendRequestSync(new ExceptionInfoRequest() { ThreadId = stopped.ThreadId!.Value }).Details;
+        var details = GetExceptionInfo(stopped.ThreadId!.Value).Details;
 
         Assert.That(details?.HResult, Is.EqualTo(unchecked((int)0x80131509)), "COR_E_INVALIDOPERATION");
         Assert.That(details?.Source, Is.EqualTo(ProjectName), "The assembly that raised it, not a source file");
@@ -55,9 +51,7 @@ public class ExceptionTests : BaseDebugTestFixture {
 
     [Test]
     public void UserUnhandledExceptionTest() {
-        Launch();
-        SetExceptionBreakpoints(new[] { "user-unhandled" }, ("user-unhandled", null));
-        ConfigurationDone();
+        LaunchWithExceptionFilters("user-unhandled");
 
         var stopped = WaitForStopped(StoppedEvent.ReasonValue.Exception);
         Assert.That(stopped.Text, Is.EqualTo($"An exception of type 'System.InvalidOperationException' occurred in {ProjectName}.dll but was not handled in user code"));
@@ -67,16 +61,12 @@ public class ExceptionTests : BaseDebugTestFixture {
         Assert.That(frame.Name, Does.Contain(ProjectName));
 
         Continue(stopped.ThreadId!.Value);
-        WaitForEvent<TerminatedEvent>();
-        var exceptionStops = ReceivedEvents.OfType<StoppedEvent>().Count(it => it.Reason == StoppedEvent.ReasonValue.Exception);
-        Assert.That(exceptionStops, Is.EqualTo(1), "The exception caught by the user code must not stop the execution");
+        Assert.That(CollectStopsUntilExit(), Is.Empty, "The exception caught by the user code must not stop the execution again");
     }
 
     [Test]
     public void ExceptionVariableTest() {
-        Launch();
-        SetExceptionBreakpoints(new[] { "all" }, ("all", null));
-        ConfigurationDone();
+        LaunchWithExceptionFilters("all");
 
         var stopped = WaitForStopped(StoppedEvent.ReasonValue.Exception);
         var exception = GetLocalVariables(stopped.ThreadId!.Value).FirstOrDefault(it => it.Name.StartsWith("$exception"));
@@ -90,13 +80,9 @@ public class ExceptionTests : BaseDebugTestFixture {
 
     [Test]
     public void NoExceptionFiltersTest() {
-        Launch();
-        SetExceptionBreakpoints(Array.Empty<string>());
-        ConfigurationDone();
+        LaunchWithExceptionFilters();
 
-        WaitForEvent<TerminatedEvent>();
-        Assert.That(ReceivedEvents.OfType<StoppedEvent>().Any(it => it.Reason == StoppedEvent.ReasonValue.Exception), Is.False,
-            "Handled exceptions must not stop the execution without filters");
+        Assert.That(CollectStopsUntilExit(), Is.Empty, "Handled exceptions must not stop the execution without filters");
     }
 
     [Test]
@@ -105,8 +91,6 @@ public class ExceptionTests : BaseDebugTestFixture {
         SetExceptionBreakpoints(Array.Empty<string>(), ("user-unhandled", "!System.InvalidOperationException"));
         ConfigurationDone();
 
-        WaitForEvent<TerminatedEvent>();
-        Assert.That(ReceivedEvents.OfType<StoppedEvent>().Any(it => it.Reason == StoppedEvent.ReasonValue.Exception), Is.False,
-            "The ignored exception type must not stop the execution");
+        Assert.That(CollectStopsUntilExit(), Is.Empty, "The ignored exception type must not stop the execution");
     }
 }

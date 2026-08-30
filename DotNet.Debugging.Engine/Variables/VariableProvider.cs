@@ -1,5 +1,6 @@
 using System.Diagnostics;
-using System.Runtime.InteropServices;
+using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
 using DotNet.Debugging.CorApi;
 using DotNet.Debugging.CorApi.Extensions;
 using DotNet.Debugging.Engine.Enums;
@@ -98,14 +99,14 @@ internal class VariableProvider {
                 await AddResultsViewItemsAsync(reference, result);
                 break;
             case VariableReferenceKind.NonPublicMembers:
-                await AddMembersAsync(reference.Value!, reference.Value!.UnwrapDebugValueToObject().GetExactType(), MemberFilter.NonPublic, reference, result);
+                await AddMembersAsync(reference.Value!, reference.Value!.UnwrapDebugValueToObject().GetExactType(), MemberFilter.NonPublic, listStatics: false, reference, result);
                 SortMembers(result);
                 break;
             case VariableReferenceKind.StaticMembers:
                 await AddStaticMembersAndGroupAsync(reference, result);
                 break;
             case VariableReferenceKind.NonPublicStaticMembers:
-                await AddStaticMembersAsync(reference.Value!, reference.Value!.UnwrapDebugValueToObject().GetExactType(), MemberFilter.NonPublic, reference, result);
+                await AddMembersAsync(reference.Value!, reference.Value!.UnwrapDebugValueToObject().GetExactType(), MemberFilter.NonPublic, listStatics: true, reference, result);
                 SortMembers(result);
                 break;
         }
@@ -115,7 +116,14 @@ internal class VariableProvider {
         var target = FindVariableValue(reference, name) ?? throw new InvalidOperationException($"Variable '{name}' not found or setting its value is not supported");
         VariableWriter.Write(target, text);
 
-        var evaluateName = reference.EvaluateName == null ? name : $"{reference.EvaluateName}.{name}";
+        // An element name ('[0]') appends to the parent expression without a dot
+        string evaluateName;
+        if (reference.EvaluateName == null)
+            evaluateName = name;
+        else if (name.StartsWith('['))
+            evaluateName = reference.EvaluateName + name;
+        else
+            evaluateName = $"{reference.EvaluateName}.{name}";
         return await CreateVariableAsync(name, target, reference.ThreadId, reference.FrameDepth, evaluateName);
     }
     public async Task<VariableInfo> CreateVariableAsync(string name, ICorDebugValue value, int threadId, int frameDepth, string? evaluateName, VariableKind kind = VariableKind.Data, VariableVisibility? visibility = null) {
@@ -238,7 +246,7 @@ internal class VariableProvider {
     }
     // Lists the hoisted locals of a closure and of the closures enclosing it, linked through their '<>8__' fields
     private async Task AddClosureMembersAsync(ICorDebugValue closure, VariableReference reference, List<VariableSlot> result) {
-        await AddMembersAsync(closure, closure.GetExactType(), MemberFilter.All, reference, result);
+        await AddMembersAsync(closure, closure.GetExactType(), MemberFilter.All, listStatics: false, reference, result);
 
         var objectValue = closure.UnwrapDebugValueToObject();
         var corClass = objectValue.GetClass();
@@ -294,9 +302,7 @@ internal class VariableProvider {
         }
     }
     private async Task AddMembersAndGroupsAsync(ICorDebugValue value, ICorDebugType type, VariableReference reference, List<VariableSlot> result, bool includeNonPublicGroup) {
-        // User code types show all their members inline, library types get the 'Non-Public members' group
-        var filter = includeNonPublicGroup && IsUserCodeType(type) ? MemberFilter.All : MemberFilter.Public;
-        var summary = await AddMembersAsync(value, type, filter, reference, result);
+        var summary = await AddMembersAsync(value, type, MemberFilter.Public, listStatics: false, reference, result);
         if (summary.HasStaticMembers) {
             var staticReference = variableManager.Create(new VariableReference(VariableReferenceKind.StaticMembers, reference.ThreadId, reference.FrameDepth, value, null, reference.EvaluateName));
             result.Add(CreateGroup(StaticMembersGroup, staticReference));
@@ -309,58 +315,41 @@ internal class VariableProvider {
     private async Task AddStaticMembersAndGroupAsync(VariableReference reference, List<VariableSlot> result) {
         var value = reference.Value!;
         var type = value.UnwrapDebugValueToObject().GetExactType();
-        var filter = IsUserCodeType(type) ? MemberFilter.All : MemberFilter.Public;
-        var hasNonPublicMembers = await AddStaticMembersAsync(value, type, filter, reference, result);
-        if (hasNonPublicMembers) {
+        var summary = await AddMembersAsync(value, type, MemberFilter.Public, listStatics: true, reference, result);
+        if (summary.HasNonPublicMembers) {
             var nonPublicReference = variableManager.Create(new VariableReference(VariableReferenceKind.NonPublicStaticMembers, reference.ThreadId, reference.FrameDepth, value, null, reference.EvaluateName));
             result.Add(CreateGroup(NonPublicMembersGroup, nonPublicReference));
         }
         SortMembers(result);
     }
-    // Lists the instance members declared by the type and its base types, reporting whether the 'Static members' and 'Non-Public members' groups are needed
-    private async Task<MemberSummary> AddMembersAsync(ICorDebugValue value, ICorDebugType type, MemberFilter filter, VariableReference reference, List<VariableSlot> result) {
+    // Lists the instance or static members declared by the type and its base types, reporting whether the
+    // 'Static members' and 'Non-Public members' groups are needed
+    private async Task<MemberSummary> AddMembersAsync(ICorDebugValue value, ICorDebugType type, MemberFilter filter, bool listStatics, VariableReference reference, List<VariableSlot> result) {
         var corClass = type.GetClass();
         var typeToken = corClass.GetToken();
         var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
-        var instanceFields = metadataImport.EnumFields(typeToken).Where(it => !it.IsStatic(metadataImport)).ToList();
-        var instanceProperties = metadataImport.EnumProperties(typeToken).Where(it => !it.IsStatic(metadataImport) && !it.IsIndexer(metadataImport)).ToList();
+        var allFields = metadataImport.EnumFields(typeToken).ToList();
+        var allProperties = metadataImport.EnumProperties(typeToken).ToList();
+        var fields = allFields.Where(it => it.IsStatic(metadataImport) == listStatics).ToList();
+        var properties = allProperties.Where(it => it.IsStatic(metadataImport) == listStatics && !it.IsIndexer(metadataImport)).ToList();
 
         var summary = new MemberSummary();
-        summary.HasStaticMembers = metadataImport.EnumFields(typeToken).Any(it => it.IsStatic(metadataImport))
-            || metadataImport.EnumProperties(typeToken).Any(it => it.IsStatic(metadataImport));
-        summary.HasNonPublicMembers = filter == MemberFilter.Public && HasNonPublicMembers(metadataImport, instanceFields, instanceProperties);
+        summary.HasStaticMembers = !listStatics
+            && (allFields.Any(it => it.IsStatic(metadataImport)) || allProperties.Any(it => it.IsStatic(metadataImport)));
+        summary.HasNonPublicMembers = filter == MemberFilter.Public && HasNonPublicMembers(metadataImport, fields, properties);
 
-        await AddFieldsAsync(FilterFields(metadataImport, instanceFields, filter), metadataImport, type, value, reference, result);
+        await AddFieldsAsync(FilterFields(metadataImport, fields, filter), metadataImport, type, value, reference, result);
         // A property getter cannot be func-evaled with a byref-like 'this' (the debuggee can die on it), such a value lists its fields only
         if (!metadataImport.HasAttribute(typeToken, AttributeNames.IsByRefLike))
-            await AddPropertiesAsync(FilterProperties(metadataImport, instanceProperties, filter), metadataImport, type, value, reference, result);
+            await AddPropertiesAsync(FilterProperties(metadataImport, properties, filter), metadataImport, type, value, reference, result);
 
         var baseType = type.GetBaseType();
         if (baseType == null || IsRootType(baseType))
             return summary;
-        var baseSummary = await AddMembersAsync(value, baseType, filter, reference, result);
+        var baseSummary = await AddMembersAsync(value, baseType, filter, listStatics, reference, result);
         summary.HasStaticMembers |= baseSummary.HasStaticMembers;
         summary.HasNonPublicMembers |= baseSummary.HasNonPublicMembers;
         return summary;
-    }
-    // Returns whether the 'Non-Public members' group is needed
-    private async Task<bool> AddStaticMembersAsync(ICorDebugValue value, ICorDebugType type, MemberFilter filter, VariableReference reference, List<VariableSlot> result) {
-        var corClass = type.GetClass();
-        var typeToken = corClass.GetToken();
-        var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
-        var staticFields = metadataImport.EnumFields(typeToken).Where(it => it.IsStatic(metadataImport)).ToList();
-        var staticProperties = metadataImport.EnumProperties(typeToken).Where(it => it.IsStatic(metadataImport) && !it.IsIndexer(metadataImport)).ToList();
-        var hasNonPublicMembers = filter == MemberFilter.Public && HasNonPublicMembers(metadataImport, staticFields, staticProperties);
-
-        await AddFieldsAsync(FilterFields(metadataImport, staticFields, filter), metadataImport, type, value, reference, result);
-        // A static getter of a byref-like type returns a value a func eval cannot carry either
-        if (!metadataImport.HasAttribute(typeToken, AttributeNames.IsByRefLike))
-            await AddPropertiesAsync(FilterProperties(metadataImport, staticProperties, filter), metadataImport, type, value, reference, result);
-
-        var baseType = type.GetBaseType();
-        if (baseType == null || IsRootType(baseType))
-            return hasNonPublicMembers;
-        return hasNonPublicMembers | await AddStaticMembersAsync(value, baseType, filter, reference, result);
     }
     private async Task AddFieldsAsync(List<FieldDefToken> fields, IMetaDataImport metadataImport, ICorDebugType type, ICorDebugValue value, VariableReference reference, List<VariableSlot> result) {
         var corClass = type.GetClass();
@@ -680,15 +669,6 @@ internal class VariableProvider {
         return null;
     }
 
-    private bool IsUserCodeType(ICorDebugType type) {
-        try {
-            var module = debugger.FindModule(type.GetClass().GetModule());
-            return module != null && module.IsUserCode;
-        }
-        catch {
-            return false;
-        }
-    }
     private static bool IsRootType(ICorDebugType type) {
         var corClass = type.GetClass();
         var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
@@ -720,44 +700,16 @@ internal class VariableProvider {
         }
     }
     // A generic interface ('IEnumerable<string>') is a type spec: GENERICINST, CLASS or VALUETYPE, then the coded type token
-    private static string? GetTypeSpecName(IMetaDataImport metadataImport, TypeSpecToken token) {
+    private static unsafe string? GetTypeSpecName(IMetaDataImport metadataImport, TypeSpecToken token) {
         var (signature, size) = metadataImport.GetTypeSpecFromToken(token);
-        if (size < 3 || Marshal.ReadByte(signature, 0) != (byte)CorElementType.GENERICINST)
+        var reader = new BlobReader((byte*)signature, size);
+        if (reader.Length < 3 || reader.ReadByte() != (byte)CorElementType.GENERICINST)
             return null;
-        var offset = 2;
-        var codedToken = ReadCompressedUInt(signature, ref offset, size);
-        if (codedToken == null)
+        reader.ReadByte(); // CLASS or VALUETYPE
+        var handle = reader.ReadTypeHandle();
+        if (handle.Kind != HandleKind.TypeDefinition && handle.Kind != HandleKind.TypeReference)
             return null;
-        var rid = (int)(codedToken.Value >> 2);
-        switch (codedToken.Value & 3) {
-            case 0:
-                return GetInterfaceName(metadataImport, (int)CorTokenType.mdtTypeDef | rid);
-            case 1:
-                return GetInterfaceName(metadataImport, (int)CorTokenType.mdtTypeRef | rid);
-            default:
-                return null;
-        }
-    }
-    private static uint? ReadCompressedUInt(nint data, ref int offset, int size) {
-        if (offset >= size)
-            return null;
-        var first = Marshal.ReadByte(data, offset);
-        if ((first & 0x80) == 0) {
-            offset += 1;
-            return first;
-        }
-        if ((first & 0xC0) == 0x80) {
-            if (offset + 2 > size)
-                return null;
-            var value = ((first & 0x3Fu) << 8) | Marshal.ReadByte(data, offset + 1);
-            offset += 2;
-            return value;
-        }
-        if (offset + 4 > size)
-            return null;
-        var wide = ((first & 0x1Fu) << 24) | ((uint)Marshal.ReadByte(data, offset + 1) << 16) | ((uint)Marshal.ReadByte(data, offset + 2) << 8) | Marshal.ReadByte(data, offset + 3);
-        offset += 4;
-        return wide;
+        return GetInterfaceName(metadataImport, MetadataTokens.GetToken(handle));
     }
     private static bool HasNonPublicMembers(IMetaDataImport metadataImport, List<FieldDefToken> fields, List<PropertyToken> properties) {
         return fields.Any(it => !it.IsPublic(metadataImport) && TryGetDisplayName(metadataImport.GetFieldProps(it).szField, out _))

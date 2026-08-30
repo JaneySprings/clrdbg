@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.IO.Pipes;
+using System.Security.Cryptography;
+using System.Text;
 using DotNet.Debugging.Adapter;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
@@ -35,6 +37,9 @@ public abstract class BaseDebugTestFixture {
         SandboxDirectory = Path.Combine(AppContext.BaseDirectory, "Sandbox");
     }
 
+    // A fixture that mutates the build output (e.g. moves the PDB away) opts out and builds fresh every run
+    protected virtual bool ReuseSandbox => true;
+
     protected abstract string CreateProgramFileContent();
     // Additional files the debuggee project needs, written before it is built
     protected virtual void CreateProjectFiles(string projectDirectory) { }
@@ -56,14 +61,19 @@ public abstract class BaseDebugTestFixture {
     [OneTimeSetUp]
     public void GlobalSetup() {
         ProjectDirectory = Path.Combine(SandboxDirectory, ProjectName);
-        if (Directory.Exists(ProjectDirectory))
-            Directory.Delete(ProjectDirectory, true);
-
         Directory.CreateDirectory(ProjectDirectory);
         ProgramFilePath = Path.Combine(ProjectDirectory, "Program.cs");
+        ProgramPath = Path.Combine(ProjectDirectory, "bin", "Debug", "net10.0", $"{ProjectName}.dll");
         File.WriteAllText(Path.Combine(ProjectDirectory, $"{ProjectName}.csproj"), CreateProjectFileContent());
         File.WriteAllText(ProgramFilePath, CreateProgramFileContent());
         CreateProjectFiles(ProjectDirectory);
+
+        // The sandboxes are kept between runs: a full run builds ~25 debuggee projects, an unchanged one
+        // is reused instead of rebuilt. The stamp holds the hash of every source file of the project
+        var stampPath = Path.Combine(ProjectDirectory, "sandbox.stamp");
+        var fingerprint = ComputeSandboxFingerprint();
+        if (ReuseSandbox && File.Exists(ProgramPath) && File.Exists(stampPath) && File.ReadAllText(stampPath) == fingerprint)
+            return;
 
         var buildProcess = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("dotnet", "build -c Debug -nologo") {
             WorkingDirectory = ProjectDirectory,
@@ -74,17 +84,19 @@ public abstract class BaseDebugTestFixture {
         var buildOutput = buildProcess!.StandardOutput.ReadToEnd();
         buildProcess.WaitForExit();
         Assert.That(buildProcess.ExitCode, Is.EqualTo(0), $"Failed to build the debuggee:{Environment.NewLine}{buildOutput}");
-
-        ProgramPath = Path.Combine(ProjectDirectory, "bin", "Debug", "net10.0", $"{ProjectName}.dll");
         Assert.That(File.Exists(ProgramPath), $"Debuggee assembly not found: {ProgramPath}");
+        File.WriteAllText(stampPath, fingerprint);
     }
 
-    [OneTimeTearDown]
-    public void GlobalTearDown() {
-        try {
-            Directory.Delete(ProjectDirectory, true);
+    private string ComputeSandboxFingerprint() {
+        var content = new StringBuilder();
+        foreach (var filePath in Directory.EnumerateFiles(ProjectDirectory, "*", SearchOption.AllDirectories).OrderBy(it => it, StringComparer.Ordinal)) {
+            var relativePath = Path.GetRelativePath(ProjectDirectory, filePath);
+            if (relativePath.StartsWith("bin") || relativePath.StartsWith("obj") || relativePath == "sandbox.stamp")
+                continue;
+            content.Append(relativePath).Append('|').Append(File.ReadAllText(filePath)).Append('|');
         }
-        catch { /* best effort */ }
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content.ToString())));
     }
 
     [SetUp]
@@ -112,10 +124,14 @@ public abstract class BaseDebugTestFixture {
 
     [TearDown]
     public void TearDown() {
-        try {
-            Host.SendRequestSync(new DisconnectRequest() { TerminateDebuggee = true });
-        }
-        catch { /* the session may be terminated already */ }
+        // A session the test already disconnected answers no further requests, so the wait is bounded
+        var disconnect = Task.Run(() => {
+            try {
+                Host.SendRequestSync(new DisconnectRequest() { TerminateDebuggee = true });
+            }
+            catch { /* the session may be terminated already */ }
+        });
+        disconnect.Wait(TimeSpan.FromSeconds(10));
         try {
             Host.Stop();
         }
@@ -261,6 +277,37 @@ public abstract class BaseDebugTestFixture {
         Host.SendRequestSync(new ContinueRequest() { ThreadId = threadId });
     }
 
+    /// <summary>Launches the program with a breakpoint at the marker line and returns the stopped thread.</summary>
+    protected int LaunchToMarker(string marker = "marker:stop", bool justMyCode = true, Dictionary<string, JToken>? properties = null) {
+        Launch(justMyCode: justMyCode, properties: properties);
+        SetBreakpoints(GetMarkerLine(marker));
+        ConfigurationDone();
+        var stopped = WaitForStopped(StoppedEvent.ReasonValue.Breakpoint);
+        return stopped.ThreadId!.Value;
+    }
+    /// <summary>Launches with the given exception filters active, the way a client ticks the checkboxes.</summary>
+    protected void LaunchWithExceptionFilters(params string[] filters) {
+        Launch();
+        SetExceptionBreakpoints(filters, filters.Select(it => (it, (string?)null)).ToArray());
+        ConfigurationDone();
+    }
+
+    protected StackFrame StepIn(int threadId) {
+        Host.SendRequestSync(new StepInRequest() { ThreadId = threadId });
+        var stopped = WaitForStopped(StoppedEvent.ReasonValue.Step);
+        return GetTopStackFrame(stopped.ThreadId!.Value);
+    }
+    protected StackFrame StepOver(int threadId) {
+        Host.SendRequestSync(new NextRequest() { ThreadId = threadId });
+        var stopped = WaitForStopped(StoppedEvent.ReasonValue.Step);
+        return GetTopStackFrame(stopped.ThreadId!.Value);
+    }
+    protected StackFrame StepOut(int threadId) {
+        Host.SendRequestSync(new StepOutRequest() { ThreadId = threadId });
+        var stopped = WaitForStopped(StoppedEvent.ReasonValue.Step);
+        return GetTopStackFrame(stopped.ThreadId!.Value);
+    }
+
     protected TEvent WaitForEvent<TEvent>(Func<TEvent, bool>? predicate = null, int timeoutMs = 30000) where TEvent : DebugEvent {
         var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
         while (DateTime.UtcNow < deadline) {
@@ -269,10 +316,33 @@ public abstract class BaseDebugTestFixture {
             if (debugEvent is TEvent typedEvent && (predicate == null || predicate(typedEvent)))
                 return typedEvent;
         }
-        throw new TimeoutException($"Timed out waiting for the '{typeof(TEvent).Name}' event");
+        throw new TimeoutException($"Timed out waiting for the '{typeof(TEvent).Name}' event. Events received so far: {DescribeReceivedEvents()}");
     }
+    /// <summary>
+    /// The next stop of the debuggee, required to have the expected reason. A stop for another reason
+    /// fails the test right away rather than being skipped into a timeout.
+    /// </summary>
     protected StoppedEvent WaitForStopped(StoppedEvent.ReasonValue? reason = null) {
-        return WaitForEvent<StoppedEvent>(it => reason == null || it.Reason == reason);
+        var stopped = WaitForEvent<StoppedEvent>();
+        if (reason != null && stopped.Reason != reason)
+            Assert.Fail($"The debuggee stopped with reason '{stopped.Reason}' instead of '{reason}': {stopped.Text}");
+        return stopped;
+    }
+    /// <summary>Continues through every stop until the debuggee exits, returning the stops in order.</summary>
+    protected List<StoppedEvent> CollectStopsUntilExit(Action<StoppedEvent>? onStopped = null) {
+        var stops = new List<StoppedEvent>();
+        while (true) {
+            var debugEvent = WaitForEvent<DebugEvent>(it => it is TerminatedEvent or StoppedEvent);
+            if (debugEvent is TerminatedEvent)
+                return stops;
+
+            var stopped = (StoppedEvent)debugEvent;
+            stops.Add(stopped);
+            if (stops.Count > 50)
+                throw new InvalidOperationException("The debuggee stopped more than 50 times, aborting a probably endless stop loop");
+            onStopped?.Invoke(stopped);
+            Continue(stopped.ThreadId!.Value);
+        }
     }
     /// <summary>
     /// The first thread of an attached debuggee, which is the point a client can do anything with it.
@@ -308,6 +378,30 @@ public abstract class BaseDebugTestFixture {
     protected EvaluateResponse Evaluate(string expression, int threadId) {
         var frame = GetTopStackFrame(threadId);
         return Host.SendRequestSync(new EvaluateRequest() { Expression = expression, FrameId = frame.Id });
+    }
+    protected ExceptionInfoResponse GetExceptionInfo(int threadId) {
+        return Host.SendRequestSync(new ExceptionInfoRequest() { ThreadId = threadId });
+    }
+
+    // Consecutive duplicates are collapsed ('Output x12'), the interesting shape of the stream stays visible
+    private string DescribeReceivedEvents() {
+        var parts = new List<string>();
+        string? current = null;
+        var count = 0;
+        foreach (var debugEvent in receivedEvents) {
+            var name = debugEvent is StoppedEvent stopped ? $"Stopped({stopped.Reason})" : debugEvent.GetType().Name;
+            if (name == current) {
+                count++;
+                continue;
+            }
+            if (current != null)
+                parts.Add(count > 1 ? $"{current} x{count}" : current);
+            current = name;
+            count = 1;
+        }
+        if (current != null)
+            parts.Add(count > 1 ? $"{current} x{count}" : current);
+        return parts.Count == 0 ? "none" : string.Join(", ", parts);
     }
 
     protected int GetMarkerLine(string marker) {

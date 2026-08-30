@@ -72,17 +72,9 @@ public class VariablePagingTests : BaseDebugTestFixture {
         """;
     }
 
-    private int StopAtMarker() {
-        Launch();
-        SetBreakpoints(GetMarkerLine("marker:stop"));
-        ConfigurationDone();
-        var stopped = WaitForStopped(StoppedEvent.ReasonValue.Breakpoint);
-        return stopped.ThreadId!.Value;
-    }
-
     [Test]
     public void CollectionPageIsEvaluatedAloneTest() {
-        var threadId = StopAtMarker();
+        var threadId = LaunchToMarker();
         var items = GetLocalVariables(threadId).First(it => it.Name.StartsWith("items"));
 
         var firstPage = GetVariables(items.VariablesReference);
@@ -101,7 +93,7 @@ public class VariablePagingTests : BaseDebugTestFixture {
 
     [Test]
     public void LastPageHasNoMoreNodeTest() {
-        var threadId = StopAtMarker();
+        var threadId = LaunchToMarker();
         var items = GetLocalVariables(threadId).First(it => it.Name.StartsWith("items"));
 
         var names = new List<string>();
@@ -123,7 +115,7 @@ public class VariablePagingTests : BaseDebugTestFixture {
 
     [Test]
     public void ElementsAreInIndexOrderTest() {
-        var threadId = StopAtMarker();
+        var threadId = LaunchToMarker();
         var items = GetLocalVariables(threadId).First(it => it.Name.StartsWith("items"));
 
         var firstPage = GetVariables(items.VariablesReference);
@@ -137,7 +129,7 @@ public class VariablePagingTests : BaseDebugTestFixture {
 
     [Test]
     public void MemberPageIsEvaluatedAloneTest() {
-        var threadId = StopAtMarker();
+        var threadId = LaunchToMarker();
         var wide = GetLocalVariables(threadId).First(it => it.Name.StartsWith("wide"));
         // The property read by the marker line itself already ran one getter
         var before = int.Parse(Evaluate("Wide.GetterCount", threadId).Result);
