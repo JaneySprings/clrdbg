@@ -15,6 +15,9 @@ internal class StepController {
     private StepKind userStepKind;
     // The last completed step left a filtered method behind and its continuation is running
     private bool isSkippingFilteredMethod;
+    // The last completed step stopped in a hidden finally and its continuation is running: hidden code it
+    // reaches next is still cleanup, even outside a handler (the plumbing between two nested finallys)
+    private bool isCrossingHiddenFinally;
     // The statement the user's step started in, a filtered skip that returns into it resumes the step
     private CordbAddress stepStatementModule;
     private int stepStatementMethodToken;
@@ -38,6 +41,7 @@ internal class StepController {
 
         userStepKind = kind;
         isSkippingFilteredMethod = false;
+        isCrossingHiddenFinally = false;
         RememberStepStatement(frame);
         if (await asyncStepper.TrySetupAsync(thread, kind))
             return;
@@ -51,7 +55,9 @@ internal class StepController {
     public bool TryCompleteStep(ICorDebugThread thread, CorDebugStepReason reason, out SourceLocation? location) {
         location = null;
         var wasSkippingFilteredMethod = isSkippingFilteredMethod;
+        var wasCrossingHiddenFinally = isCrossingHiddenFinally;
         isSkippingFilteredMethod = false;
+        isCrossingHiddenFinally = false;
         // An active async step means a breakpoint is waiting at the next yield/resume point and the plain step
         // got there first, so the method left before reaching the await
         asyncStepper.ClearActiveStep();
@@ -77,7 +83,7 @@ internal class StepController {
         location = debugger.GetSourceLocation(frame);
         if (location == null) {
             // A method with symbols but no source at this offset: compiler generated code (e.g. an async state machine) to step through
-            CreateStepper(thread, StepKind.Into);
+            ResumeStep(thread, StepKind.Into);
             return false;
         }
 
@@ -92,7 +98,7 @@ internal class StepController {
         if (metadataImport.IsNonUserMethod(methodToken, debugger.JustMyCode)) {
             location = null;
             isSkippingFilteredMethod = true;
-            CreateStepper(thread, StepKind.Into);
+            ResumeStep(thread, StepKind.Into);
             return false;
         }
         // Step filtering: a step into a property accessor or an operator leaves it right away
@@ -106,7 +112,23 @@ internal class StepController {
         var nextStatementOffset = module.MetadataReader.GetNextSequencePointOffset(methodToken, ip.pnOffset);
         // A step into a call lands before the first statement of the callee, step over the prolog to reach it
         if (reason == CorDebugStepReason.STEP_CALL && ip.pnOffset < nextStatementOffset) {
-            CreateStepper(thread, StepKind.Over);
+            ResumeStep(thread, StepKind.Over);
+            return false;
+        }
+        // A step that came to rest in a hidden region goes on when the region is cleanup between two
+        // statements: the finally a 'using' or a 'lock' compiles to (the runtime ends a range step at the
+        // handler even though its offsets lie inside the range), the plumbing between two nested finallys
+        // (which belongs to no handler, a crossing under way covers it), or the hoisted DisposeAsync of an
+        // 'await using' or 'await foreach' (recognized by its await still lying ahead in the hidden code).
+        // The step keeps the user's kind - a step into enters a Dispose call the region makes, the way
+        // vsdbg does; a step out already left its frame and covers the region like a step over. Hidden
+        // code past its await's resume point is different: that is where a step out of an async method
+        // ends, the mapping reports the awaiting statement there, and such a stop stands
+        if (module.MetadataReader.IsInHiddenRegion(methodToken, ip.pnOffset)
+            && (wasCrossingHiddenFinally || module.MetadataReader.IsInFinallyHandler(methodToken, ip.pnOffset) || HasAwaitAhead(module, methodToken, ip.pnOffset, nextStatementOffset))) {
+            location = null;
+            isCrossingHiddenFinally = true;
+            ResumeStep(thread, userStepKind == StepKind.Out ? StepKind.Over : userStepKind);
             return false;
         }
         // A skipped method returned into the statement the user's step started from, the rest of the step remains.
@@ -114,7 +136,7 @@ internal class StepController {
         // approximately, snapped to the statement start), so the step simply covers the statement again
         if (wasSkippingFilteredMethod && reason == CorDebugStepReason.STEP_RETURN && IsInStepStatement(module, methodToken, ip.pnOffset)) {
             location = null;
-            CreateStepper(thread, userStepKind);
+            ResumeStep(thread, userStepKind);
             return false;
         }
         return true;
@@ -158,11 +180,25 @@ internal class StepController {
         stepper?.Deactivate();
         stepper = null;
     }
+    // Resumes an interrupted step: the async carry is armed anew first, so an await still ahead of the
+    // resumed step (e.g. the hidden DisposeAsync a 'break' jumps to) carries it across the yield
+    private void ResumeStep(ICorDebugThread thread, StepKind kind) {
+        asyncStepper.ArmAwaitCarry(thread, kind);
+        CreateStepper(thread, kind);
+    }
+    // Whether an await's yield point still lies ahead in the hidden code between 'ilOffset' and the next statement
+    private static bool HasAwaitAhead(ModuleInfo module, int methodToken, int ilOffset, int? nextStatementOffset) {
+        var asyncInfo = module.MetadataReader.GetAsyncMethodInfo(methodToken);
+        if (asyncInfo == null)
+            return false;
+        return asyncInfo.Awaits.Any(it => it.YieldOffset >= ilOffset && (nextStatementOffset == null || it.YieldOffset < nextStatementOffset));
+    }
     // Abandons every step in progress, on a pause or an exception
     public void Disable() {
         CancelStep();
         asyncStepper.Disable();
         isSkippingFilteredMethod = false;
+        isCrossingHiddenFinally = false;
     }
 
     private void RememberStepStatement(ICorDebugILFrame frame) {

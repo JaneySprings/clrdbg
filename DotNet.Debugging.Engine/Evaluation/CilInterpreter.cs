@@ -370,6 +370,10 @@ internal class CilInterpreter {
                         await ExecuteDebuggerIntrinsicAsync(intrinsicName, stack, syntheticVariables, resolver, context, handles);
                         continue;
                     }
+                    if (resolver.TryResolveArrayMethod(token, out var arrayMethodName, out var arrayIndexCount)) {
+                        await ExecuteArrayMethodAsync(arrayMethodName, arrayIndexCount, stack, context, handles);
+                        continue;
+                    }
                     if (resolver.TryResolveEvaluationMethod(token, out var evaluationMethod)) {
                         var methodArguments = PopArguments(stack, evaluationMethod.Signature.ParameterTypes.Length + (evaluationMethod.IsStatic ? 0 : 1));
                         var methodResult = await InterpretAsync(
@@ -399,6 +403,22 @@ internal class CilInterpreter {
         throw new InvalidOperationException("The generated evaluation method ended without ret");
     }
 
+    // The pseudo methods of an array type access an element by its index in every dimension, the
+    // multidimensional counterpart of ldelem/stelem/ldelema
+    private async Task ExecuteArrayMethodAsync(string methodName, int indexCount, Stack<CilValue> stack, EvaluationContext context, EvaluationHandleScope handles) {
+        var element = methodName == "Set" ? stack.Pop() : null;
+        var indices = new uint[indexCount];
+        for (var i = indexCount - 1; i >= 0; i--)
+            indices[i] = checked((uint)stack.Pop().AsInt32());
+        var array = GetArrayValue(stack.Pop());
+
+        if (methodName == "Set") {
+            new CorDebugLocation(array.GetElement(indexCount, indices)).Write(await MaterializeForStoreAsync(element!, context, handles));
+            return;
+        }
+        var location = new CorDebugLocation(array.GetElement(indexCount, indices));
+        stack.Push(methodName == "Address" ? CilValue.FromLocation(location) : handles.Root(location.Read()));
+    }
     private async Task<CilValue> NewObjectAsync(int token, Stack<CilValue> stack, EvaluationMetadataResolver resolver, EvaluationContext context, EvaluationHandleScope handles) {
         var constructor = resolver.ResolveMethod(token);
         var constructorArguments = PopArguments(stack, constructor.Signature.ParameterTypes.Length);

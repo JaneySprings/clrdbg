@@ -531,22 +531,33 @@ internal class VariableProvider {
     // The elements are named by their index alone, so only the ones of the requested page are ever read and formatted
     private void AddArrayElementSlots(ICorDebugValue arraySource, VariableReference reference, List<VariableSlot> result, string? parentEvaluateName) {
         var arrayValue = (ICorDebugArrayValue)arraySource.UnwrapDebugValue();
-        if (arrayValue.GetRank() > 1)
-            throw new NotImplementedException("Multidimensional arrays are not supported yet");
-
+        var rank = arrayValue.GetRank();
+        var dimensions = arrayValue.GetDimensions(rank);
+        var baseIndices = arrayValue.HasBaseIndicies() ? arrayValue.GetBaseIndicies(rank) : new uint[rank];
         var count = arrayValue.GetCount();
         for (var i = 0; i < count; i++) {
-            var index = i;
-            var name = $"[{index}]";
+            var position = i;
+            var name = GetElementName(position, dimensions, baseIndices);
             var evaluateName = parentEvaluateName == null ? name : parentEvaluateName + name;
-            result.Add(new VariableSlot(name, async () => await CreateVariableAsync(name, ReadArrayElement(arraySource, index), reference.ThreadId, reference.FrameDepth, evaluateName)));
+            result.Add(new VariableSlot(name, async () => await CreateVariableAsync(name, ReadArrayElement(arraySource, position), reference.ThreadId, reference.FrameDepth, evaluateName)));
         }
+    }
+    // The name of the element at a row major position: '[2]', or '[0, 1]' for a multidimensional array
+    private static string GetElementName(int position, uint[] dimensions, uint[] baseIndices) {
+        var indices = new long[dimensions.Length];
+        var remainder = position;
+        for (var dimension = dimensions.Length - 1; dimension >= 0; dimension--) {
+            var length = checked((int)dimensions[dimension]);
+            indices[dimension] = baseIndices[dimension] + (uint)(remainder % length);
+            remainder /= length;
+        }
+        return $"[{string.Join(", ", indices)}]";
     }
     // An evaluation neuters a dereferenced array value, so every element read dereferences the source value again -
     // the source itself (a local's reference, a kept handle) stays valid while the debuggee is stopped
-    private static ICorDebugValue ReadArrayElement(ICorDebugValue arraySource, int index) {
+    private static ICorDebugValue ReadArrayElement(ICorDebugValue arraySource, int position) {
         var arrayValue = (ICorDebugArrayValue)arraySource.UnwrapDebugValue();
-        return arrayValue.GetElement(1, [checked((uint)index)]);
+        return arrayValue.GetElementAtPosition(position);
     }
 
     private async Task<ICorDebugValue> CreateDebuggerProxyAsync(ICorDebugValue value, string proxyTypeName, int threadId) {
@@ -638,9 +649,20 @@ internal class VariableProvider {
 
         var unwrapped = reference.Value.UnwrapDebugValue();
         if (unwrapped is ICorDebugArrayValue arrayValue && name.StartsWith('[') && name.EndsWith(']')) {
-            if (!uint.TryParse(name.AsSpan(1, name.Length - 2), out var index))
+            var rank = arrayValue.GetRank();
+            var parts = name.Substring(1, name.Length - 2).Split(',');
+            if (parts.Length != rank)
                 return null;
-            return arrayValue.GetElement(1, [index]);
+
+            // The element names show the logical indices, the runtime addresses by zero based offsets
+            var baseIndices = arrayValue.HasBaseIndicies() ? arrayValue.GetBaseIndicies(rank) : new uint[rank];
+            var indices = new uint[rank];
+            for (var i = 0; i < rank; i++) {
+                if (!long.TryParse(parts[i], out var index) || index < baseIndices[i])
+                    return null;
+                indices[i] = checked((uint)(index - baseIndices[i]));
+            }
+            return arrayValue.GetElement(rank, indices);
         }
         if (unwrapped is ICorDebugObjectValue objectValue)
             return objectValue.GetFieldValueByName(debugger.GetILFrame(reference.ThreadId, reference.FrameDepth), name);

@@ -19,14 +19,10 @@ public partial class ManagedDebugger {
             ContinueProcess();
             return;
         }
-        if (stepController.IsStepping) {
-            // A breakpoint at the step destination: the StepComplete callback is queued behind this one and reports the stop
-            if (stepController.IsStepComplete) {
-                ContinueProcess();
-                return;
-            }
-            // A breakpoint before the step destination (e.g. inside a stepped-over call) wins over the step
-            stepController.CancelStep();
+        // A breakpoint at the step destination: the StepComplete callback is queued behind this one and reports the stop
+        if (stepController.IsStepping && stepController.IsStepComplete) {
+            ContinueProcess();
+            return;
         }
         if (callbackEvent.Breakpoint is not ICorDebugFunctionBreakpoint functionBreakpoint) {
             DebuggerLoggingService.LogMessage("Unknown breakpoint type hit");
@@ -41,6 +37,7 @@ public partial class ManagedDebugger {
             return;
         }
         if (asyncResult == AsyncBreakpointResult.StepOut) {
+            stepController.CancelStep();
             stepController.CreateStepper(thread, StepKind.Out);
             ContinueProcess();
             return;
@@ -56,11 +53,16 @@ public partial class ManagedDebugger {
         }
 
         breakpoint.HitCount++;
+        // A hit count that does not stop leaves an in-flight step alone, the step carries on past the breakpoint
         if (breakpoint.HitCondition != null && !BreakpointManager.CheckHitCondition(breakpoint.HitCount, breakpoint.HitCondition)) {
             DebuggerLoggingService.LogMessage($"Hit count condition not met: count={breakpoint.HitCount}, condition={breakpoint.HitCondition}");
             ContinueProcess();
             return;
         }
+        // From here the breakpoint either stops or evaluates in the debuggee, neither of which a step survives:
+        // a breakpoint that stops wins over the step, and an evaluation would have the stepper complete inside
+        // the evaluated code (HandleStepComplete does not expect a completion while an evaluation runs)
+        stepController.CancelStep();
         if (breakpoint.Condition != null && !await EvaluateConditionAsync(thread, breakpoint.Condition)) {
             DebuggerLoggingService.LogMessage($"Breakpoint condition not met: {breakpoint.Condition}");
             ContinueProcess();
@@ -84,6 +86,7 @@ public partial class ManagedDebugger {
             return false;
 
         ClearEntryPointBreakpoint();
+        stepController.CancelStep();
         OnStopped?.Invoke(new StopInfo(thread.GetId(), StopReason.Entry, GetSourceLocation(thread.GetActiveFrame())));
         return true;
     }

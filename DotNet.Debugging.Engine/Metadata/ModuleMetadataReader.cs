@@ -197,6 +197,47 @@ internal sealed class ModuleMetadataReader : IDisposable {
         endOffset = endIndex >= 0 ? points[endIndex].Offset : startOffset;
         return true;
     }
+    // Whether 'ilOffset' lies in a hidden region: code the compiler generated between statements, marked
+    // by a sequence point that names no source line - the finally a 'using' compiles to, the plumbing
+    // between two nested ones, or the yield/resume machinery of an 'await'
+    public bool IsInHiddenRegion(int methodToken, int ilOffset) {
+        var reader = PdbMetadataReader;
+        if (reader == null)
+            return false;
+
+        var debugInformation = reader.GetMethodDebugInformation(MetadataTokens.MethodDefinitionHandle(methodToken));
+        if (debugInformation.SequencePointsBlob.IsNil)
+            return false;
+
+        // The region the offset falls in is the one of the closest sequence point at or before it
+        var closestOffset = -1;
+        var closestIsHidden = false;
+        foreach (var point in debugInformation.GetSequencePoints()) {
+            if (point.Offset > ilOffset || point.Offset < closestOffset)
+                continue;
+            closestOffset = point.Offset;
+            closestIsHidden = point.IsHidden;
+        }
+        return closestIsHidden;
+    }
+    // Whether 'ilOffset' lies in a finally (or fault) handler of the method
+    public bool IsInFinallyHandler(int methodToken, int ilOffset) {
+        try {
+            var method = PeMetadataReader.GetMethodDefinition(MetadataTokens.MethodDefinitionHandle(methodToken));
+            if (method.RelativeVirtualAddress == 0)
+                return false;
+            foreach (var region in peReader.GetMethodBody(method.RelativeVirtualAddress).ExceptionRegions) {
+                if (region.Kind != ExceptionRegionKind.Finally && region.Kind != ExceptionRegionKind.Fault)
+                    continue;
+                if (ilOffset >= region.HandlerOffset && ilOffset < region.HandlerOffset + region.HandlerLength)
+                    return true;
+            }
+            return false;
+        }
+        catch {
+            return false;
+        }
+    }
     // The offset of the first sequence point with source at or after 'ilOffset'
     public int? GetNextSequencePointOffset(int methodToken, int ilOffset) {
         var reader = PdbMetadataReader;

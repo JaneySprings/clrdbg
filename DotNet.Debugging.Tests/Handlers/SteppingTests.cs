@@ -1,3 +1,4 @@
+using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
 using NUnit.Framework;
 
 namespace DotNet.Debugging.Tests;
@@ -38,5 +39,15 @@ public class SteppingTests : BaseDebugTestFixture {
         var frame = StepOut(threadId);
         Assert.That(frame.Name, Does.Contain("Main"));
         Assert.That(frame.Line, Is.EqualTo(GetMarkerLine("marker:first")));
+    }
+
+    // A breakpoint inside the stepped-over call whose hit count does not stop must leave the step alive,
+    // pausing and silently resuming the debuggee would otherwise swallow it and the program runs free
+    [Test]
+    public void StepOverSurvivesANonStoppingBreakpointInsideTheCall() {
+        var threadId = LaunchToMarker("marker:first");
+        SetBreakpoints(new SourceBreakpoint() { Line = GetMarkerLine("marker:inside"), HitCondition = "5" });
+        var frame = StepOver(threadId);
+        Assert.That(frame.Line, Is.EqualTo(GetMarkerLine("marker:second")));
     }
 }

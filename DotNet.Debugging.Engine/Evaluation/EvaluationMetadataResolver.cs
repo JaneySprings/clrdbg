@@ -217,6 +217,32 @@ internal class EvaluationMetadataResolver {
         result = new ResolvedEvaluationMethod(methodHandle, method.DecodeSignature(SignatureNameProvider.Instance, genericContext: null), (method.Attributes & MethodAttributes.Static) != 0);
         return true;
     }
+    // The 'Get'/'Set'/'Address' pseudo methods of an array type ('data[1, 1]' compiles to a call of
+    // 'int[,]::Get') exist only inside the runtime, the interpreter accesses the element itself instead.
+    // 'indexCount' is the number of index arguments the call pops
+    public bool TryResolveArrayMethod(int token, out string methodName, out int indexCount) {
+        methodName = string.Empty;
+        indexCount = 0;
+        var handle = MetadataTokens.EntityHandle(token);
+        if (handle.Kind != HandleKind.MemberReference)
+            return false;
+
+        var member = evaluationReader.GetMemberReference((MemberReferenceHandle)handle);
+        if (member.Parent.Kind != HandleKind.TypeSpecification)
+            return false;
+        var parent = evaluationReader.GetTypeSpecification((TypeSpecificationHandle)member.Parent).DecodeSignature(new RuntimeTypeSignatureProvider(this), genericContext: null);
+        if (parent.ElementType == null)
+            return false;
+
+        var name = evaluationReader.GetString(member.Name);
+        if (name != "Get" && name != "Set" && name != "Address")
+            return false;
+
+        methodName = name;
+        var parameterCount = member.DecodeMethodSignature(SignatureNameProvider.Instance, genericContext: null).ParameterTypes.Length;
+        indexCount = name == "Set" ? parameterCount - 1 : parameterCount;
+        return true;
+    }
     public bool TryResolveDebuggerIntrinsic(int token, out string methodName) {
         methodName = string.Empty;
         var handle = MetadataTokens.EntityHandle(token);

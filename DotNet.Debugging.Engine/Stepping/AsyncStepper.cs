@@ -40,13 +40,11 @@ internal class AsyncStepper {
             return false;
 
         var function = frame.GetFunction();
-        var moduleAddress = function.GetModule().GetBaseAddress();
-        var methodToken = function.GetToken();
         var module = debugger.FindModule(function.GetModule());
         if (module == null || !module.HasSymbols)
             return false;
 
-        var asyncInfo = module.MetadataReader.GetAsyncMethodInfo(methodToken);
+        var asyncInfo = module.MetadataReader.GetAsyncMethodInfo(function.GetToken());
         if (asyncInfo == null)
             return false;
 
@@ -60,15 +58,41 @@ internal class AsyncStepper {
         if (kind == StepKind.Out)
             return await TrySetupStepOutAsync(thread, frame);
 
-        var awaitInfo = FindNextAwait(asyncInfo, (uint)ip.pnOffset);
-        if (awaitInfo == null)
-            return false;
-
-        var yieldBreakpoint = function.GetILCode().CreateBreakpoint((int)awaitInfo.YieldOffset);
-        yieldBreakpoint.Activate(true);
-        currentStep = new AsyncStep(thread.GetId(), kind, awaitInfo.ResumeOffset, new AsyncBreakpoint(yieldBreakpoint, moduleAddress, methodToken, awaitInfo.YieldOffset));
-        // The plain stepper still runs, it stops the step when the method leaves before reaching the yield point
+        ArmYieldBreakpoints(thread, frame, asyncInfo, kind);
+        // The plain stepper still runs, it stops the step when the method leaves before reaching a yield point
         return false;
+    }
+    // Arms the carry for a step resumed mid-flight (the async setup of a fresh step also converts a step
+    // out, which needs evaluations - this runs no evaluation, so a resume inside a callback is safe)
+    public void ArmAwaitCarry(ICorDebugThread thread, StepKind kind) {
+        if (kind == StepKind.Out || thread.GetActiveFrame() is not ICorDebugILFrame frame)
+            return;
+
+        var function = frame.GetFunction();
+        var module = debugger.FindModule(function.GetModule());
+        if (module == null || !module.HasSymbols)
+            return;
+        var asyncInfo = module.MetadataReader.GetAsyncMethodInfo(function.GetToken());
+        if (asyncInfo == null)
+            return;
+
+        ClearActiveStep();
+        ArmYieldBreakpoints(thread, frame, asyncInfo, kind);
+    }
+    // Control flow decides which await runs next, not the IL order - a 'break' inside an 'await foreach'
+    // jumps over the loop's MoveNextAsync await straight to the hidden DisposeAsync one. Every yield point
+    // gets a breakpoint and the one that is hit carries the step
+    private void ArmYieldBreakpoints(ICorDebugThread thread, ICorDebugILFrame frame, AsyncMethodInfo asyncInfo, StepKind kind) {
+        var function = frame.GetFunction();
+        var moduleAddress = function.GetModule().GetBaseAddress();
+        var methodToken = function.GetToken();
+        var step = new AsyncStep(thread.GetId(), kind, asyncInfo.Awaits);
+        foreach (var awaitInfo in asyncInfo.Awaits) {
+            var yieldBreakpoint = function.GetILCode().CreateBreakpoint((int)awaitInfo.YieldOffset);
+            yieldBreakpoint.Activate(true);
+            step.Breakpoints.Add(new AsyncBreakpoint(yieldBreakpoint, moduleAddress, methodToken, awaitInfo.YieldOffset));
+        }
+        currentStep = step;
     }
     public async Task<AsyncBreakpointResult> TryHandleBreakpointAsync(ICorDebugThread thread, ICorDebugFunctionBreakpoint breakpoint) {
         if (notifyDebuggerBreakpoint != null && notifyDebuggerBreakpoint.Matches(breakpoint, thread)) {
@@ -80,7 +104,7 @@ internal class AsyncStepper {
             return AsyncBreakpointResult.NotHandled;
 
         // Any other breakpoint cancels the async step
-        if (!currentStep.Breakpoint.Matches(breakpoint, thread) || thread.GetActiveFrame() is not ICorDebugILFrame frame || frame.GetIP().pnOffset != currentStep.Breakpoint.ILOffset) {
+        if (thread.GetActiveFrame() is not ICorDebugILFrame frame || currentStep.FindBreakpoint(breakpoint, thread, frame) is not AsyncBreakpoint hitBreakpoint) {
             ClearActiveStep();
             return AsyncBreakpointResult.NotHandled;
         }
@@ -88,7 +112,7 @@ internal class AsyncStepper {
         if (currentStep.Status == AsyncStepStatus.YieldBreakpoint) {
             if (currentStep.ThreadId != thread.GetId())
                 return AsyncBreakpointResult.NotHandled;
-            await HandleYieldBreakpointAsync(frame);
+            await HandleYieldBreakpointAsync(frame, hitBreakpoint);
             return AsyncBreakpointResult.Continue;
         }
         await HandleResumeBreakpointAsync(thread, frame);
@@ -195,7 +219,7 @@ internal class AsyncStepper {
     }
 
     // The method yielded: the plain stepper is done and the resume point is awaited, possibly on another thread
-    private async Task HandleYieldBreakpointAsync(ICorDebugILFrame frame) {
+    private async Task HandleYieldBreakpointAsync(ICorDebugILFrame frame, AsyncBreakpoint hitBreakpoint) {
         var step = currentStep!;
         stepController.CancelStep();
 
@@ -203,10 +227,10 @@ internal class AsyncStepper {
         var function = frame.GetFunction();
         step.AsyncIdHandle = await GetAsyncIdAsync(frame) ?? throw new InvalidOperationException("The async method builder has no debugger id");
 
-        var resumeBreakpoint = function.GetILCode().CreateBreakpoint((int)step.ResumeOffset);
+        var awaitInfo = step.Awaits.First(it => it.YieldOffset == hitBreakpoint.ILOffset);
+        var resumeBreakpoint = function.GetILCode().CreateBreakpoint((int)awaitInfo.ResumeOffset);
         resumeBreakpoint.Activate(true);
-        step.Breakpoint.Deactivate();
-        step.Breakpoint = new AsyncBreakpoint(resumeBreakpoint, function.GetModule().GetBaseAddress(), function.GetToken(), step.ResumeOffset);
+        step.ReplaceBreakpoints(new AsyncBreakpoint(resumeBreakpoint, function.GetModule().GetBaseAddress(), function.GetToken(), awaitInfo.ResumeOffset));
         step.Status = AsyncStepStatus.ResumeBreakpoint;
     }
     private async Task HandleResumeBreakpointAsync(ICorDebugThread thread, ICorDebugILFrame frame) {
@@ -227,21 +251,14 @@ internal class AsyncStepper {
         if (!isSameInvocation)
             return;
 
-        // The method resumed, the rest of the step is an ordinary one from here
-        stepController.CreateStepper(thread, step.Kind);
+        // The method resumed: the rest of the step is set up anew from here, so a later await inside the
+        // same step (the DisposeAsync an 'await foreach' runs after its last MoveNextAsync) is carried again
+        var kind = step.Kind;
         ClearActiveStep();
+        if (!await TrySetupAsync(thread, kind))
+            stepController.CreateStepper(thread, kind);
     }
 
-    private static AwaitInfo? FindNextAwait(AsyncMethodInfo asyncInfo, uint currentOffset) {
-        foreach (var awaitInfo in asyncInfo.Awaits) {
-            if (currentOffset <= awaitInfo.YieldOffset)
-                return awaitInfo;
-            // Inside an await block there is no next await to step to
-            if (currentOffset < awaitInfo.ResumeOffset)
-                break;
-        }
-        return null;
-    }
     private async Task<ICorDebugHandleValue?> GetAsyncIdAsync(ICorDebugILFrame frame) {
         var builder = GetAsyncBuilder(frame);
         if (builder == null)
@@ -314,22 +331,37 @@ internal class AsyncStepper {
     private class AsyncStep : IDisposable {
         public int ThreadId { get; }
         public StepKind Kind { get; }
-        public uint ResumeOffset { get; }
+        // The awaits of the method; the yield breakpoint that is hit decides which one carries the step
+        public IReadOnlyList<AwaitInfo> Awaits { get; }
+        // The yield breakpoints of every await, replaced by the single resume breakpoint once the method yielded
+        public List<AsyncBreakpoint> Breakpoints { get; }
         public AsyncStepStatus Status { get; set; }
-        public AsyncBreakpoint Breakpoint { get; set; }
         // A strong handle to the builder's ObjectIdForDebugger
         public ICorDebugHandleValue? AsyncIdHandle { get; set; }
 
-        public AsyncStep(int threadId, StepKind kind, uint resumeOffset, AsyncBreakpoint breakpoint) {
+        public AsyncStep(int threadId, StepKind kind, IReadOnlyList<AwaitInfo> awaits) {
             ThreadId = threadId;
             Kind = kind;
-            ResumeOffset = resumeOffset;
-            Breakpoint = breakpoint;
+            Awaits = awaits;
+            Breakpoints = new List<AsyncBreakpoint>();
             Status = AsyncStepStatus.YieldBreakpoint;
         }
 
+        public AsyncBreakpoint? FindBreakpoint(ICorDebugFunctionBreakpoint hitBreakpoint, ICorDebugThread thread, ICorDebugILFrame frame) {
+            var ilOffset = frame.GetIP().pnOffset;
+            return Breakpoints.FirstOrDefault(it => it.ILOffset == ilOffset && it.Matches(hitBreakpoint, thread));
+        }
+        public void ReplaceBreakpoints(AsyncBreakpoint breakpoint) {
+            foreach (var existing in Breakpoints)
+                existing.Deactivate();
+            Breakpoints.Clear();
+            Breakpoints.Add(breakpoint);
+        }
+
         public void Dispose() {
-            Breakpoint.Deactivate();
+            foreach (var breakpoint in Breakpoints)
+                breakpoint.Deactivate();
+            Breakpoints.Clear();
             AsyncIdHandle?.TryDispose();
             AsyncIdHandle = null;
         }

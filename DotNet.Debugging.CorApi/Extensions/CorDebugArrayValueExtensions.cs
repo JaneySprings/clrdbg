@@ -29,6 +29,17 @@ public static class CorDebugArrayValueExtensions {
         return checked((int)pnRank);
     }
 
+    public static bool HasBaseIndicies(this ICorDebugArrayValue instance) {
+        Marshal.ThrowExceptionForHR(instance.TryHasBaseIndicies(out var pbHasBaseIndicies));
+        return pbHasBaseIndicies;
+    }
+
+    public static uint[] GetBaseIndicies(this ICorDebugArrayValue instance, int cdim) {
+        var array = new uint[cdim];
+        Marshal.ThrowExceptionForHR(instance.TryGetBaseIndicies(checked((uint)cdim), array));
+        return array;
+    }
+
     public static void GetDimensions(this ICorDebugArrayValue instance, int cdim, uint[] dims) {
         Marshal.ThrowExceptionForHR(instance.TryGetDimensions(checked((uint)cdim), dims));
     }
