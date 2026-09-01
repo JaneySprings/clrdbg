@@ -1,13 +1,17 @@
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using DotNet.Debugging.Engine.Models;
 
 namespace DotNet.Debugging.Engine.Metadata;
 
-// Reads the PE metadata of a module and, when available, its portable PDB
+// Reads the metadata of a module and, when available, its portable PDB. The metadata comes from the PE image of
+// a module with one, or from a copy of the runtime's metadata for a dynamic (Reflection.Emit) module, which has
+// neither an image nor symbols
 internal sealed class ModuleMetadataReader : IDisposable {
     // https://github.com/dotnet/roslyn/blob/main/src/Dependencies/CodeAnalysis.Debugging/PortableCustomDebugInfoKinds.cs
     private static readonly Guid asyncMethodSteppingInformationGuid = new Guid("54FD2AC5-E925-401A-9C2A-F94F171072F8");
@@ -16,7 +20,10 @@ internal sealed class ModuleMetadataReader : IDisposable {
     private static readonly Guid sha256AlgorithmGuid = new Guid("8829d00f-11b8-4213-878b-770e8597ac16");
     private const ushort PortableCodeViewVersionMagic = 0x504d;
 
-    private readonly PEReader peReader;
+    private readonly PEReader? peReader;
+    // The metadata of a dynamic module. Allocated on the pinned heap, where the GC never moves it, so the reader
+    // can address it for as long as the array is referenced - nothing has to be freed when a reader is replaced
+    private readonly byte[]? metadataImage;
     private MetadataReaderProvider? pdbProvider;
     private SourceLinkMap? sourceLinkMap;
     private bool sourceLinkMapLoaded;
@@ -32,6 +39,11 @@ internal sealed class ModuleMetadataReader : IDisposable {
     private ModuleMetadataReader(PEReader peReader) {
         this.peReader = peReader;
         PeMetadataReader = peReader.GetMetadataReader(MetadataReaderOptions.None);
+        Mvid = PeMetadataReader.GetGuid(PeMetadataReader.GetModuleDefinition().Mvid);
+    }
+    private unsafe ModuleMetadataReader(byte[] metadataImage) {
+        this.metadataImage = metadataImage;
+        PeMetadataReader = new MetadataReader((byte*)Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(metadataImage)), metadataImage.Length, MetadataReaderOptions.None);
         Mvid = PeMetadataReader.GetGuid(PeMetadataReader.GetModuleDefinition().Mvid);
     }
 
@@ -55,6 +67,25 @@ internal sealed class ModuleMetadataReader : IDisposable {
             return null;
         }
     }
+    // The raw metadata of a dynamic module, as the runtime's metadata importer holds it. It is copied: the runtime
+    // replaces that buffer every time the module gains a type, so it cannot be addressed beyond this call
+    public static unsafe ModuleMetadataReader? TryLoad(nint metadata, int size) {
+        if (metadata == 0 || size <= 0)
+            return null;
+        try {
+            var image = GC.AllocateUninitializedArray<byte>(size, pinned: true);
+            new ReadOnlySpan<byte>((void*)metadata, size).CopyTo(image);
+            return new ModuleMetadataReader(image);
+        }
+        catch {
+            return null;
+        }
+    }
+
+    // The metadata as one block for the expression compiler, addressable for as long as this reader is
+    public unsafe (nint Pointer, int Size) GetMetadataStorage() {
+        return ((nint)PeMetadataReader.MetadataPointer, PeMetadataReader.MetadataLength);
+    }
 
     public Version? GetAssemblyVersion() {
         try {
@@ -66,7 +97,7 @@ internal sealed class ModuleMetadataReader : IDisposable {
     }
     // The managed entry point (MethodDef token) of the assembly, null when it has none (libraries, native entry points)
     public int? GetEntryPointToken() {
-        var corHeader = peReader.PEHeaders.CorHeader;
+        var corHeader = peReader?.PEHeaders.CorHeader;
         if (corHeader == null || (corHeader.Flags & CorFlags.NativeEntryPoint) != 0)
             return null;
 
@@ -222,6 +253,9 @@ internal sealed class ModuleMetadataReader : IDisposable {
     }
     // Whether 'ilOffset' lies in a finally (or fault) handler of the method
     public bool IsInFinallyHandler(int methodToken, int ilOffset) {
+        // The IL of a dynamic module is not part of any image the exception regions could be read from
+        if (peReader == null)
+            return false;
         try {
             var method = PeMetadataReader.GetMethodDefinition(MetadataTokens.MethodDefinitionHandle(methodToken));
             if (method.RelativeVirtualAddress == 0)
@@ -299,14 +333,14 @@ internal sealed class ModuleMetadataReader : IDisposable {
 
     public void Dispose() {
         pdbProvider?.Dispose();
-        peReader.Dispose();
+        peReader?.Dispose();
     }
 
     private static ModuleMetadataReader? Load(Stream stream, string? assemblyPath) {
         var peReader = new PEReader(stream, PEStreamOptions.PrefetchEntireImage);
         try {
             var result = new ModuleMetadataReader(peReader);
-            result.LoadSymbols(assemblyPath);
+            result.LoadSymbols(peReader, assemblyPath);
             return result;
         }
         catch {
@@ -318,7 +352,7 @@ internal sealed class ModuleMetadataReader : IDisposable {
     public bool TryGetPdbSignature(out string symbolFileName, out Guid pdbGuid) {
         symbolFileName = string.Empty;
         pdbGuid = Guid.Empty;
-        if (codeViewEntry.DataSize == 0)
+        if (peReader == null || codeViewEntry.DataSize == 0)
             return false;
         try {
             var codeViewData = peReader.ReadCodeViewDebugDirectoryData(codeViewEntry);
@@ -332,12 +366,13 @@ internal sealed class ModuleMetadataReader : IDisposable {
     }
     // Loads the symbols from a PDB the host located elsewhere (a search path or a symbol server)
     public bool TryLoadSymbols(string pdbPath) {
-        if (HasSymbols || codeViewEntry.DataSize == 0)
+        if (HasSymbols || peReader == null || codeViewEntry.DataSize == 0)
             return false;
-        return TryLoadPdbFile(pdbPath);
+        return TryLoadPdbFile(peReader, pdbPath);
     }
 
-    private void LoadSymbols(string? assemblyPath) {
+    // The symbols of a module with an image: those of a dynamic module do not exist
+    private void LoadSymbols(PEReader peReader, string? assemblyPath) {
         var embeddedPdbEntry = default(DebugDirectoryEntry);
         foreach (var entry in peReader.ReadDebugDirectory()) {
             if (entry.Type == DebugDirectoryEntryType.CodeView && entry.MinorVersion == PortableCodeViewVersionMagic)
@@ -346,25 +381,25 @@ internal sealed class ModuleMetadataReader : IDisposable {
                 embeddedPdbEntry = entry;
         }
 
-        if (codeViewEntry.DataSize != 0 && TryLoadReferencedPdbFile(assemblyPath))
+        if (codeViewEntry.DataSize != 0 && TryLoadReferencedPdbFile(peReader, assemblyPath))
             return;
         if (embeddedPdbEntry.DataSize != 0)
-            TryLoadEmbeddedPdb(embeddedPdbEntry);
+            TryLoadEmbeddedPdb(peReader, embeddedPdbEntry);
     }
     // The PDB is expected next to the assembly, wherever it was built
-    private bool TryLoadReferencedPdbFile(string? assemblyPath) {
+    private bool TryLoadReferencedPdbFile(PEReader peReader, string? assemblyPath) {
         try {
             var pdbPath = peReader.ReadCodeViewDebugDirectoryData(codeViewEntry).Path;
             var assemblyDirectory = Path.GetDirectoryName(assemblyPath);
             if (assemblyDirectory != null)
                 pdbPath = Path.Combine(assemblyDirectory, Path.GetFileName(pdbPath));
-            return TryLoadPdbFile(pdbPath);
+            return TryLoadPdbFile(peReader, pdbPath);
         }
         catch {
             return false;
         }
     }
-    private bool TryLoadPdbFile(string pdbPath) {
+    private bool TryLoadPdbFile(PEReader peReader, string pdbPath) {
         MetadataReaderProvider? provider = null;
         try {
             if (!File.Exists(pdbPath))
@@ -390,7 +425,7 @@ internal sealed class ModuleMetadataReader : IDisposable {
             return false;
         }
     }
-    private bool TryLoadEmbeddedPdb(DebugDirectoryEntry embeddedPdbEntry) {
+    private bool TryLoadEmbeddedPdb(PEReader peReader, DebugDirectoryEntry embeddedPdbEntry) {
         try {
             var provider = peReader.ReadEmbeddedPortablePdbDebugDirectoryData(embeddedPdbEntry);
             pdbProvider = provider;

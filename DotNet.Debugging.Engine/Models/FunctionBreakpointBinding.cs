@@ -4,12 +4,12 @@ namespace DotNet.Debugging.Engine.Models;
 
 internal class FunctionBreakpointBinding {
     public ICorDebugFunctionBreakpoint CorBreakpoint { get; }
-    public CordbAddress ModuleBaseAddress { get; }
+    public ICorDebugModule Module { get; }
     public int MethodToken { get; }
 
-    public FunctionBreakpointBinding(ICorDebugFunctionBreakpoint corBreakpoint, CordbAddress moduleBaseAddress, int methodToken) {
+    public FunctionBreakpointBinding(ICorDebugFunctionBreakpoint corBreakpoint, ICorDebugModule module, int methodToken) {
         CorBreakpoint = corBreakpoint;
-        ModuleBaseAddress = moduleBaseAddress;
+        Module = module;
         MethodToken = methodToken;
     }
 }

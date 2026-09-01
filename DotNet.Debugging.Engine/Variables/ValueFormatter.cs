@@ -120,7 +120,7 @@ internal static class ValueFormatter {
         var exactType = objectValue.GetExactType();
         var typeName = TypeNameFormatter.GetTypeName(exactType);
 
-        if (GetBaseTypeName(exactType) == "System.Enum") {
+        if (exactType.IsEnumType()) {
             var valueField = metadataImport.FindField(classToken, "value__", 0, 0);
             var numericValue = Format(objectValue.GetFieldValue(corClass, valueField), escapeStrings).Value;
             return new FormattedValue(typeName, FormatEnum(metadataImport, classToken, numericValue));
@@ -264,15 +264,6 @@ internal static class ValueFormatter {
         }
         return false;
     }
-    private static string? GetBaseTypeName(ICorDebugType type) {
-        var baseType = type.GetBaseType();
-        if (baseType == null)
-            return null;
-        var corClass = baseType.GetClass();
-        var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
-        return metadataImport.GetTypeDefProps(corClass.GetToken()).szTypeDef;
-    }
-
     private static string FormatChar(char value) {
         return $"{(int)value} {SymbolDisplay.FormatLiteral(value, quote: true)}";
     }

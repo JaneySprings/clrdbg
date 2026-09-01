@@ -84,13 +84,13 @@ internal class AsyncStepper {
     // gets a breakpoint and the one that is hit carries the step
     private void ArmYieldBreakpoints(ICorDebugThread thread, ICorDebugILFrame frame, AsyncMethodInfo asyncInfo, StepKind kind) {
         var function = frame.GetFunction();
-        var moduleAddress = function.GetModule().GetBaseAddress();
+        var corModule = function.GetModule();
         var methodToken = function.GetToken();
         var step = new AsyncStep(thread.GetId(), kind, asyncInfo.Awaits);
         foreach (var awaitInfo in asyncInfo.Awaits) {
             var yieldBreakpoint = function.GetILCode().CreateBreakpoint((int)awaitInfo.YieldOffset);
             yieldBreakpoint.Activate(true);
-            step.Breakpoints.Add(new AsyncBreakpoint(yieldBreakpoint, moduleAddress, methodToken, awaitInfo.YieldOffset));
+            step.Breakpoints.Add(new AsyncBreakpoint(yieldBreakpoint, corModule, methodToken, awaitInfo.YieldOffset));
         }
         currentStep = step;
     }
@@ -210,7 +210,7 @@ internal class AsyncStepper {
             var function = coreLib.Module.GetFunctionFromToken(methodDef);
             var breakpoint = function.GetILCode().CreateBreakpoint(0);
             breakpoint.Activate(true);
-            notifyDebuggerBreakpoint = new AsyncBreakpoint(breakpoint, coreLib.BaseAddress, methodDef, 0);
+            notifyDebuggerBreakpoint = new AsyncBreakpoint(breakpoint, coreLib.Module, methodDef, 0);
             return true;
         }
         catch {
@@ -230,7 +230,7 @@ internal class AsyncStepper {
         var awaitInfo = step.Awaits.First(it => it.YieldOffset == hitBreakpoint.ILOffset);
         var resumeBreakpoint = function.GetILCode().CreateBreakpoint((int)awaitInfo.ResumeOffset);
         resumeBreakpoint.Activate(true);
-        step.ReplaceBreakpoints(new AsyncBreakpoint(resumeBreakpoint, function.GetModule().GetBaseAddress(), function.GetToken(), awaitInfo.ResumeOffset));
+        step.ReplaceBreakpoints(new AsyncBreakpoint(resumeBreakpoint, function.GetModule(), function.GetToken(), awaitInfo.ResumeOffset));
         step.Status = AsyncStepStatus.ResumeBreakpoint;
     }
     private async Task HandleResumeBreakpointAsync(ICorDebugThread thread, ICorDebugILFrame frame) {
@@ -304,14 +304,14 @@ internal class AsyncStepper {
 
     private class AsyncBreakpoint {
         private readonly ICorDebugFunctionBreakpoint breakpoint;
-        private readonly CordbAddress moduleAddress;
+        private readonly ICorDebugModule module;
         private readonly MethodDefToken methodToken;
 
         public uint ILOffset { get; }
 
-        public AsyncBreakpoint(ICorDebugFunctionBreakpoint breakpoint, CordbAddress moduleAddress, MethodDefToken methodToken, uint ilOffset) {
+        public AsyncBreakpoint(ICorDebugFunctionBreakpoint breakpoint, ICorDebugModule module, MethodDefToken methodToken, uint ilOffset) {
             this.breakpoint = breakpoint;
-            this.moduleAddress = moduleAddress;
+            this.module = module;
             this.methodToken = methodToken;
             ILOffset = ilOffset;
         }
@@ -321,7 +321,7 @@ internal class AsyncStepper {
             if (frame == null)
                 return false;
             var function = frame.GetFunction();
-            return function.GetModule().GetBaseAddress() == moduleAddress && function.GetToken() == methodToken && hitBreakpoint == breakpoint;
+            return function.GetModule() == module && function.GetToken() == methodToken && hitBreakpoint == breakpoint;
         }
         public void Deactivate() {
             breakpoint.TryActivate(false);

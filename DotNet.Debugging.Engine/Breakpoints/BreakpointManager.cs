@@ -218,12 +218,12 @@ internal class BreakpointManager {
         var wasVerified = breakpoint.Verified;
         try {
             foreach (var resolved in FunctionBreakpointResolver.Resolve(module.MetadataReader, pattern)) {
-                if (breakpoint.FunctionBindings.Any(it => it.ModuleBaseAddress == module.BaseAddress && it.MethodToken == resolved.MethodToken))
+                if (breakpoint.FunctionBindings.Any(it => it.Module == module.Module && it.MethodToken == resolved.MethodToken))
                     continue;
                 var function = module.Module.GetFunctionFromToken(resolved.MethodToken);
                 var corBreakpoint = function.GetILCode().CreateBreakpoint(resolved.ILOffset);
                 corBreakpoint.Activate(true);
-                breakpoint.FunctionBindings.Add(new FunctionBreakpointBinding(corBreakpoint, module.BaseAddress, resolved.MethodToken));
+                breakpoint.FunctionBindings.Add(new FunctionBreakpointBinding(corBreakpoint, module.Module, resolved.MethodToken));
                 breakpoint.SetStatus(BreakpointStatus.Bound);
             }
         }

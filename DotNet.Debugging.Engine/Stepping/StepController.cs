@@ -19,7 +19,7 @@ internal class StepController {
     // reaches next is still cleanup, even outside a handler (the plumbing between two nested finallys)
     private bool isCrossingHiddenFinally;
     // The statement the user's step started in, a filtered skip that returns into it resumes the step
-    private CordbAddress stepStatementModule;
+    private ModuleInfo? stepStatementModule;
     private int stepStatementMethodToken;
     private int stepStatementStart;
 
@@ -202,7 +202,7 @@ internal class StepController {
     }
 
     private void RememberStepStatement(ICorDebugILFrame frame) {
-        stepStatementModule = new CordbAddress(0);
+        stepStatementModule = null;
         stepStatementMethodToken = 0;
         stepStatementStart = -1;
 
@@ -213,12 +213,12 @@ internal class StepController {
         if (!module.MetadataReader.TryGetStepRange(function.GetToken(), frame.GetIP().pnOffset, out var startOffset, out _))
             return;
 
-        stepStatementModule = module.BaseAddress;
+        stepStatementModule = module;
         stepStatementMethodToken = function.GetToken();
         stepStatementStart = startOffset;
     }
     private bool IsInStepStatement(ModuleInfo module, int methodToken, int ilOffset) {
-        if (module.BaseAddress != stepStatementModule || methodToken != stepStatementMethodToken)
+        if (module != stepStatementModule || methodToken != stepStatementMethodToken)
             return false;
         if (!module.MetadataReader.TryGetStepRange(methodToken, ilOffset, out var startOffset, out _))
             return false;

@@ -11,15 +11,26 @@ public partial class ManagedDebugger {
     private void HandleModuleLoaded(LoadModuleCorDebugManagedCallbackEventArgs callbackEvent) {
         var corModule = callbackEvent.Module;
         var modulePath = corModule.GetName();
-        var moduleName = Path.GetFileName(modulePath);
-        DebuggerLoggingService.LogMessage($"Module loaded: {modulePath} at 0x{corModule.GetBaseAddress().Value:X}");
+        DebuggerLoggingService.LogMessage(corModule.IsDynamic() ? $"Dynamic module loaded: {modulePath}" : $"Module loaded: {modulePath} at 0x{corModule.GetBaseAddress().Value:X}");
 
         var metadataReader = LoadModuleMetadata(corModule, modulePath);
-        if (metadataReader == null) {
-            DebuggerLoggingService.LogMessage($"  The metadata of {moduleName} could not be read");
-            ContinueProcess();
-            return;
-        }
+        if (metadataReader == null)
+            DebuggerLoggingService.LogMessage($"  The metadata of {Path.GetFileName(modulePath)} could not be read");
+        else
+            RegisterModule(CreateModule(corModule, modulePath, metadataReader));
+        ContinueProcess();
+    }
+    // The runtime forces class load callbacks on for dynamic modules (nothing else gets them, they stay disabled)
+    // and rebuilds their metadata ahead of each one: the type the debuggee just defined becomes readable here
+    private void HandleClassLoaded(LoadClassCorDebugManagedCallbackEventArgs callbackEvent) {
+        var corModule = callbackEvent.C.GetModule();
+        if (corModule.IsDynamic())
+            RefreshDynamicModule(corModule);
+        ContinueProcess();
+    }
+
+    private ModuleInfo CreateModule(ICorDebugModule corModule, string modulePath, ModuleMetadataReader metadataReader) {
+        var moduleName = Path.GetFileName(modulePath);
         // EnC and disabled optimizations are only enabled for assemblies built by the user, which makes them the user code heuristic
         var jitFlags = corModule.GetJITCompilerFlags();
         var isUserCode = jitFlags == CorDebugJITCompilerFlags.CORDEBUG_JIT_DISABLE_OPTIMIZATION || jitFlags == CorDebugJITCompilerFlags.CORDEBUG_JIT_ENABLE_ENC;
@@ -36,20 +47,36 @@ public partial class ManagedDebugger {
             foreach (var methodToken in metadataReader.GetMethodsWithoutSequencePoints())
                 TrySetMethodNotUserCode(corModule, methodToken);
         }
-
-        var module = new ModuleInfo(corModule, modulePath, metadataReader, isUserCode);
-        modules[module.BaseAddress] = module;
+        return new ModuleInfo(++nextModuleId, corModule, modulePath, metadataReader, isUserCode);
+    }
+    private void RegisterModule(ModuleInfo module) {
+        modules[module.Module] = module;
         ModulesVersion++;
 
         TrySetEntryPointBreakpoint(module);
         // The expression evaluator needs the core library's primitive types, every stop happens after it is loaded
-        if (moduleName == CoreLibraryName)
-            evaluator = new ExpressionEvaluator(this, PrimitiveTypeClasses.Load(corModule));
+        if (module.Name == CoreLibraryName)
+            evaluator = new ExpressionEvaluator(this, PrimitiveTypeClasses.Load(module.Module));
 
         OnModuleLoaded?.Invoke(module);
         foreach (var breakpoint in breakpointManager.BindPending(module, RequireExactSource))
             OnBreakpointChanged?.Invoke(breakpoint);
-        ContinueProcess();
+    }
+    private void RefreshDynamicModule(ICorDebugModule corModule) {
+        var modulePath = corModule.GetName();
+        var metadataReader = LoadModuleMetadata(corModule, modulePath);
+        if (metadataReader == null)
+            return;
+
+        var module = FindModule(corModule);
+        if (module != null) {
+            module.UpdateMetadata(metadataReader);
+            ModulesVersion++;
+            return;
+        }
+        // The module had no metadata to read when it loaded, its first type brought some
+        DebuggerLoggingService.LogMessage($"Dynamic module registered at its first class load: {modulePath}");
+        RegisterModule(CreateModule(corModule, modulePath, metadataReader));
     }
 
     // Symbols missing next to the module: the host may find them in a search path or on a symbol server
@@ -81,6 +108,8 @@ public partial class ManagedDebugger {
 
     private ModuleMetadataReader? LoadModuleMetadata(ICorDebugModule corModule, string modulePath) {
         try {
+            if (corModule.IsDynamic())
+                return LoadDynamicModuleMetadata(corModule);
             if (!corModule.IsInMemory())
                 return ModuleMetadataReader.TryLoad(modulePath);
             ArgumentNullException.ThrowIfNull(process);
@@ -91,6 +120,18 @@ public partial class ManagedDebugger {
             DebuggerLoggingService.LogError($"  Error loading the metadata of {Path.GetFileName(modulePath)}", ex);
             return null;
         }
+    }
+    // A dynamic module has no image to read, its metadata is taken from the runtime's own importer. The importer
+    // is rebuilt whenever a type gets defined in the module, so the metadata is copied rather than referenced
+    private static ModuleMetadataReader? LoadDynamicModuleMetadata(ICorDebugModule corModule) {
+        // A module the debuggee has only just created has nothing for the runtime to hand out yet
+        if (corModule.TryGetMetaDataInterface<IMetaDataTables2>(out var tables) < 0 || tables == null)
+            return null;
+        var (pointer, size) = tables.GetMetaDataStorage();
+        var metadataReader = ModuleMetadataReader.TryLoad(pointer, size);
+        // The storage belongs to the importer, which must not be released before the copy is taken
+        GC.KeepAlive(tables);
+        return metadataReader;
     }
     // A 'stopAtEntry' launch places a one-shot breakpoint on the entry point of the first assembly that has one
     private void TrySetEntryPointBreakpoint(ModuleInfo module) {

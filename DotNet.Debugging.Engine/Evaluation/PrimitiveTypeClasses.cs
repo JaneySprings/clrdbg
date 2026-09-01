@@ -23,11 +23,11 @@ internal class PrimitiveTypeClasses {
     ];
 
     private readonly Dictionary<CorElementType, ICorDebugClass> classes;
-    private readonly CordbAddress moduleBaseAddress;
+    private readonly ICorDebugModule coreLibModule;
 
-    private PrimitiveTypeClasses(Dictionary<CorElementType, ICorDebugClass> classes, CordbAddress moduleBaseAddress) {
+    private PrimitiveTypeClasses(Dictionary<CorElementType, ICorDebugClass> classes, ICorDebugModule coreLibModule) {
         this.classes = classes;
-        this.moduleBaseAddress = moduleBaseAddress;
+        this.coreLibModule = coreLibModule;
     }
 
     public static PrimitiveTypeClasses Load(ICorDebugModule coreLibModule) {
@@ -39,14 +39,14 @@ internal class PrimitiveTypeClasses {
                 throw new InvalidOperationException($"Could not find the {typeName} type definition");
             classes[elementType] = coreLibModule.GetClassFromToken(typeDef.Value);
         }
-        return new PrimitiveTypeClasses(classes, coreLibModule.GetBaseAddress());
+        return new PrimitiveTypeClasses(classes, coreLibModule);
     }
 
     public bool TryGetClass(CorElementType elementType, out ICorDebugClass corClass) {
         return classes.TryGetValue(elementType, out corClass!);
     }
     public bool IsPrimitiveClass(ICorDebugClass corClass) {
-        if (corClass.GetModule().GetBaseAddress() != moduleBaseAddress)
+        if (corClass.GetModule() != coreLibModule)
             return false;
         var token = corClass.GetToken();
         return classes.Values.Any(it => it.GetToken() == token);

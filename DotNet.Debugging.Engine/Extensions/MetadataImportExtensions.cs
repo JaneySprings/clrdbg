@@ -12,19 +12,9 @@ internal static class MetadataImportExtensions {
     public static bool IsLiteral(this FieldDefToken fieldDef, IMetaDataImport metadataImport) {
         return metadataImport.GetFieldProps(fieldDef).pdwAttr.IsFdLiteral();
     }
-    public static bool IsPublic(this FieldDefToken fieldDef, IMetaDataImport metadataImport) {
-        return metadataImport.GetFieldProps(fieldDef).pdwAttr.IsFdPublic();
-    }
     public static bool IsStatic(this PropertyToken property, IMetaDataImport metadataImport) {
         var getter = metadataImport.GetPropertyProps(property).pmdGetter;
         return !getter.IsNil && metadataImport.GetMethodProps(getter).pdwAttr.IsMdStatic();
-    }
-    public static bool IsPublic(this PropertyToken property, IMetaDataImport metadataImport) {
-        var getter = metadataImport.GetPropertyProps(property).pmdGetter;
-        return !getter.IsNil && metadataImport.GetMethodProps(getter).pdwAttr.IsMdPublic();
-    }
-    public static bool HasGetter(this PropertyToken property, IMetaDataImport metadataImport) {
-        return !metadataImport.GetPropertyProps(property).pmdGetter.IsNil;
     }
     // An indexer getter requires arguments, so the property cannot be evaluated as a member
     public static bool IsIndexer(this PropertyToken property, IMetaDataImport metadataImport) {

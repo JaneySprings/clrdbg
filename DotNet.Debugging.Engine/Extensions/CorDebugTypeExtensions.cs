@@ -12,4 +12,12 @@ internal static class CorDebugTypeExtensions {
             return null;
         return baseType;
     }
+    public static bool IsEnumType(this ICorDebugType type) {
+        var baseType = type.GetBaseType();
+        if (baseType == null)
+            return false;
+        var corClass = baseType.GetClass();
+        var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
+        return metadataImport.GetTypeDefProps(corClass.GetToken()).szTypeDef == "System.Enum";
+    }
 }

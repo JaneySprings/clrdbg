@@ -59,6 +59,11 @@ public static class CorDebugModuleExtensions {
         return pToken;
     }
 
+    public static bool IsDynamic(this ICorDebugModule instance) {
+        Marshal.ThrowExceptionForHR(instance.TryIsDynamic(out var pDynamic));
+        return pDynamic;
+    }
+
     public static bool IsInMemory(this ICorDebugModule instance) {
         Marshal.ThrowExceptionForHR(instance.TryIsInMemory(out var pInMemory));
         return pInMemory;

@@ -323,51 +323,110 @@ internal class VariableProvider {
         SortMembers(result);
     }
     // Lists the instance or static members declared by the type and its base types, reporting whether the
-    // 'Static members' and 'Non-Public members' groups are needed
-    private async Task<MemberSummary> AddMembersAsync(ICorDebugValue value, ICorDebugType type, MemberFilter filter, bool listStatics, VariableReference reference, List<VariableSlot> result) {
+    // 'Static members' and 'Non-Public members' groups are needed. 'seenNames' carries the member names met on the
+    // way up the hierarchy: a base member is listed under a name a derived member already took only when that
+    // member hides it (a field, a 'new' or non-virtual property), and then with its declaring type - an override
+    // is the base property itself, listed once. This is the rule Microsoft's debugger applies
+    private async Task<MemberSummary> AddMembersAsync(ICorDebugValue value, ICorDebugType type, MemberFilter filter, bool listStatics, VariableReference reference, List<VariableSlot> result, Dictionary<string, bool>? seenNames = null) {
+        seenNames ??= new Dictionary<string, bool>(StringComparer.Ordinal);
         var corClass = type.GetClass();
         var typeToken = corClass.GetToken();
         var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
         var allFields = metadataImport.EnumFields(typeToken).ToList();
         var allProperties = metadataImport.EnumProperties(typeToken).ToList();
-        var fields = allFields.Where(it => it.IsStatic(metadataImport) == listStatics).ToList();
-        var properties = allProperties.Where(it => it.IsStatic(metadataImport) == listStatics && !it.IsIndexer(metadataImport)).ToList();
+        // Every member of the type takes part in the name hiding, whichever visibility this listing shows
+        var hasSymbols = debugger.FindModule(corClass.GetModule())?.HasSymbols == true;
+        var fields = ListFields(metadataImport, allFields.Where(it => it.IsStatic(metadataImport) == listStatics), seenNames, hasSymbols);
+        var properties = ListProperties(metadataImport, allProperties.Where(it => it.IsStatic(metadataImport) == listStatics && !it.IsIndexer(metadataImport)), seenNames, hasSymbols);
 
         var summary = new MemberSummary();
         summary.HasStaticMembers = !listStatics
             && (allFields.Any(it => it.IsStatic(metadataImport)) || allProperties.Any(it => it.IsStatic(metadataImport)));
-        summary.HasNonPublicMembers = filter == MemberFilter.Public && HasNonPublicMembers(metadataImport, fields, properties);
+        summary.HasNonPublicMembers = filter == MemberFilter.Public && (fields.Any(it => !it.IsInline) || properties.Any(it => !it.IsInline));
 
-        await AddFieldsAsync(FilterFields(metadataImport, fields, filter), metadataImport, type, value, reference, result);
+        // The declaring type names the hidden and the static members, null when it cannot be formatted
+        var typeName = TryGetTypeName(type);
+        await AddFieldsAsync(FilterMembers(fields, filter), metadataImport, type, typeName, value, reference, result);
         // A property getter cannot be func-evaled with a byref-like 'this' (the debuggee can die on it), such a value lists its fields only
         if (!metadataImport.HasAttribute(typeToken, AttributeNames.IsByRefLike))
-            await AddPropertiesAsync(FilterProperties(metadataImport, properties, filter), metadataImport, type, value, reference, result);
+            await AddPropertiesAsync(FilterMembers(properties, filter), metadataImport, type, typeName, value, reference, result);
 
         var baseType = type.GetBaseType();
         if (baseType == null || IsRootType(baseType))
             return summary;
-        var baseSummary = await AddMembersAsync(value, baseType, filter, listStatics, reference, result);
+        var baseSummary = await AddMembersAsync(value, baseType, filter, listStatics, reference, result, seenNames);
         summary.HasStaticMembers |= baseSummary.HasStaticMembers;
         summary.HasNonPublicMembers |= baseSummary.HasNonPublicMembers;
         return summary;
     }
-    private async Task AddFieldsAsync(List<FieldDefToken> fields, IMetaDataImport metadataImport, ICorDebugType type, ICorDebugValue value, VariableReference reference, List<VariableSlot> result) {
-        var corClass = type.GetClass();
+    // The fields a type shows, in declaration order: compiler generated ones stay out (hoisted locals come back under their own name)
+    private static List<ListedMember<FieldDefToken>> ListFields(IMetaDataImport metadataImport, IEnumerable<FieldDefToken> fields, Dictionary<string, bool> seenNames, bool hasSymbols) {
+        var result = new List<ListedMember<FieldDefToken>>();
         foreach (var field in fields) {
-            // Which fields the listing holds and how they are named comes from metadata alone, no value is read here
             var fieldProps = metadataImport.GetFieldProps(field);
-            if (fieldProps.szField == null)
+            if (!TryGetDisplayName(fieldProps.szField, out var name))
                 continue;
+            // A field hides every base member of its name
+            if (TryListMember(seenNames, name, hidesBaseMembers: true, out var isHidden))
+                result.Add(new ListedMember<FieldDefToken>(field, name, IsListedInline(GetVisibility(fieldProps.pdwAttr), hasSymbols), isHidden, isExplicitImplementation: false));
+        }
+        return result;
+    }
+    private static List<ListedMember<PropertyToken>> ListProperties(IMetaDataImport metadataImport, IEnumerable<PropertyToken> properties, Dictionary<string, bool> seenNames, bool hasSymbols) {
+        var result = new List<ListedMember<PropertyToken>>();
+        foreach (var property in properties) {
+            var propertyProps = metadataImport.GetPropertyProps(property);
+            var name = propertyProps.szProperty;
+            if (name == null || propertyProps.pmdGetter.IsNil)
+                continue;
+            var getterAttributes = metadataImport.GetMethodProps(propertyProps.pmdGetter).pdwAttr;
+            // An override reuses the slot of the base property, it is that property. A 'new' one (its own slot,
+            // virtual or not) hides the base one
+            var hidesBaseMembers = !getterAttributes.IsMdVirtual() || getterAttributes.IsMdNewSlot();
+            // An accessor that is private yet virtual is an explicit interface implementation (C# has no private
+            // virtual members). Microsoft's debugger lists it with the public members, under its interface-qualified
+            // name, when the type's module has symbols - among the non-public ones of a module without
+            var isExplicitImplementation = getterAttributes.IsMdPrivate() && getterAttributes.IsMdVirtual();
+            var isInline = IsListedInline(GetVisibility(getterAttributes), hasSymbols) || (isExplicitImplementation && hasSymbols);
+            if (TryListMember(seenNames, name, hidesBaseMembers, out var isHidden))
+                result.Add(new ListedMember<PropertyToken>(property, name, isInline, isHidden, isExplicitImplementation));
+        }
+        return result;
+    }
+    // Whether a member is listed, from what the walk up the hierarchy met of its name before: a name a more
+    // derived member took is listed again only when that member hides it. Listed or not, what this member does
+    // to the members of its name beneath it is recorded for the base types that follow
+    private static bool TryListMember(Dictionary<string, bool> seenNames, string name, bool hidesBaseMembers, out bool isHidden) {
+        isHidden = seenNames.TryGetValue(name, out var hiddenByDerived);
+        seenNames[name] = hidesBaseMembers;
+        return !isHidden || hiddenByDerived;
+    }
+    // Whether a member is listed with the public ones rather than behind 'Non-Public members'. The internal members
+    // of a module with symbols (the user's own code) are: Microsoft's debugger keeps them behind the group, the
+    // listing reads better with them inline. Those of a module without symbols (a library's internals) stay behind it
+    private static bool IsListedInline(VariableVisibility visibility, bool hasSymbols) {
+        return visibility == VariableVisibility.Public || (hasSymbols && visibility == VariableVisibility.Internal);
+    }
+    private static List<ListedMember<TToken>> FilterMembers<TToken>(List<ListedMember<TToken>> members, MemberFilter filter) {
+        if (filter == MemberFilter.All)
+            return members;
+        return members.Where(it => it.IsInline == (filter == MemberFilter.Public)).ToList();
+    }
+    private async Task AddFieldsAsync(List<ListedMember<FieldDefToken>> fields, IMetaDataImport metadataImport, ICorDebugType type, string? typeName, ICorDebugValue value, VariableReference reference, List<VariableSlot> result) {
+        var corClass = type.GetClass();
+        foreach (var member in fields) {
+            var field = member.Token;
+            var name = member.GetDisplayName(typeName);
             try {
-                if (!TryGetDisplayName(fieldProps.szField, out var name))
-                    continue;
+                // Which fields the listing holds and how they are named comes from metadata alone, no value is read here
+                var fieldProps = metadataImport.GetFieldProps(field);
                 var browsable = GetDebuggerBrowsableState(metadataImport, field);
                 if (browsable == DebuggerBrowsableState.Never)
                     continue;
 
                 var isStatic = fieldProps.pdwAttr.IsFdStatic();
                 var visibility = GetVisibility(fieldProps.pdwAttr);
-                var evaluateName = GetMemberEvaluateName(name, isStatic, reference.EvaluateName, type);
+                var evaluateName = member.GetEvaluateName(isStatic, reference.EvaluateName, typeName);
                 if (fieldProps.pdwAttr.IsFdLiteral()) {
                     var literal = new VariableInfo(name, ValueFormatter.FormatLiteral(fieldProps.ppValue, fieldProps.pcchValue, fieldProps.pdwCPlusTypeFlag), TypeNameFormatter.GetPrimitiveTypeName(fieldProps.pdwCPlusTypeFlag));
                     literal.Visibility = visibility;
@@ -387,19 +446,18 @@ internal class VariableProvider {
             }
             catch (Exception ex) {
                 // A member that cannot even be listed is shown with the error as its value, like one that cannot be read
-                result.Add(new VariableSlot(VariableInfo.CreateError(fieldProps.szField, ex.Message)));
+                result.Add(new VariableSlot(VariableInfo.CreateError(name, ex.Message)));
             }
         }
     }
-    private async Task AddPropertiesAsync(List<PropertyToken> properties, IMetaDataImport metadataImport, ICorDebugType type, ICorDebugValue value, VariableReference reference, List<VariableSlot> result) {
+    private async Task AddPropertiesAsync(List<ListedMember<PropertyToken>> properties, IMetaDataImport metadataImport, ICorDebugType type, string? typeName, ICorDebugValue value, VariableReference reference, List<VariableSlot> result) {
         var module = type.GetClass().GetModule();
-        foreach (var property in properties) {
-            // No getter runs here, a property only costs a func eval once the page holding it is requested
-            var propertyProps = metadataImport.GetPropertyProps(property);
-            var name = propertyProps.szProperty;
-            if (name == null || propertyProps.pmdGetter.IsNil)
-                continue;
+        foreach (var member in properties) {
+            var property = member.Token;
+            var name = member.GetDisplayName(typeName);
             try {
+                // No getter runs here, a property only costs a func eval once the page holding it is requested
+                var propertyProps = metadataImport.GetPropertyProps(property);
                 var browsable = GetDebuggerBrowsableState(metadataImport, property);
                 if (browsable == DebuggerBrowsableState.Never)
                     continue;
@@ -407,7 +465,7 @@ internal class VariableProvider {
                 var getterAttributes = metadataImport.GetMethodProps(propertyProps.pmdGetter).pdwAttr;
                 var isStatic = getterAttributes.IsMdStatic();
                 var visibility = GetVisibility(getterAttributes);
-                var evaluateName = GetMemberEvaluateName(name, isStatic, reference.EvaluateName, type);
+                var evaluateName = member.GetEvaluateName(isStatic, reference.EvaluateName, typeName);
 
                 // The getter is invoked with the original reference value, not the dereferenced object, and with the
                 // arguments of the type declaring it - the members of a base type are listed while walking up from the
@@ -633,8 +691,8 @@ internal class VariableProvider {
         }
 
         var elementType = objectValue.GetElementType();
-        // Strings, decimals and boxed primitives are displayed as primitives
-        if (elementType == CorElementType.STRING || typeName == "decimal" || typeName == "decimal?" || TypeNameFormatter.IsPrimitiveTypeName(typeName))
+        // Strings, decimals and boxed primitives are displayed as primitives, an enum as its member name
+        if (elementType == CorElementType.STRING || typeName == "decimal" || typeName == "decimal?" || TypeNameFormatter.IsPrimitiveTypeName(typeName) || objectValue.GetExactType().IsEnumType())
             return 0;
         if (elementType is CorElementType.CLASS or CorElementType.VALUETYPE or CorElementType.SZARRAY or CorElementType.ARRAY)
             return variableManager.Create(new VariableReference(VariableReferenceKind.Members, threadId, frameDepth, value, proxyValue, evaluateName));
@@ -733,20 +791,6 @@ internal class VariableProvider {
             return null;
         return GetInterfaceName(metadataImport, MetadataTokens.GetToken(handle));
     }
-    private static bool HasNonPublicMembers(IMetaDataImport metadataImport, List<FieldDefToken> fields, List<PropertyToken> properties) {
-        return fields.Any(it => !it.IsPublic(metadataImport) && TryGetDisplayName(metadataImport.GetFieldProps(it).szField, out _))
-            || properties.Any(it => it.HasGetter(metadataImport) && !it.IsPublic(metadataImport));
-    }
-    private static List<FieldDefToken> FilterFields(IMetaDataImport metadataImport, List<FieldDefToken> fields, MemberFilter filter) {
-        if (filter == MemberFilter.All)
-            return fields;
-        return fields.Where(it => it.IsPublic(metadataImport) == (filter == MemberFilter.Public)).ToList();
-    }
-    private static List<PropertyToken> FilterProperties(IMetaDataImport metadataImport, List<PropertyToken> properties, MemberFilter filter) {
-        if (filter == MemberFilter.All)
-            return properties;
-        return properties.Where(it => it.HasGetter(metadataImport) && it.IsPublic(metadataImport) == (filter == MemberFilter.Public)).ToList();
-    }
     // Compiler generated fields are hidden, except hoisted locals ('<count>5__1') which are shown under their original name
     private static bool TryGetDisplayName(string? fieldName, out string displayName) {
         displayName = fieldName ?? string.Empty;
@@ -764,31 +808,29 @@ internal class VariableProvider {
             return null;
         return (DebuggerBrowsableState)CustomAttributeReader.ReadInt32Argument(data, size);
     }
-    // 'parent.Member' for instance members, 'Namespace.Type.Member' for static ones, the bare name for hoisted locals
-    private static string GetMemberEvaluateName(string memberName, bool isStatic, string? parentEvaluateName, ICorDebugType declaringType) {
-        if (isStatic) {
-            try {
-                return $"{TypeNameFormatter.GetTypeName(declaringType)}.{memberName}";
-            }
-            catch {
-                // Fall through to the instance form
-            }
+    // Null when the type cannot be named (the remote transport hands back types without an element type)
+    private static string? TryGetTypeName(ICorDebugType type) {
+        try {
+            return TypeNameFormatter.GetTypeName(type);
         }
-        return parentEvaluateName == null ? memberName : $"{parentEvaluateName}.{memberName}";
+        catch {
+            return null;
+        }
     }
+    // 'protected internal' is internal at least, 'private protected' is protected at most
     private static VariableVisibility GetVisibility(CorFieldAttr attributes) {
         return (attributes & CorFieldAttr.fdFieldAccessMask) switch {
             CorFieldAttr.fdPublic => VariableVisibility.Public,
-            CorFieldAttr.fdFamily or CorFieldAttr.fdFamORAssem => VariableVisibility.Protected,
-            CorFieldAttr.fdAssembly or CorFieldAttr.fdFamANDAssem => VariableVisibility.Internal,
+            CorFieldAttr.fdFamily or CorFieldAttr.fdFamANDAssem => VariableVisibility.Protected,
+            CorFieldAttr.fdAssembly or CorFieldAttr.fdFamORAssem => VariableVisibility.Internal,
             _ => VariableVisibility.Private
         };
     }
     private static VariableVisibility GetVisibility(CorMethodAttr attributes) {
         return (attributes & CorMethodAttr.mdMemberAccessMask) switch {
             CorMethodAttr.mdPublic => VariableVisibility.Public,
-            CorMethodAttr.mdFamily or CorMethodAttr.mdFamORAssem => VariableVisibility.Protected,
-            CorMethodAttr.mdAssem or CorMethodAttr.mdFamANDAssem => VariableVisibility.Internal,
+            CorMethodAttr.mdFamily or CorMethodAttr.mdFamANDAssem => VariableVisibility.Protected,
+            CorMethodAttr.mdAssem or CorMethodAttr.mdFamORAssem => VariableVisibility.Internal,
             _ => VariableVisibility.Private
         };
     }
@@ -827,5 +869,42 @@ internal class VariableProvider {
     private class MemberSummary {
         public bool HasStaticMembers { get; set; }
         public bool HasNonPublicMembers { get; set; }
+    }
+
+    // A field or property the listing shows: whether it goes with the public members or behind 'Non-Public members',
+    // and how it is named. One a derived member hides is told apart from it by its declaring type, 'Name (Namespace.Type)',
+    // the way Microsoft's debugger shows it
+    private class ListedMember<TToken> {
+        public TToken Token { get; }
+        public string Name { get; }
+        public bool IsInline { get; }
+        public bool IsHidden { get; }
+        public bool IsExplicitImplementation { get; }
+
+        public ListedMember(TToken token, string name, bool isInline, bool isHidden, bool isExplicitImplementation) {
+            Token = token;
+            Name = name;
+            IsInline = isInline;
+            IsHidden = isHidden;
+            IsExplicitImplementation = isExplicitImplementation;
+        }
+
+        public string GetDisplayName(string? declaringTypeName) {
+            return IsHidden && declaringTypeName != null ? $"{Name} ({declaringTypeName})" : Name;
+        }
+        // 'parent.Member' for an instance member, 'Namespace.Type.Member' for a static one, the bare name for a
+        // hoisted local. A hidden member is only reachable through a cast to its declaring type, an explicit
+        // interface implementation ('Namespace.Interface.Member') through one to its interface: '((Namespace.Type)parent).Member'
+        public string GetEvaluateName(bool isStatic, string? parentEvaluateName, string? declaringTypeName) {
+            if (isStatic && declaringTypeName != null)
+                return $"{declaringTypeName}.{Name}";
+            if (parentEvaluateName == null)
+                return Name;
+            if (IsExplicitImplementation && Name.LastIndexOf('.') is var dotIndex && dotIndex > 0)
+                return $"(({Name.Substring(0, dotIndex)}){parentEvaluateName}).{Name.Substring(dotIndex + 1)}";
+            if (IsHidden && declaringTypeName != null)
+                return $"(({declaringTypeName}){parentEvaluateName}).{Name}";
+            return $"{parentEvaluateName}.{Name}";
+        }
     }
 }

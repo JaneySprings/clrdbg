@@ -16,6 +16,11 @@ public static class EnumExtensions {
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool IsMdPrivate(this CorMethodAttr attr) {
+        return (attr & CorMethodAttr.mdMemberAccessMask) == CorMethodAttr.mdPrivate;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool IsMdStatic(this CorMethodAttr attr) {
         return (attr & CorMethodAttr.mdStatic) != 0;
     }

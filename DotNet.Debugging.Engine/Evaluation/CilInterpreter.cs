@@ -503,7 +503,7 @@ internal class CilInterpreter {
             if (type.GetElementType() is not (CorElementType.VALUETYPE or CorElementType.CLASS))
                 return null;
             var corClass = type.GetClass();
-            if (corClass.GetToken() == declaringToken && corClass.GetModule().GetBaseAddress() == declaringType.Module.BaseAddress)
+            if (corClass.GetToken() == declaringToken && corClass.GetModule() == declaringType.Module.Module)
                 return type;
         }
         return null;
@@ -820,7 +820,7 @@ internal class CilInterpreter {
                 return false;
             var targetClass = targetType.RuntimeType.Class;
             return exactType.GetClass().GetToken() == targetClass.GetToken()
-                && exactType.GetClass().GetModule().GetBaseAddress() == targetClass.GetModule().GetBaseAddress();
+                && exactType.GetClass().GetModule() == targetClass.GetModule();
         }
         return false;
     }

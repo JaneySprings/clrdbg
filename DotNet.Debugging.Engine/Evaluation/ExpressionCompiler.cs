@@ -25,7 +25,7 @@ internal class ExpressionCompiler {
     private readonly ManagedDebugger debugger;
     private readonly Dictionary<string, CacheEntry> compileCache = new Dictionary<string, CacheEntry>();
     private readonly LinkedList<string> compileOrder = new LinkedList<string>();
-    private readonly Dictionary<CordbAddress, ImmutableArray<MetadataBlock>> metadataBlocksCache = new Dictionary<CordbAddress, ImmutableArray<MetadataBlock>>();
+    private readonly Dictionary<ModuleInfo, ImmutableArray<MetadataBlock>> metadataBlocksCache = new Dictionary<ModuleInfo, ImmutableArray<MetadataBlock>>();
     private int cachedModulesVersion = -1;
 
     public ExpressionCompiler(ManagedDebugger debugger) {
@@ -35,16 +35,16 @@ internal class ExpressionCompiler {
     public CompiledExpression Compile(string expression, EvaluationContext context) {
         // A type context (DebuggerDisplay) evaluation binds against the value alone, no IL frame is needed for it
         ICorDebugILFrame? frame = null;
-        ICorDebugModule preferredModule;
+        ModuleInfo preferredModule;
         if (context.RootValue != null) {
             // DebuggerDisplay format specifiers ({Name,nq}) are not valid interpolation alignments
             var syntax = SyntaxFactory.ParseExpression(expression);
             expression = new RemoveFormatSpecifierRewriter().Visit(syntax)!.ToFullString();
-            preferredModule = context.RootValue.GetExactType().GetClass().GetModule();
+            preferredModule = debugger.GetModule(context.RootValue.GetExactType().GetClass().GetModule());
         }
         else {
             frame = debugger.GetILFrame(context.ThreadId, context.FrameDepth);
-            preferredModule = frame.GetFunction().GetModule();
+            preferredModule = debugger.GetModule(frame.GetFunction().GetModule());
         }
         var hasException = debugger.GetCurrentException(context.ThreadId) != null;
 
@@ -58,8 +58,8 @@ internal class ExpressionCompiler {
 
         var blocks = GetMetadataBlocks(preferredModule);
         var evaluationContext = context.RootValue == null
-            ? CreateMethodContext(blocks, frame!)
-            : CreateTypeContext(blocks, context.RootValue);
+            ? CreateMethodContext(blocks, frame!, preferredModule)
+            : CreateTypeContext(blocks, context.RootValue, preferredModule);
 
         var diagnostics = DiagnosticBag.GetInstance();
         try {
@@ -75,12 +75,12 @@ internal class ExpressionCompiler {
         }
     }
 
-    private static string CreateCacheKey(string expression, EvaluationContext context, ICorDebugILFrame? frame, ICorDebugModule preferredModule, bool hasException) {
+    private static string CreateCacheKey(string expression, EvaluationContext context, ICorDebugILFrame? frame, ModuleInfo preferredModule, bool hasException) {
         if (context.RootValue != null)
-            return $"type|{preferredModule.GetBaseAddress().Value}|{context.RootValue.GetExactType().GetClass().GetToken()}|{hasException}|{expression}";
+            return $"type|{preferredModule.Id}|{context.RootValue.GetExactType().GetClass().GetToken()}|{hasException}|{expression}";
 
         var ilOffset = EvaluationContextBase.NormalizeILOffset((uint)frame!.GetIP().pnOffset);
-        return $"method|{preferredModule.GetBaseAddress().Value}|{frame!.GetFunction().GetToken()}|{ilOffset}|{hasException}|{expression}";
+        return $"method|{preferredModule.Id}|{frame!.GetFunction().GetToken()}|{ilOffset}|{hasException}|{expression}";
     }
     private CompiledExpression AddToCache(string key, CompiledExpression compiled) {
         if (compileCache.Count >= CacheCapacity) {
@@ -109,31 +109,30 @@ internal class ExpressionCompiler {
         return [new Alias(DkmClrAliasKind.Exception, "Error", "$exception", typeof(Exception).AssemblyQualifiedName!, Guid.Empty, null!)];
     }
 
-    // The metadata passed to the Roslyn evaluator. When several loaded modules share an assembly identity (the same
-    // assembly in several AssemblyLoadContexts) only one per identity is kept so Roslyn binds types against a single
-    // instance - the module the evaluation binds against is preferred, as the tokens emitted into the evaluation
-    // assembly must match the instance the user is debugging
-    private ImmutableArray<MetadataBlock> GetMetadataBlocks(ICorDebugModule preferredModule) {
-        var key = preferredModule.GetBaseAddress();
-        if (metadataBlocksCache.TryGetValue(key, out var cached))
+    // The metadata passed to the Roslyn evaluator, addressed in the readers' own storage (the runtime's importer
+    // of a dynamic module is replaced as the module grows). When several loaded modules share an assembly identity
+    // (the same assembly in several AssemblyLoadContexts) only one per identity is kept so Roslyn binds types
+    // against a single instance - the module the evaluation binds against is preferred, as the tokens emitted
+    // into the evaluation assembly must match the instance the user is debugging
+    private ImmutableArray<MetadataBlock> GetMetadataBlocks(ModuleInfo preferredModule) {
+        if (metadataBlocksCache.TryGetValue(preferredModule, out var cached))
             return cached;
 
         var modules = GetModulesPreferring(preferredModule);
         var builder = ImmutableArray.CreateBuilder<MetadataBlock>(modules.Count);
         foreach (var moduleInfo in modules) {
-            var tables = moduleInfo.Module.GetMetaDataInterface<IMetaDataTables2>();
-            var (pointer, size) = tables.GetMetaDataStorage();
+            var (pointer, size) = moduleInfo.MetadataReader.GetMetadataStorage();
             var reader = moduleInfo.MetadataReader.PeMetadataReader;
             var module = reader.GetModuleDefinition();
             var generationId = module.GenerationId.IsNil ? Guid.Empty : reader.GetGuid(module.GenerationId);
-            builder.Add(new MetadataBlock(new ModuleId(moduleInfo.MetadataReader.Mvid, moduleInfo.Name), generationId, pointer, checked((int)size)));
+            builder.Add(new MetadataBlock(new ModuleId(moduleInfo.MetadataReader.Mvid, moduleInfo.Name), generationId, pointer, size));
         }
 
         var blocks = builder.ToImmutable();
-        metadataBlocksCache[key] = blocks;
+        metadataBlocksCache[preferredModule] = blocks;
         return blocks;
     }
-    private List<ModuleInfo> GetModulesPreferring(ICorDebugModule preferredModule) {
+    private List<ModuleInfo> GetModulesPreferring(ModuleInfo preferredModule) {
         var modulesByIdentity = new Dictionary<string, List<ModuleInfo>>(StringComparer.Ordinal);
         foreach (var moduleInfo in debugger.Modules) {
             var identity = GetAssemblyIdentity(moduleInfo);
@@ -146,7 +145,7 @@ internal class ExpressionCompiler {
 
         var result = new List<ModuleInfo>(modulesByIdentity.Count);
         foreach (var modules in modulesByIdentity.Values)
-            result.Add(modules.FirstOrDefault(it => it.Module == preferredModule) ?? modules[0]);
+            result.Add(modules.FirstOrDefault(it => it == preferredModule) ?? modules[0]);
         return result;
     }
     private static string GetAssemblyIdentity(ModuleInfo moduleInfo) {
@@ -160,9 +159,8 @@ internal class ExpressionCompiler {
         return $"{reader.GetString(assembly.Name)}|{assembly.Version}|{culture}|{publicKey}";
     }
 
-    private Microsoft.CodeAnalysis.CSharp.ExpressionEvaluator.EvaluationContext CreateMethodContext(ImmutableArray<MetadataBlock> blocks, ICorDebugILFrame frame) {
+    private static Microsoft.CodeAnalysis.CSharp.ExpressionEvaluator.EvaluationContext CreateMethodContext(ImmutableArray<MetadataBlock> blocks, ICorDebugILFrame frame, ModuleInfo moduleInfo) {
         var function = frame.GetFunction();
-        var moduleInfo = debugger.GetModule(function.GetModule());
         var moduleId = new ModuleId(moduleInfo.MetadataReader.Mvid, moduleInfo.Name);
         var compilation = blocks.ToCompilation(moduleId: default, MakeAssemblyReferencesKind.AllAssemblies).AddReferences(intrinsicMethodsReference);
         var methodToken = function.GetToken();
@@ -194,9 +192,8 @@ internal class ExpressionCompiler {
             hoistedLocals,
             debugInfo);
     }
-    private Microsoft.CodeAnalysis.CSharp.ExpressionEvaluator.EvaluationContext CreateTypeContext(ImmutableArray<MetadataBlock> blocks, ICorDebugValue rootValue) {
+    private static Microsoft.CodeAnalysis.CSharp.ExpressionEvaluator.EvaluationContext CreateTypeContext(ImmutableArray<MetadataBlock> blocks, ICorDebugValue rootValue, ModuleInfo moduleInfo) {
         var rootType = rootValue.GetExactType();
-        var moduleInfo = debugger.GetModule(rootType.GetClass().GetModule());
         var moduleId = new ModuleId(moduleInfo.MetadataReader.Mvid, moduleInfo.Name);
         var compilation = blocks.ToCompilation(moduleId: default, MakeAssemblyReferencesKind.AllAssemblies).AddReferences(intrinsicMethodsReference);
         var currentType = compilation.GetType(moduleId, rootType.GetClass().GetToken());

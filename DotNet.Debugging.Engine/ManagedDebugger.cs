@@ -28,7 +28,9 @@ public partial class ManagedDebugger {
     private readonly CorDebugManagedCallback callbacks;
     private readonly Channel<CorDebugManagedCallbackEventArgs> eventQueue;
     private readonly SemaphoreSlim syncLock;
-    private readonly Dictionary<CordbAddress, ModuleInfo> modules;
+    // Keyed by the runtime's module object: the COM wrappers are one per object for as long as they are held,
+    // which a base address is not a substitute for - a dynamic module has none
+    private readonly Dictionary<ICorDebugModule, ModuleInfo> modules;
     private readonly Dictionary<int, ICorDebugThread> threads;
     // Threads whose current exception was thrown in, or passed through, user code
     private readonly HashSet<int> exceptionThreads;
@@ -54,6 +56,7 @@ public partial class ManagedDebugger {
     private bool stopAtEntryPending;
     private bool isRemoteAttach;
     private int? mainThreadId;
+    private int nextModuleId;
 
     public bool JustMyCode { get; set; } = true;
     // A source file matched by name alone (PDBs built from a different location) must also match the PDB's content checksum
@@ -68,7 +71,7 @@ public partial class ManagedDebugger {
 
     internal FuncEvalRunner FuncEval { get; }
     internal IReadOnlyCollection<ModuleInfo> Modules => modules.Values;
-    // Incremented whenever a module is loaded, so everything derived from the module set can detect staleness
+    // Incremented whenever a module is loaded or its metadata changes, so everything derived from the module set can detect staleness
     internal int ModulesVersion { get; private set; }
     internal bool IsEvaluating => FuncEval.IsRunning;
 
@@ -93,7 +96,7 @@ public partial class ManagedDebugger {
         callbacks = new CorDebugManagedCallback();
         eventQueue = Channel.CreateUnbounded<CorDebugManagedCallbackEventArgs>(new UnboundedChannelOptions { SingleWriter = true });
         syncLock = new SemaphoreSlim(1, 1);
-        modules = new Dictionary<CordbAddress, ModuleInfo>();
+        modules = new Dictionary<ICorDebugModule, ModuleInfo>(ReferenceEqualityComparer.Instance);
         threads = new Dictionary<int, ICorDebugThread>();
         exceptionThreads = new HashSet<int>();
         exceptionStopKinds = new Dictionary<int, ExceptionStopKind>();
@@ -407,11 +410,12 @@ public partial class ManagedDebugger {
             throw new InvalidOperationException("The frame is not an IL frame");
         return frame;
     }
+    // A module is known once its metadata could be read, which is what everything asking for it needs
     internal ModuleInfo GetModule(ICorDebugModule module) {
-        return modules[module.GetBaseAddress()];
+        return FindModule(module) ?? throw new InvalidOperationException($"The metadata of the module '{module.GetName()}' is not available");
     }
     internal ModuleInfo? FindModule(ICorDebugModule module) {
-        return modules.GetValueOrDefault(module.GetBaseAddress());
+        return modules.GetValueOrDefault(module);
     }
     internal ICorDebugValue? GetCurrentException(int threadId) {
         var thread = threads.GetValueOrDefault(threadId);
@@ -488,6 +492,9 @@ public partial class ManagedDebugger {
                     break;
                 case LoadModuleCorDebugManagedCallbackEventArgs moduleLoaded:
                     HandleModuleLoaded(moduleLoaded);
+                    break;
+                case LoadClassCorDebugManagedCallbackEventArgs classLoaded:
+                    HandleClassLoaded(classLoaded);
                     break;
                 case BreakpointCorDebugManagedCallbackEventArgs breakpoint:
                     await HandleBreakpointAsync(breakpoint);
