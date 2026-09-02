@@ -91,9 +91,12 @@ public class AsyncSteppingCornerTests : BaseDebugTestFixture {
 
         Continue(threadId);
         var secondHit = WaitForStopped(StoppedEvent.ReasonValue.Breakpoint);
-        var secondFrame = StepOver(secondHit.ThreadId!.Value);
-        Assert.That(secondFrame.Line, Is.EqualTo(GetMarkerLine("marker:loopBody")));
-        Assert.That(Evaluate("i", secondHit.ThreadId!.Value).Result, Is.EqualTo("1"), "The second step happened in the second iteration");
+        // The continuation may resume on another pool thread than the one that hit the breakpoint, the
+        // evaluation has to run where the step stopped
+        Host.SendRequestSync(new NextRequest() { ThreadId = secondHit.ThreadId!.Value });
+        var secondStop = WaitForStopped(StoppedEvent.ReasonValue.Step);
+        Assert.That(GetTopStackFrame(secondStop.ThreadId!.Value).Line, Is.EqualTo(GetMarkerLine("marker:loopBody")));
+        Assert.That(Evaluate("i", secondStop.ThreadId!.Value).Result, Is.EqualTo("1"), "The second step happened in the second iteration");
     }
 
     // Two chained async step-outs: the inner method's task completes into the outer, the outer's into Main.
