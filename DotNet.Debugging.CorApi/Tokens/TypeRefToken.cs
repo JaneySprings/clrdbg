@@ -9,7 +9,7 @@ public readonly record struct TypeRefToken {
 
     public bool IsNil => Rid == 0;
 
-    public static readonly TypeRefToken Nil = new TypeRefToken(16777216u);
+    public static readonly TypeRefToken Nil = new TypeRefToken(0x01000000u);
 
     public TypeRefToken(uint value) {
         Value = value;

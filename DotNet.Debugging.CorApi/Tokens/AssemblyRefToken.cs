@@ -9,7 +9,7 @@ public readonly record struct AssemblyRefToken {
 
     public bool IsNil => Rid == 0;
 
-    public static readonly AssemblyRefToken Nil = new AssemblyRefToken(587202560u);
+    public static readonly AssemblyRefToken Nil = new AssemblyRefToken(0x23000000u);
 
     public AssemblyRefToken(uint value) {
         Value = value;

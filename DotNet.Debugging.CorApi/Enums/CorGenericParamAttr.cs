@@ -2,14 +2,14 @@ namespace DotNet.Debugging.CorApi;
 
 // https://learn.microsoft.com/dotnet/core/unmanaged-api/metadata/enumerations/corgenericparamattr-enumeration
 public enum CorGenericParamAttr {
-    gpVarianceMask = 3,
-    gpNonVariant = 0,
-    gpCovariant = 1,
-    gpContravariant = 2,
-    gpSpecialConstraintMask = 60,
+    gpVarianceMask = 0x0003,
+    gpNonVariant = 0x0000,
+    gpCovariant = 0x0001,
+    gpContravariant = 0x0002,
+    gpSpecialConstraintMask = 0x003C,
     gpNoSpecialConstraint = gpNonVariant,
-    gpReferenceTypeConstraint = 4,
-    gpNotNullableValueTypeConstraint = 8,
-    gpDefaultConstructorConstraint = 16,
-    gpAllowByRefLike = 32
+    gpReferenceTypeConstraint = 0x0004,
+    gpNotNullableValueTypeConstraint = 0x0008,
+    gpDefaultConstructorConstraint = 0x0010,
+    gpAllowByRefLike = 0x0020
 }

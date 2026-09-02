@@ -115,7 +115,7 @@ and why the engine treats several HRESULTs as normal control flow rather than er
 
 - **Threads and frames**: enumerate threads on the process; a stopped thread exposes
   chains (`ICorDebugChain`, managed/unmanaged) and frames. `ICorDebugILFrame` gives IL
-  frames with `EnumerateLocalVariables()`/`EnumerateArguments()` and the current IL
+  frames with `GetLocalVariables()`/`GetArguments()` and the current IL
   offset via `GetIP`; `ICorDebugILFrame4` (via cast) adds locals that only exist in
   optimized code re-materialized by the runtime.
 - **Values**: everything is an `ICorDebugValue`, refined by cast to
@@ -127,7 +127,7 @@ and why the engine treats several HRESULTs as normal control flow rather than er
   read and write the primitive payload directly.
 - **Types**: `ICorDebugValue2.GetExactType()` yields `ICorDebugType` — the exact
   instantiated type (element type, class, generic arguments via
-  `EnumerateTypeParameters()`); `ICorDebugClass`/`ICorDebugClass2` represent the open
+  `GetTypeParameters()`); `ICorDebugClass`/`ICorDebugClass2` represent the open
   type in its module, including `GetParameterizedType` to construct instantiations and
   static field access with `GetStaticFieldValue`.
 - **The GC heap**: `ICorDebugProcess5` (cast from the process) exposes
@@ -140,11 +140,14 @@ and why the engine treats several HRESULTs as normal control flow rather than er
 
 Runtime objects answer "what is where", but names, signatures, and tokens come from
 **metadata**. `ICorDebugModule.GetMetaDataInterface<IMetaDataImport>()` hands out the
-metadata reader for a module (works for on-disk and in-memory/dynamic modules alike):
+metadata reader for a module (works for on-disk and in-memory/dynamic modules alike).
+The extension keeps the importer it obtained per module, as the native call hands out a
+new wrapper every time; `ResetMetaDataInterfaces()` forgets it when the runtime rebuilds a
+dynamic module's metadata:
 
 - enumeration uses the native cursor pattern — `ref HCorEnum` handle plus
-  `EnumTypeDefs`/`EnumMethods`/`EnumFields`/… — surfaced through
-  `IEnumerable<TypeDefToken>`-style extension adapters;
+  `EnumFields`/`EnumProperties`/`EnumMethodsWithName`/… — surfaced through
+  `IEnumerable<FieldDefToken>`-style extension adapters, one token per call;
 - `GetTypeDefProps`, `GetMethodProps`, `GetFieldProps`, `GetPropertyProps`,
   `GetMemberRefProps`, `GetTypeSpecFromToken`, … return names, attribute flags
   (`CorTypeAttr`, `CorMethodAttr`, `CorFieldAttr`), and raw signature blobs

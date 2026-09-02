@@ -9,7 +9,7 @@ public readonly record struct PermissionToken {
 
     public bool IsNil => Rid == 0;
 
-    public static readonly PermissionToken Nil = new PermissionToken(234881024u);
+    public static readonly PermissionToken Nil = new PermissionToken(0x0e000000u);
 
     public PermissionToken(uint value) {
         Value = value;

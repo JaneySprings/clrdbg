@@ -22,13 +22,15 @@ internal static class VariableWriter {
         if (genericValue == null)
             throw new InvalidOperationException("Only primitive values are supported");
 
-        var bytes = Parse(genericValue.GetElementType(), expression);
-        if (bytes.Length != genericValue.GetSize())
+        var size = genericValue.GetSize();
+        var bytes = Parse(genericValue.GetElementType(), size, expression);
+        if (bytes.Length != size)
             throw new InvalidOperationException($"Value size mismatch for type '{genericValue.GetElementType()}'");
         genericValue.SetValueFromBytes(bytes);
     }
 
-    private static byte[] Parse(CorElementType elementType, string text) {
+    // 'size' is the debuggee's size of the value: a native integer is as wide as the debuggee, not the debugger
+    private static byte[] Parse(CorElementType elementType, int size, string text) {
         var culture = CultureInfo.InvariantCulture;
         try {
             return elementType switch {
@@ -44,8 +46,8 @@ internal static class VariableWriter {
                 CorElementType.U8 => BitConverter.GetBytes(ulong.Parse(text, culture)),
                 CorElementType.R4 => BitConverter.GetBytes(float.Parse(text, culture)),
                 CorElementType.R8 => BitConverter.GetBytes(double.Parse(text, culture)),
-                CorElementType.I => IntPtr.Size == 4 ? BitConverter.GetBytes(int.Parse(text, culture)) : BitConverter.GetBytes(long.Parse(text, culture)),
-                CorElementType.U => IntPtr.Size == 4 ? BitConverter.GetBytes(uint.Parse(text, culture)) : BitConverter.GetBytes(ulong.Parse(text, culture)),
+                CorElementType.I => size == 4 ? BitConverter.GetBytes(int.Parse(text, culture)) : BitConverter.GetBytes(long.Parse(text, culture)),
+                CorElementType.U => size == 4 ? BitConverter.GetBytes(uint.Parse(text, culture)) : BitConverter.GetBytes(ulong.Parse(text, culture)),
                 _ => throw new InvalidOperationException($"Setting values of type '{elementType}' is not supported")
             };
         }

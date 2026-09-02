@@ -9,7 +9,7 @@ public readonly record struct TypeDefToken {
 
     public bool IsNil => Rid == 0;
 
-    public static readonly TypeDefToken Nil = new TypeDefToken(33554432u);
+    public static readonly TypeDefToken Nil = new TypeDefToken(0x02000000u);
 
     public TypeDefToken(uint value) {
         Value = value;

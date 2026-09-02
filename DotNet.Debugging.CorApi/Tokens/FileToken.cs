@@ -9,7 +9,7 @@ public readonly record struct FileToken {
 
     public bool IsNil => Rid == 0;
 
-    public static readonly FileToken Nil = new FileToken(637534208u);
+    public static readonly FileToken Nil = new FileToken(0x26000000u);
 
     public FileToken(uint value) {
         Value = value;

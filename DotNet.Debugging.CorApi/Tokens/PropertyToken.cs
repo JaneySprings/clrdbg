@@ -9,7 +9,7 @@ public readonly record struct PropertyToken {
 
     public bool IsNil => Rid == 0;
 
-    public static readonly PropertyToken Nil = new PropertyToken(385875968u);
+    public static readonly PropertyToken Nil = new PropertyToken(0x17000000u);
 
     public PropertyToken(uint value) {
         Value = value;

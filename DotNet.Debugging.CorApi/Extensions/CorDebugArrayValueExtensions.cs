@@ -14,8 +14,8 @@ public static class CorDebugArrayValueExtensions {
         return checked((int)pnCount);
     }
 
-    public static ICorDebugValue GetElement(this ICorDebugArrayValue instance, int cdim, uint[] indices) {
-        Marshal.ThrowExceptionForHR(instance.TryGetElement(checked((uint)cdim), indices, out var ppValue));
+    public static ICorDebugValue GetElement(this ICorDebugArrayValue instance, uint[] indices) {
+        Marshal.ThrowExceptionForHR(instance.TryGetElement((uint)indices.Length, indices, out var ppValue));
         return ppValue;
     }
 
@@ -38,9 +38,5 @@ public static class CorDebugArrayValueExtensions {
         var array = new uint[cdim];
         Marshal.ThrowExceptionForHR(instance.TryGetBaseIndicies(checked((uint)cdim), array));
         return array;
-    }
-
-    public static void GetDimensions(this ICorDebugArrayValue instance, int cdim, uint[] dims) {
-        Marshal.ThrowExceptionForHR(instance.TryGetDimensions(checked((uint)cdim), dims));
     }
 }

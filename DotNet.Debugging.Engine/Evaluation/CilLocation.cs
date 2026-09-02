@@ -10,6 +10,18 @@ internal interface ICilLocation {
     void Write(CilValue value);
 }
 
+// A frame slot the runtime cannot read at the current instruction, the variable was optimized away
+internal class UnavailableLocation : ICilLocation {
+    public const string Message = "Cannot obtain value of the local variable or argument because it is not available at this instruction pointer, possibly because it has been optimized away.";
+
+    public CilValue Read() {
+        throw new EvaluationException(Message);
+    }
+    public void Write(CilValue value) {
+        throw new EvaluationException(Message);
+    }
+}
+
 internal class CorDebugLocation : ICilLocation {
     public ICorDebugValue Value { get; }
 
@@ -17,8 +29,12 @@ internal class CorDebugLocation : ICilLocation {
         Value = value;
     }
 
+    // A by-reference slot (a 'ref' parameter or local, the 'this' of a struct method) holds the address of a
+    // variable: the IL reads and writes it through ldind/stind/ldobj, so the slot yields the location it points to
     public CilValue Read() {
-        return CilValue.FromCorValue(GetStorageValue());
+        if (Value is ICorDebugReferenceValue byRef && byRef.GetElementType() == CorElementType.BYREF)
+            return CilValue.FromLocation(new CorDebugLocation(byRef.Dereference()));
+        return CilValue.FromCorValue(Value);
     }
     public void Write(CilValue source) {
         var storage = GetStorageValue();
@@ -34,10 +50,7 @@ internal class CorDebugLocation : ICilLocation {
                 return;
             }
             if (source.Value != null) {
-                var data = destinationGeneric.GetElementType() == CorElementType.VALUETYPE
-                    ? CilValueEncoding.GetBytes(source.Value, destinationGeneric.GetSize())
-                    : CilValueEncoding.GetBytes(source.Value, destinationGeneric.GetElementType());
-                destinationGeneric.SetValueFromBytes(data);
+                destinationGeneric.SetValueFromBytes(CilValueEncoding.GetBytes(source.Value, destinationGeneric.GetElementType(), destinationGeneric.GetSize()));
                 return;
             }
             if (source.IsNull) {
@@ -120,31 +133,59 @@ internal class SyntheticVariableLocation : ICilLocation {
     }
 }
 
+// Encodes the interpreter's host values into the bytes of a debuggee value. Integers wrap the way CIL does: an
+// unsigned slot is held as its signed twin on the stack ('uint.MaxValue' is the int -1), so the bits are
+// reinterpreted rather than range checked, and a comparison result (an int) stores into a bool
 internal static class CilValueEncoding {
     public static byte[] GetBytes(object value, int size) {
+        var bits = GetIntegerBits(value);
         return size switch {
-            1 => [unchecked((byte)Convert.ToInt64(value))],
-            2 => BitConverter.GetBytes(unchecked((short)Convert.ToInt64(value))),
-            4 => BitConverter.GetBytes(unchecked((int)Convert.ToInt64(value))),
-            8 => BitConverter.GetBytes(Convert.ToInt64(value)),
+            1 => [unchecked((byte)bits)],
+            2 => BitConverter.GetBytes(unchecked((short)bits)),
+            4 => BitConverter.GetBytes(unchecked((int)bits)),
+            8 => BitConverter.GetBytes(bits),
             _ => throw new NotSupportedException($"Cannot encode a primitive CIL value into a {size}-byte value type")
         };
     }
-    public static byte[] GetBytes(object value, CorElementType targetType) {
+    // 'size' is the debuggee's size of the value, which for a native integer depends on the debuggee, not the debugger
+    public static byte[] GetBytes(object value, CorElementType targetType, int size) {
         return targetType switch {
-            CorElementType.BOOLEAN => [(bool)value ? (byte)1 : (byte)0],
-            CorElementType.CHAR => BitConverter.GetBytes(Convert.ToChar(value)),
-            CorElementType.I1 => [unchecked((byte)Convert.ToSByte(value))],
-            CorElementType.U1 => [Convert.ToByte(value)],
-            CorElementType.I2 => BitConverter.GetBytes(Convert.ToInt16(value)),
-            CorElementType.U2 => BitConverter.GetBytes(Convert.ToUInt16(value)),
-            CorElementType.I4 => BitConverter.GetBytes(Convert.ToInt32(value)),
-            CorElementType.U4 => BitConverter.GetBytes(Convert.ToUInt32(value)),
-            CorElementType.I8 => BitConverter.GetBytes(Convert.ToInt64(value)),
-            CorElementType.U8 => BitConverter.GetBytes(Convert.ToUInt64(value)),
+            CorElementType.BOOLEAN => [GetIntegerBits(value) != 0 ? (byte)1 : (byte)0],
             CorElementType.R4 => BitConverter.GetBytes(Convert.ToSingle(value)),
             CorElementType.R8 => BitConverter.GetBytes(Convert.ToDouble(value)),
+            CorElementType.CHAR or CorElementType.I1 or CorElementType.U1 or CorElementType.I2 or CorElementType.U2
+                or CorElementType.I4 or CorElementType.U4 or CorElementType.I8 or CorElementType.U8
+                or CorElementType.I or CorElementType.U or CorElementType.VALUETYPE => GetBytes(value, size),
             _ => throw new NotSupportedException($"Cannot encode a primitive CIL value as '{targetType}'")
+        };
+    }
+    public static byte[] GetBytes(object value, CorElementType targetType) {
+        return GetBytes(value, targetType, GetSize(targetType));
+    }
+    public static int GetSize(CorElementType elementType) {
+        return elementType switch {
+            CorElementType.BOOLEAN or CorElementType.I1 or CorElementType.U1 => 1,
+            CorElementType.CHAR or CorElementType.I2 or CorElementType.U2 => 2,
+            CorElementType.I4 or CorElementType.U4 or CorElementType.R4 => 4,
+            CorElementType.I8 or CorElementType.U8 or CorElementType.R8 => 8,
+            _ => throw new NotSupportedException($"The size of a '{elementType}' value is not fixed")
+        };
+    }
+    private static long GetIntegerBits(object value) {
+        return value switch {
+            bool it => it ? 1 : 0,
+            char it => it,
+            sbyte it => it,
+            byte it => it,
+            short it => it,
+            ushort it => it,
+            int it => it,
+            uint it => it,
+            long it => it,
+            ulong it => unchecked((long)it),
+            float it => unchecked((long)it),
+            double it => unchecked((long)it),
+            _ => throw new NotSupportedException($"A '{value.GetType().Name}' value cannot be encoded as an integer")
         };
     }
 }

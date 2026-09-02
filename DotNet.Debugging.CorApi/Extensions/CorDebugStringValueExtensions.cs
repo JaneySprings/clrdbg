@@ -3,24 +3,15 @@ using System.Runtime.InteropServices;
 namespace DotNet.Debugging.CorApi.Extensions;
 
 public static class CorDebugStringValueExtensions {
+    // The runtime copies at most the buffer's size and reports the string's length without a terminator, so a
+    // buffer of exactly that length receives the whole string - including a '\0' the string itself ends with
     public static string GetString(this ICorDebugStringValue instance) {
-        var num = instance.GetLength();
-        if (num == 0) {
+        var length = instance.GetLength();
+        if (length == 0)
             return string.Empty;
-        }
-        var array = new char[num];
-        int num2;
-        checked {
-            Marshal.ThrowExceptionForHR(instance.TryGetString((uint)num, out var pcchString, array));
-            if (pcchString > num) {
-                throw new InvalidOperationException("Native buffer size exceeded the reported capacity.");
-            }
-            num2 = (int)pcchString;
-        }
-        if (num2 > 0 && array[num2 - 1] == '\0') {
-            num2--;
-        }
-        return new string(array, 0, num2);
+        var buffer = new char[length];
+        Marshal.ThrowExceptionForHR(instance.TryGetString((uint)length, out var copied, buffer));
+        return new string(buffer, 0, Math.Min(length, checked((int)copied)));
     }
 
     public static int GetLength(this ICorDebugStringValue instance) {

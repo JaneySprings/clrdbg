@@ -9,7 +9,7 @@ read, write, allocation and call.
 "items.Count * 2"
    │  ExpressionCompiler (Roslyn ExpressionCompiler against the loaded modules' metadata)
    ▼
-CompiledExpression: in-memory PE with <>x.<>m0(...)  ── cached per (frame, IL offset, expression)
+CompiledExpression: in-memory PE with <>x.<>m0(...)  ── cached per (method, IL reuse span, expression)
    │  CilInterpreter  (+ EvaluationMetadataResolver for tokens, FuncEvalRunner for the debuggee)
    ▼
 ICorDebugValue  ── wrapped in an EvaluationResult that owns the handle keeping it alive
@@ -45,9 +45,11 @@ intrinsics it emits calls to for synthetic variables and aliases — which the e
 startup into a small in-memory assembly (`CreateIntrinsicMethodsAssembly`).
 
 Compilation errors come back as the diagnostic messages joined with `; `. Results are cached in an
-LRU of 256 entries keyed by context kind, module, method token, IL offset, whether an exception is
-present and the text; the cache and the metadata blocks are dropped whenever a module loads
-(`ManagedDebugger.ModulesVersion`).
+LRU of 256 entries keyed by context kind, module, method token, whether an exception is present and
+the text; a method-context entry also records the `MethodContextReuseConstraints` Roslyn computed
+(the IL span in which the same locals are in scope) and serves every IL offset inside it, so stepping
+through a scope does not recompile the watches. The cache and the metadata blocks are dropped
+whenever a module loads (`ManagedDebugger.ModulesVersion`).
 
 ## Executing: `CilInterpreter`
 
@@ -59,7 +61,7 @@ from `System.Reflection.Emit.OpCodes`, operands and branch targets resolved to i
 |---|---|
 | `Value` — a host primitive, string or `ResolvedCilType` | Constants, arithmetic results, `ldtoken`, interpolated-string builders. |
 | `CorValue` — a debuggee `ICorDebugValue` | Everything read from the debuggee; reference values are pinned with strong handles (`EvaluationHandleScope.Root`) so they survive later func evals. |
-| `Location` — an `ICilLocation` | Addresses: a debuggee slot (`CorDebugLocation`: local, argument, field, element, by-ref), a host temporary (`TemporaryLocation`) or a synthetic variable (`SyntheticVariableLocation`, a one-element array allocated in the debuggee). |
+| `Location` — an `ICilLocation` | Addresses: a debuggee slot (`CorDebugLocation`: local, argument, field, element), a host temporary (`TemporaryLocation`), a synthetic variable (`SyntheticVariableLocation`, a one-element array allocated in the debuggee) or a slot the runtime cannot read at this instruction (`UnavailableLocation`, optimized away - reading it fails with vsdbg's message). A by-reference slot (a `ref` parameter or local, the `this` of a struct method) reads as the location it points to, which the IL then dereferences with `ldind`/`ldobj`. |
 
 The method's arguments are the frame's arguments (or the root object), its first locals are the
 frame's locals — so `x = 5` in the evaluate window writes the real local — and the remaining slots
@@ -70,12 +72,12 @@ method's by the type's arity, for `!0`/`!!0` resolution.
 |---|---|
 | `ldc.*`, `ldnull`, `ldstr`, `ldtoken` | Host constants (`ldtoken` pushes the resolved type). |
 | `ldarg*`, `ldloc*`, `starg`, `stloc`, `ldarga`, `ldloca` | Read/write through the locations; `ld*` of references roots them. |
-| `add … shr.un`, `neg`, `not`, `ceq … clt.un`, `conv.*` | On the host, with int32/int64/float promotion, overflow-checked and unsigned variants, NaN-aware comparisons; enum and small struct values read as integers. |
+| `add … shr.un`, `neg`, `not`, `ceq … clt.un`, `conv.*` | On the host, with int32/int64/float promotion, overflow-checked and unsigned variants, NaN-aware comparisons; enum and small struct values read as integers (an enum through its `value__` field, so the underlying type's sign holds). Host values are written back with wrapping bit reinterpretation (`CilValueEncoding`): an unsigned slot holds its signed twin on the stack, a comparison result stores into a `bool`, and a native integer takes the debuggee's pointer size. |
 | `br*`, `beq … ble.un`, `switch` | Branches by instruction index. |
 | `ldind/stind/ldobj/stobj/cpobj/initobj` | Through locations; `initobj` creates a default value (zero, null, or a debuggee struct instance). |
 | `newarr`, `ldlen`, `ldelem*`, `stelem*`, `ldelema` | `NewParameterizedArray` for primitive and reference element types; `Array.CreateInstance(Type, int)` in the debuggee for other structs (`DateTime[]`), as `ICorDebugEval` cannot allocate those. |
 | `isinst`, `castclass` | `Type.GetType(assemblyQualifiedName)` + `Type.IsInstanceOfType(value)` evaluated in the debuggee. |
-| `box`, `unbox`, `unbox.any` | Boxes are allocated with `NewParameterizedObjectNoConstructor` and filled byte-wise; unboxing checks the exact type. |
+| `box`, `unbox`, `unbox.any` | Boxes are allocated with `NewParameterizedObjectNoConstructor` and filled byte-wise; unboxing checks the exact class (the object of a boxed primitive is a VALUETYPE of `System.Int32` and friends). `unbox.any Nullable<T>` builds the nullable: an empty one for null, one holding the boxed `T` otherwise. |
 | `ldfld/ldflda/stfld`, `ldsfld/ldsflda/stsfld` | `GetFieldValue`, `GetStaticFieldValueAsync` (runs the static constructor on demand). |
 | `newobj` | `NewParameterizedObject` with the constructor's declaring-type arguments. |
 | `call`, `callvirt` (+ `constrained.`) | See below. |
@@ -98,7 +100,8 @@ and opcode as well.
   debuggee (dispatched virtually by the func eval; unlike `String.Concat(object)` it survives a trimmed
   core library), host values with `IFormattable`;
 - a runtime method: the arguments are *materialized* into debuggee values (strings created with
-  `NewString`, primitives with `CreateValue`, by-ref arguments passed as their debuggee slot or a
+  `NewString`, primitives with `CreateValue` - except `nint`/`nuint`, which `ICorDebugEval` cannot
+  create and which are built as the `IntPtr` struct instead -, by-ref arguments passed as their debuggee slot or a
   temporary copied back afterwards), the receiver boxed when it is a value type (honouring
   `constrained.`), the declaring type's arguments taken from the receiver's exact type, and
   `FuncEvalRunner.CallFunctionAsync` runs it with `throwOnException`. A by-ref return becomes a

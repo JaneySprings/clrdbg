@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using DotNet.Debugging.CorApi;
 using DotNet.Debugging.CorApi.Extensions;
 using DotNet.Debugging.Engine.Metadata;
@@ -11,15 +10,6 @@ internal static class MetadataImportExtensions {
     }
     public static bool IsLiteral(this FieldDefToken fieldDef, IMetaDataImport metadataImport) {
         return metadataImport.GetFieldProps(fieldDef).pdwAttr.IsFdLiteral();
-    }
-    public static bool IsStatic(this PropertyToken property, IMetaDataImport metadataImport) {
-        var getter = metadataImport.GetPropertyProps(property).pmdGetter;
-        return !getter.IsNil && metadataImport.GetMethodProps(getter).pdwAttr.IsMdStatic();
-    }
-    // An indexer getter requires arguments, so the property cannot be evaluated as a member
-    public static bool IsIndexer(this PropertyToken property, IMetaDataImport metadataImport) {
-        var getter = metadataImport.GetPropertyProps(property).pmdGetter;
-        return !getter.IsNil && Marshal.ReadByte(metadataImport.GetMethodProps(getter).ppvSigBlob, 1) != 0;
     }
 
     // A method the stepper must not stop in: [DebuggerStepThrough] or [DebuggerHidden] on the method or its
@@ -35,7 +25,7 @@ internal static class MetadataImportExtensions {
         var methodProps = metadataImport.GetMethodProps(methodToken);
         if (!methodProps.pdwAttr.IsMdSpecialName())
             return false;
-        return methodProps.szMethod.StartsWith("get_") || methodProps.szMethod.StartsWith("set_") || methodProps.szMethod.StartsWith("op_");
+        return methodProps.szMethod.StartsWith("get_", StringComparison.Ordinal) || methodProps.szMethod.StartsWith("set_", StringComparison.Ordinal) || methodProps.szMethod.StartsWith("op_", StringComparison.Ordinal);
     }
 
     public static bool HasAttribute(this IMetaDataImport metadataImport, MetadataToken token, string attributeName) {

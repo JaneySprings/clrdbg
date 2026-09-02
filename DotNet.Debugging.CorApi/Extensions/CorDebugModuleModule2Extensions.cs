@@ -10,7 +10,7 @@ public static class CorDebugModuleModule2Extensions {
         return pdwFlags;
     }
 
-    public static void SetJMCStatus(this ICorDebugModule instance, bool bIsJustMyCode, int cTokens, MetadataToken[] pTokens) {
-        instance.GetModule2().SetJMCStatus(bIsJustMyCode, cTokens, pTokens);
+    public static void SetJMCStatus(this ICorDebugModule instance, bool bIsJustMyCode, MetadataToken[] pTokens) {
+        instance.GetModule2().SetJMCStatus(bIsJustMyCode, pTokens);
     }
 }

@@ -171,17 +171,27 @@ internal sealed class ModuleMetadataReader : IDisposable {
             return null;
 
         var debugInformation = reader.GetMethodDebugInformation(MetadataTokens.MethodDefinitionHandle(methodToken));
-        var point = debugInformation.GetSequencePoints().FirstOrDefault(it => !it.IsHidden);
-        var document = point.Document.IsNil ? debugInformation.Document : point.Document;
-        if (document.IsNil)
+        if (debugInformation.SequencePointsBlob.IsNil)
             return null;
-        return new ResolvedBreakpoint(methodToken, point.Offset, CreateLocation(reader, document, point), isExactMatch: true);
+        // The first sequence point with source; a method that has none (only hidden ones) offers no entry to stop at
+        foreach (var point in debugInformation.GetSequencePoints()) {
+            if (point.IsHidden)
+                continue;
+            var document = point.Document.IsNil ? debugInformation.Document : point.Document;
+            if (document.IsNil)
+                return null;
+            return new ResolvedBreakpoint(methodToken, point.Offset, CreateLocation(reader, document, point), isExactMatch: true);
+        }
+        return null;
     }
 
-    public string? GetLocalVariableName(int methodToken, int localIndex, int ilOffset) {
+    // The names of the locals in scope at 'ilOffset' by slot index; a slot without a name (a compiler temporary, a
+    // hidden local) is absent
+    public Dictionary<int, string> GetLocalVariableNames(int methodToken, int ilOffset) {
+        var names = new Dictionary<int, string>();
         var reader = PdbMetadataReader;
         if (reader == null)
-            return null;
+            return names;
 
         foreach (var scopeHandle in reader.GetLocalScopes(MetadataTokens.MethodDefinitionHandle(methodToken))) {
             var scope = reader.GetLocalScope(scopeHandle);
@@ -190,14 +200,12 @@ internal sealed class ModuleMetadataReader : IDisposable {
 
             foreach (var variableHandle in scope.GetLocalVariables()) {
                 var variable = reader.GetLocalVariable(variableHandle);
-                if (variable.Index != localIndex)
-                    continue;
                 if (variable.Attributes == LocalVariableAttributes.DebuggerHidden || variable.Name.IsNil)
-                    return null;
-                return reader.GetString(variable.Name);
+                    continue;
+                names.TryAdd(variable.Index, reader.GetString(variable.Name));
             }
         }
-        return null;
+        return names;
     }
     // The IL range of the statement containing 'ilOffset': its sequence point up to the next one.
     // 'endOffset' equals 'startOffset' when the statement is the last one of the method

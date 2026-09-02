@@ -9,7 +9,7 @@ public readonly record struct ManifestResourceToken {
 
     public bool IsNil => Rid == 0;
 
-    public static readonly ManifestResourceToken Nil = new ManifestResourceToken(671088640u);
+    public static readonly ManifestResourceToken Nil = new ManifestResourceToken(0x28000000u);
 
     public ManifestResourceToken(uint value) {
         Value = value;

@@ -8,11 +8,6 @@ public static class CorDebugFrameExtensions {
         return ppStepper;
     }
 
-    public static ICorDebugFrame GetCaller(this ICorDebugFrame instance) {
-        Marshal.ThrowExceptionForHR(instance.TryGetCaller(out var ppFrame));
-        return ppFrame;
-    }
-
     public static ICorDebugChain GetChain(this ICorDebugFrame instance) {
         Marshal.ThrowExceptionForHR(instance.TryGetChain(out var ppChain));
         return ppChain;

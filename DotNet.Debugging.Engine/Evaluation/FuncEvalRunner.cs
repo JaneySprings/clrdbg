@@ -20,22 +20,22 @@ internal class FuncEvalRunner {
     // 'arguments' must hold the original reference values for instance methods ('this' is not dereferenced)
     public Task<ICorDebugValue?> CallFunctionAsync(ICorDebugEval eval, ICorDebugFunction function, ICorDebugType[] typeArguments, ICorDebugValue[] arguments, bool throwOnException = false) {
         return RunAsync(eval, throwOnException,
-            () => eval.CallParameterizedFunction(function, typeArguments.Length, NullIfEmpty(typeArguments), arguments.Length, arguments),
+            () => eval.CallParameterizedFunction(function, NullIfEmpty(typeArguments), arguments),
             GetFunctionResult);
     }
     public Task<ICorDebugValue?> NewObjectAsync(ICorDebugEval eval, ICorDebugFunction constructor, ICorDebugType[] typeArguments, ICorDebugValue[] arguments, bool throwOnException = false) {
         return RunAsync(eval, throwOnException,
-            () => eval.NewParameterizedObject(constructor, typeArguments.Length, NullIfEmpty(typeArguments), arguments.Length, arguments),
+            () => eval.NewParameterizedObject(constructor, NullIfEmpty(typeArguments), arguments),
             it => it.GetResult());
     }
     public Task<ICorDebugValue?> NewObjectNoConstructorAsync(ICorDebugEval eval, ICorDebugClass corClass, ICorDebugType[] typeArguments, bool throwOnException = false) {
         return RunAsync(eval, throwOnException,
-            () => eval.NewParameterizedObjectNoConstructor(corClass, typeArguments.Length, NullIfEmpty(typeArguments)),
+            () => eval.NewParameterizedObjectNoConstructor(corClass, NullIfEmpty(typeArguments)),
             it => it.GetResult());
     }
     public Task<ICorDebugValue?> NewArrayAsync(ICorDebugEval eval, ICorDebugType elementType, uint length, bool throwOnException = false) {
         return RunAsync(eval, throwOnException,
-            () => eval.NewParameterizedArray(elementType, 1, [length], [0]),
+            () => eval.NewParameterizedArray(elementType, [length], [0]),
             it => it.GetResult());
     }
     public async Task<ICorDebugValue> NewStringAsync(ICorDebugEval eval, string text, bool throwOnException = false) {
@@ -43,15 +43,17 @@ internal class FuncEvalRunner {
         return result ?? throw new EvaluationException("The string could not be created in the debuggee");
     }
 
-    // Reads a static field, running the type's static constructor when it has not run yet
-    public async Task<ICorDebugValue> GetStaticFieldValueAsync(ICorDebugType type, FieldDefToken fieldDef, ICorDebugILFrame frame) {
+    // Reads a static field, running the type's static constructor when it has not run yet. The frame (needed for
+    // thread statics) is obtained through 'getFrame', as the constructor run neuters the one read first
+    public async Task<ICorDebugValue> GetStaticFieldValueAsync(ICorDebugType type, FieldDefToken fieldDef, Func<ICorDebugILFrame> getFrame) {
+        var frame = getFrame();
         var result = type.TryGetStaticFieldValue(fieldDef, frame, out var value);
         if (result == Cor.CORDBG_E_STATIC_VAR_NOT_AVAILABLE || result == Cor.CORDBG_E_CLASS_NOT_LOADED || result == Cor.E_FAIL) {
             var eval = frame.GetChain().GetThread().CreateEval();
             var instance = await NewObjectNoConstructorAsync(eval, type.GetClass(), type.GetTypeParameters());
             if (instance is ICorDebugHandleValue handle)
                 handle.TryDispose();
-            result = type.TryGetStaticFieldValue(fieldDef, frame, out value);
+            result = type.TryGetStaticFieldValue(fieldDef, getFrame(), out value);
         }
         Marshal.ThrowExceptionForHR(result);
         return value;

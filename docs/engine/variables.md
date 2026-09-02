@@ -18,6 +18,8 @@ stores a `VariableReference`: the thread and frame depth, the `ICorDebugValue`, 
 | `StaticMembers` | The `Static members` group of a value. |
 | `NonPublicMembers` | The `Non-Public members` group of a value. |
 | `NonPublicStaticMembers` | The `Non-Public members` group inside `Static members`. |
+| `RawMembers` | The value's own members under the `Raw View` group of a `DebuggerTypeProxy` expansion. |
+| `ResultsView` | The `Results View` node of an `IEnumerable` value, enumerated in the debuggee when expanded. |
 
 Frames are likewise handles: `FrameReferenceManager` maps an id to (thread, depth), and every use
 re-walks the thread's chains (`ManagedDebugger.GetFrame`), because `ICorDebugFrame` objects are
@@ -43,7 +45,7 @@ share one).
 3. **Hoisted locals** — the fields of the closure/state machine and of every enclosing closure,
    shown under their original names (`<count>5__1` → `count`); other generated fields are hidden.
 4. **IL locals**, named through the PDB local scopes that contain the current IL offset
-   (`ModuleMetadataReader.GetLocalVariableName`); slots without a name (compiler temporaries,
+   (`ModuleMetadataReader.GetLocalVariableNames`); slots without a name (compiler temporaries,
    `DebuggerHidden`) are skipped.
 
 Arguments and locals get `EvaluateName` equal to their name, so a client can re-evaluate or watch
@@ -72,8 +74,12 @@ placeholder over the remote (mobile) transport:
 - **`DebuggerTypeProxy`**: the proxy is instantiated in the debuggee (`.ctor(value)`, the
   first constructor found by name) and its public members are listed instead of the value's, which
   remain reachable through a `Raw View` group.
-- **Arrays** list `[i]` elements (single-dimensional only; elements are fetched before any formatting,
-  as the array value can be neutered by a func eval); an empty array has no children.
+- **Arrays** list `[i]` elements, `[i, j]` for a multidimensional array (the logical indices, honouring
+  non-zero lower bounds); elements are re-read from the source value when their page is requested, as a
+  dereferenced array value is neutered by any func eval; an empty array has no children.
+- **Members are read once per type.** Listing a type's members reads the metadata of each field and
+  property getter a single time; the static, literal and visibility decisions and the func-eval of a
+  getter are taken from that copy when the page holding the member is materialized.
 - Members are sorted ordinally, groups last (`Static members`, `Non-Public members`, `Raw View`);
   a member that cannot be read becomes an error entry (`IsError`, the message as the value).
 

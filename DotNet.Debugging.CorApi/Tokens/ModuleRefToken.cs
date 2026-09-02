@@ -9,7 +9,7 @@ public readonly record struct ModuleRefToken {
 
     public bool IsNil => Rid == 0;
 
-    public static readonly ModuleRefToken Nil = new ModuleRefToken(436207616u);
+    public static readonly ModuleRefToken Nil = new ModuleRefToken(0x1a000000u);
 
     public ModuleRefToken(uint value) {
         Value = value;

@@ -28,7 +28,7 @@ public static class CorDebugStepperExtensions {
         Marshal.ThrowExceptionForHR(instance.TryStepOut());
     }
 
-    public static void StepRange(this ICorDebugStepper instance, bool bStepIn, CorDebugStepRange[] ranges, int cRangeCount) {
-        Marshal.ThrowExceptionForHR(instance.TryStepRange(bStepIn, ranges, checked((uint)cRangeCount)));
+    public static void StepRange(this ICorDebugStepper instance, bool bStepIn, CorDebugStepRange[] ranges) {
+        Marshal.ThrowExceptionForHR(instance.TryStepRange(bStepIn, ranges, (uint)ranges.Length));
     }
 }

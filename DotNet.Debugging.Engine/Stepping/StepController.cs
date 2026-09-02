@@ -166,7 +166,7 @@ internal class StepController {
                 if (startOffset == endOffset)
                     endOffset = function.GetILCode().GetSize();
                 var range = new CorDebugStepRange { startOffset = checked((uint)startOffset), endOffset = checked((uint)endOffset) };
-                newStepper.StepRange(kind == StepKind.Into, [range], 1);
+                newStepper.StepRange(kind == StepKind.Into, [range]);
             }
             else {
                 newStepper.Step(kind == StepKind.Into);

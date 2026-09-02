@@ -2,11 +2,11 @@ namespace DotNet.Debugging.CorApi;
 
 // https://learn.microsoft.com/dotnet/core/unmanaged-api/debugging/icordebug/cordebugchainreason-enumeration
 public enum CorDebugChainReason {
-    CHAIN_NONE = 0,
-    CHAIN_CLASS_INIT = 1,
-    CHAIN_EXCEPTION_FILTER = 2,
-    CHAIN_SECURITY = 4,
-    CHAIN_CONTEXT_POLICY = 8,
+    CHAIN_NONE = 0x000,
+    CHAIN_CLASS_INIT = 0x001,
+    CHAIN_EXCEPTION_FILTER = 0x002,
+    CHAIN_SECURITY = 0x004,
+    CHAIN_CONTEXT_POLICY = 0x008,
     CHAIN_INTERCEPTION = 0x10,
     CHAIN_PROCESS_START = 0x20,
     CHAIN_THREAD_START = 0x40,

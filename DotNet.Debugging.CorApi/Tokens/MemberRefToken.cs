@@ -9,7 +9,7 @@ public readonly record struct MemberRefToken {
 
     public bool IsNil => Rid == 0;
 
-    public static readonly MemberRefToken Nil = new MemberRefToken(167772160u);
+    public static readonly MemberRefToken Nil = new MemberRefToken(0x0a000000u);
 
     public MemberRefToken(uint value) {
         Value = value;

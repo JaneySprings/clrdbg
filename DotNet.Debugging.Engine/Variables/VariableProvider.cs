@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
+using System.Runtime.InteropServices;
 using DotNet.Debugging.CorApi;
 using DotNet.Debugging.CorApi.Extensions;
 using DotNet.Debugging.Engine.Enums;
@@ -174,7 +175,7 @@ internal class VariableProvider {
         var module = debugger.GetModule(function.GetModule());
 
         AddCurrentException(reference, result);
-        var hoistedLocalsContainer = AddArguments(module, function, reference, result);
+        var hoistedLocalsContainer = AddArguments(frame, module, function, reference, result);
         // Locals captured by a lambda or hoisted into an async state machine live on the generated class,
         // the locals declared inside the lambda body itself are still plain IL locals
         if (hoistedLocalsContainer != null)
@@ -188,8 +189,7 @@ internal class VariableProvider {
         result.Add(new VariableSlot("$exception", async () => await CreateVariableAsync("$exception", exception, reference.ThreadId, reference.FrameDepth, "$exception")));
     }
     // Returns the generated closure or state machine instance holding the hoisted locals, when the frame is a lambda or an async method
-    private ICorDebugValue? AddArguments(ModuleInfo module, ICorDebugFunction function, VariableReference reference, List<VariableSlot> result) {
-        var frame = debugger.GetILFrame(reference.ThreadId, reference.FrameDepth);
+    private ICorDebugValue? AddArguments(ICorDebugILFrame frame, ModuleInfo module, ICorDebugFunction function, VariableReference reference, List<VariableSlot> result) {
         var arguments = frame.GetArguments();
         if (arguments.Length == 0)
             return null;
@@ -202,7 +202,7 @@ internal class VariableProvider {
         ICorDebugValue? hoistedLocalsContainer = null;
         if (!isStatic) {
             var thisValue = arguments[0];
-            if (methodProps.szMethod == "MoveNext" || methodProps.szMethod.Contains(">b")) {
+            if (thisValue != null && (methodProps.szMethod == "MoveNext" || methodProps.szMethod.Contains(">b"))) {
                 var containingTypeName = metadataImport.GetTypeDefProps(function.GetClass().GetToken()).szTypeDef;
                 var containingTypeKind = GeneratedNameParser.GetKind(containingTypeName);
                 if (containingTypeKind is GeneratedNameKind.StateMachineType or GeneratedNameKind.LambdaDisplayClass) {
@@ -223,10 +223,15 @@ internal class VariableProvider {
             var name = metadataImport.GetParamProps(paramDef).szName;
             if (name == null)
                 continue;
-            var argument = arguments[i];
-            result.Add(new VariableSlot(name, async () => await CreateVariableAsync(name, argument, reference.ThreadId, reference.FrameDepth, name)));
+            result.Add(CreateFrameSlot(name, arguments[i], reference));
         }
         return hoistedLocalsContainer;
+    }
+    // A slot the runtime cannot read at this instruction (optimized away) is listed with that as its value
+    private VariableSlot CreateFrameSlot(string name, ICorDebugValue? value, VariableReference reference) {
+        if (value == null)
+            return new VariableSlot(VariableInfo.CreateError(name, UnavailableLocation.Message));
+        return new VariableSlot(name, async () => await CreateVariableAsync(name, value, reference.ThreadId, reference.FrameDepth, name));
     }
     private void AddLocals(ModuleInfo module, ICorDebugFunction function, VariableReference reference, List<VariableSlot> result) {
         var frame = debugger.GetILFrame(reference.ThreadId, reference.FrameDepth);
@@ -234,14 +239,12 @@ internal class VariableProvider {
         if (locals.Length == 0)
             return;
 
-        var ilOffset = frame.GetIP().pnOffset;
+        var names = module.MetadataReader.GetLocalVariableNames(function.GetToken(), frame.GetIP().pnOffset);
         for (var i = 0; i < locals.Length; i++) {
             // Compiler generated locals (e.g. a DefaultInterpolatedStringHandler) have no name
-            var name = module.MetadataReader.GetLocalVariableName(function.GetToken(), i, ilOffset);
-            if (name == null)
+            if (!names.TryGetValue(i, out var name))
                 continue;
-            var local = locals[i];
-            result.Add(new VariableSlot(name, async () => await CreateVariableAsync(name, local, reference.ThreadId, reference.FrameDepth, name)));
+            result.Add(CreateFrameSlot(name, locals[i], reference));
         }
     }
     // Lists the hoisted locals of a closure and of the closures enclosing it, linked through their '<>8__' fields
@@ -332,16 +335,13 @@ internal class VariableProvider {
         var corClass = type.GetClass();
         var typeToken = corClass.GetToken();
         var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
-        var allFields = metadataImport.EnumFields(typeToken).ToList();
-        var allProperties = metadataImport.EnumProperties(typeToken).ToList();
         // Every member of the type takes part in the name hiding, whichever visibility this listing shows
         var hasSymbols = debugger.FindModule(corClass.GetModule())?.HasSymbols == true;
-        var fields = ListFields(metadataImport, allFields.Where(it => it.IsStatic(metadataImport) == listStatics), seenNames, hasSymbols);
-        var properties = ListProperties(metadataImport, allProperties.Where(it => it.IsStatic(metadataImport) == listStatics && !it.IsIndexer(metadataImport)), seenNames, hasSymbols);
+        var fields = ListFields(metadataImport, typeToken, listStatics, seenNames, hasSymbols, out var hasStaticFields);
+        var properties = ListProperties(metadataImport, typeToken, listStatics, seenNames, hasSymbols, out var hasStaticProperties);
 
         var summary = new MemberSummary();
-        summary.HasStaticMembers = !listStatics
-            && (allFields.Any(it => it.IsStatic(metadataImport)) || allProperties.Any(it => it.IsStatic(metadataImport)));
+        summary.HasStaticMembers = !listStatics && (hasStaticFields || hasStaticProperties);
         summary.HasNonPublicMembers = filter == MemberFilter.Public && (fields.Any(it => !it.IsInline) || properties.Any(it => !it.IsInline));
 
         // The declaring type names the hidden and the static members, null when it cannot be formatted
@@ -359,27 +359,41 @@ internal class VariableProvider {
         summary.HasNonPublicMembers |= baseSummary.HasNonPublicMembers;
         return summary;
     }
-    // The fields a type shows, in declaration order: compiler generated ones stay out (hoisted locals come back under their own name)
-    private static List<ListedMember<FieldDefToken>> ListFields(IMetaDataImport metadataImport, IEnumerable<FieldDefToken> fields, Dictionary<string, bool> seenNames, bool hasSymbols) {
-        var result = new List<ListedMember<FieldDefToken>>();
-        foreach (var field in fields) {
+    // The fields a type shows, in declaration order: compiler generated ones stay out (hoisted locals come back under
+    // their own name). The metadata of a field is read once here, the listing and the reads take everything from it.
+    // 'hasStaticFields' reports the static fields of the type whichever ones this listing holds
+    private static List<ListedField> ListFields(IMetaDataImport metadataImport, TypeDefToken typeToken, bool listStatics, Dictionary<string, bool> seenNames, bool hasSymbols, out bool hasStaticFields) {
+        hasStaticFields = false;
+        var result = new List<ListedField>();
+        foreach (var field in metadataImport.EnumFields(typeToken)) {
             var fieldProps = metadataImport.GetFieldProps(field);
-            if (!TryGetDisplayName(fieldProps.szField, out var name))
+            var isStatic = fieldProps.pdwAttr.IsFdStatic();
+            hasStaticFields |= isStatic;
+            if (isStatic != listStatics || !TryGetDisplayName(fieldProps.szField, out var name))
                 continue;
             // A field hides every base member of its name
             if (TryListMember(seenNames, name, hidesBaseMembers: true, out var isHidden))
-                result.Add(new ListedMember<FieldDefToken>(field, name, IsListedInline(GetVisibility(fieldProps.pdwAttr), hasSymbols), isHidden, isExplicitImplementation: false));
+                result.Add(new ListedField(field, name, fieldProps.pdwAttr, fieldProps.pdwCPlusTypeFlag, fieldProps.ppValue, fieldProps.pcchValue, IsListedInline(GetVisibility(fieldProps.pdwAttr), hasSymbols), isHidden));
         }
         return result;
     }
-    private static List<ListedMember<PropertyToken>> ListProperties(IMetaDataImport metadataImport, IEnumerable<PropertyToken> properties, Dictionary<string, bool> seenNames, bool hasSymbols) {
-        var result = new List<ListedMember<PropertyToken>>();
-        foreach (var property in properties) {
+    private static List<ListedProperty> ListProperties(IMetaDataImport metadataImport, TypeDefToken typeToken, bool listStatics, Dictionary<string, bool> seenNames, bool hasSymbols, out bool hasStaticProperties) {
+        hasStaticProperties = false;
+        var result = new List<ListedProperty>();
+        foreach (var property in metadataImport.EnumProperties(typeToken)) {
             var propertyProps = metadataImport.GetPropertyProps(property);
-            var name = propertyProps.szProperty;
-            if (name == null || propertyProps.pmdGetter.IsNil)
+            var getter = propertyProps.pmdGetter;
+            if (getter.IsNil)
                 continue;
-            var getterAttributes = metadataImport.GetMethodProps(propertyProps.pmdGetter).pdwAttr;
+            var getterProps = metadataImport.GetMethodProps(getter);
+            var getterAttributes = getterProps.pdwAttr;
+            var isStatic = getterAttributes.IsMdStatic();
+            hasStaticProperties |= isStatic;
+            // An indexer getter requires arguments, so the property cannot be evaluated as a member
+            if (isStatic != listStatics || HasParameters(getterProps.ppvSigBlob))
+                continue;
+
+            var name = propertyProps.szProperty;
             // An override reuses the slot of the base property, it is that property. A 'new' one (its own slot,
             // virtual or not) hides the base one
             var hidesBaseMembers = !getterAttributes.IsMdVirtual() || getterAttributes.IsMdNewSlot();
@@ -389,9 +403,13 @@ internal class VariableProvider {
             var isExplicitImplementation = getterAttributes.IsMdPrivate() && getterAttributes.IsMdVirtual();
             var isInline = IsListedInline(GetVisibility(getterAttributes), hasSymbols) || (isExplicitImplementation && hasSymbols);
             if (TryListMember(seenNames, name, hidesBaseMembers, out var isHidden))
-                result.Add(new ListedMember<PropertyToken>(property, name, isInline, isHidden, isExplicitImplementation));
+                result.Add(new ListedProperty(property, getter, getterAttributes, name, isInline, isHidden, isExplicitImplementation));
         }
         return result;
+    }
+    // A method signature blob starts with the calling convention, then the parameter count (a getter is never generic)
+    private static bool HasParameters(nint signatureBlob) {
+        return Marshal.ReadByte(signatureBlob, 1) != 0;
     }
     // Whether a member is listed, from what the walk up the hierarchy met of its name before: a name a more
     // derived member took is listed again only when that member hides it. Listed or not, what this member does
@@ -407,28 +425,27 @@ internal class VariableProvider {
     private static bool IsListedInline(VariableVisibility visibility, bool hasSymbols) {
         return visibility == VariableVisibility.Public || (hasSymbols && visibility == VariableVisibility.Internal);
     }
-    private static List<ListedMember<TToken>> FilterMembers<TToken>(List<ListedMember<TToken>> members, MemberFilter filter) {
+    private static List<TMember> FilterMembers<TMember>(List<TMember> members, MemberFilter filter) where TMember : ListedMember {
         if (filter == MemberFilter.All)
             return members;
         return members.Where(it => it.IsInline == (filter == MemberFilter.Public)).ToList();
     }
-    private async Task AddFieldsAsync(List<ListedMember<FieldDefToken>> fields, IMetaDataImport metadataImport, ICorDebugType type, string? typeName, ICorDebugValue value, VariableReference reference, List<VariableSlot> result) {
+    private async Task AddFieldsAsync(List<ListedField> fields, IMetaDataImport metadataImport, ICorDebugType type, string? typeName, ICorDebugValue value, VariableReference reference, List<VariableSlot> result) {
         var corClass = type.GetClass();
         foreach (var member in fields) {
             var field = member.Token;
             var name = member.GetDisplayName(typeName);
             try {
                 // Which fields the listing holds and how they are named comes from metadata alone, no value is read here
-                var fieldProps = metadataImport.GetFieldProps(field);
                 var browsable = GetDebuggerBrowsableState(metadataImport, field);
                 if (browsable == DebuggerBrowsableState.Never)
                     continue;
 
-                var isStatic = fieldProps.pdwAttr.IsFdStatic();
-                var visibility = GetVisibility(fieldProps.pdwAttr);
-                var evaluateName = member.GetEvaluateName(isStatic, reference.EvaluateName, typeName);
-                if (fieldProps.pdwAttr.IsFdLiteral()) {
-                    var literal = new VariableInfo(name, ValueFormatter.FormatLiteral(fieldProps.ppValue, fieldProps.pcchValue, fieldProps.pdwCPlusTypeFlag), TypeNameFormatter.GetPrimitiveTypeName(fieldProps.pdwCPlusTypeFlag));
+                var isStatic = member.IsStatic;
+                var visibility = member.Visibility;
+                var evaluateName = member.GetEvaluateName(reference.EvaluateName, typeName);
+                if (member.IsLiteral) {
+                    var literal = new VariableInfo(name, ValueFormatter.FormatLiteral(member.LiteralValue, member.LiteralLength, member.LiteralType), TypeNameFormatter.GetPrimitiveTypeName(member.LiteralType));
                     literal.Visibility = visibility;
                     literal.EvaluateName = evaluateName;
                     result.Add(new VariableSlot(literal));
@@ -436,7 +453,7 @@ internal class VariableProvider {
                 }
 
                 Func<Task<ICorDebugValue?>> readValueAsync = async () => isStatic
-                    ? await debugger.FuncEval.GetStaticFieldValueAsync(type, field, debugger.GetILFrame(reference.ThreadId, reference.FrameDepth))
+                    ? await debugger.FuncEval.GetStaticFieldValueAsync(type, field, () => debugger.GetILFrame(reference.ThreadId, reference.FrameDepth))
                     : value.UnwrapDebugValueToObject().GetFieldValue(corClass, field);
                 if (browsable == DebuggerBrowsableState.RootHidden) {
                     await AddRootHiddenMemberAsync(name, readValueAsync, reference, result, evaluateName, VariableKind.Data, visibility);
@@ -450,28 +467,25 @@ internal class VariableProvider {
             }
         }
     }
-    private async Task AddPropertiesAsync(List<ListedMember<PropertyToken>> properties, IMetaDataImport metadataImport, ICorDebugType type, string? typeName, ICorDebugValue value, VariableReference reference, List<VariableSlot> result) {
+    private async Task AddPropertiesAsync(List<ListedProperty> properties, IMetaDataImport metadataImport, ICorDebugType type, string? typeName, ICorDebugValue value, VariableReference reference, List<VariableSlot> result) {
         var module = type.GetClass().GetModule();
         foreach (var member in properties) {
-            var property = member.Token;
             var name = member.GetDisplayName(typeName);
             try {
                 // No getter runs here, a property only costs a func eval once the page holding it is requested
-                var propertyProps = metadataImport.GetPropertyProps(property);
-                var browsable = GetDebuggerBrowsableState(metadataImport, property);
+                var browsable = GetDebuggerBrowsableState(metadataImport, member.Token);
                 if (browsable == DebuggerBrowsableState.Never)
                     continue;
 
-                var getterAttributes = metadataImport.GetMethodProps(propertyProps.pmdGetter).pdwAttr;
-                var isStatic = getterAttributes.IsMdStatic();
-                var visibility = GetVisibility(getterAttributes);
-                var evaluateName = member.GetEvaluateName(isStatic, reference.EvaluateName, typeName);
+                var isStatic = member.IsStatic;
+                var visibility = member.Visibility;
+                var evaluateName = member.GetEvaluateName(reference.EvaluateName, typeName);
 
                 // The getter is invoked with the original reference value, not the dereferenced object, and with the
                 // arguments of the type declaring it - the members of a base type are listed while walking up from the
                 // value, and a non-generic type deriving from a generic base has no arguments of its own to invoke them with
                 Func<Task<ICorDebugValue?>> invokeGetterAsync = () => {
-                    var getter = module.GetFunctionFromToken(propertyProps.pmdGetter);
+                    var getter = module.GetFunctionFromToken(member.Getter);
                     var eval = debugger.GetThread(reference.ThreadId).CreateEval();
                     ICorDebugValue[] arguments = isStatic ? [] : [value];
                     return debugger.FuncEval.CallFunctionAsync(eval, getter, type.GetTypeParameters(), arguments);
@@ -643,7 +657,7 @@ internal class VariableProvider {
             ?? throw new InvalidOperationException($"The type '{typeName.FullName}' was not found in the loaded modules");
         var typeArguments = typeName.TypeArguments.Select(it => ResolveSerializedType(it, module)).ToArray();
         var elementType = IsValueTypeDef(module.GetMetaDataInterface<IMetaDataImport>(), typeDef) ? CorElementType.VALUETYPE : CorElementType.CLASS;
-        return ((ICorDebugClass2)module.GetClassFromToken(typeDef)).GetParameterizedType(elementType, typeArguments.Length, typeArguments);
+        return ((ICorDebugClass2)module.GetClassFromToken(typeDef)).GetParameterizedType(elementType, typeArguments);
     }
     // The serialized name is looked up without its assembly qualifier, so a type living elsewhere (e.g. in the
     // core library) is searched for across the loaded modules, starting from the module the search prefers
@@ -720,7 +734,7 @@ internal class VariableProvider {
                     return null;
                 indices[i] = checked((uint)(index - baseIndices[i]));
             }
-            return arrayValue.GetElement(rank, indices);
+            return arrayValue.GetElement(indices);
         }
         if (unwrapped is ICorDebugObjectValue objectValue)
             return objectValue.GetFieldValueByName(debugger.GetILFrame(reference.ThreadId, reference.FrameDepth), name);
@@ -733,8 +747,9 @@ internal class VariableProvider {
         var ilOffset = frame.GetIP().pnOffset;
 
         var locals = frame.GetLocalVariables();
+        var names = module.MetadataReader.GetLocalVariableNames(function.GetToken(), ilOffset);
         for (var i = 0; i < locals.Length; i++) {
-            if (module.MetadataReader.GetLocalVariableName(function.GetToken(), i, ilOffset) == name)
+            if (names.GetValueOrDefault(i) == name)
                 return locals[i];
         }
 
@@ -874,15 +889,15 @@ internal class VariableProvider {
     // A field or property the listing shows: whether it goes with the public members or behind 'Non-Public members',
     // and how it is named. One a derived member hides is told apart from it by its declaring type, 'Name (Namespace.Type)',
     // the way Microsoft's debugger shows it
-    private class ListedMember<TToken> {
-        public TToken Token { get; }
+    private abstract class ListedMember {
         public string Name { get; }
         public bool IsInline { get; }
         public bool IsHidden { get; }
         public bool IsExplicitImplementation { get; }
+        public abstract bool IsStatic { get; }
+        public abstract VariableVisibility Visibility { get; }
 
-        public ListedMember(TToken token, string name, bool isInline, bool isHidden, bool isExplicitImplementation) {
-            Token = token;
+        protected ListedMember(string name, bool isInline, bool isHidden, bool isExplicitImplementation) {
             Name = name;
             IsInline = isInline;
             IsHidden = isHidden;
@@ -895,8 +910,8 @@ internal class VariableProvider {
         // 'parent.Member' for an instance member, 'Namespace.Type.Member' for a static one, the bare name for a
         // hoisted local. A hidden member is only reachable through a cast to its declaring type, an explicit
         // interface implementation ('Namespace.Interface.Member') through one to its interface: '((Namespace.Type)parent).Member'
-        public string GetEvaluateName(bool isStatic, string? parentEvaluateName, string? declaringTypeName) {
-            if (isStatic && declaringTypeName != null)
+        public string GetEvaluateName(string? parentEvaluateName, string? declaringTypeName) {
+            if (IsStatic && declaringTypeName != null)
                 return $"{declaringTypeName}.{Name}";
             if (parentEvaluateName == null)
                 return Name;
@@ -905,6 +920,40 @@ internal class VariableProvider {
             if (IsHidden && declaringTypeName != null)
                 return $"(({declaringTypeName}){parentEvaluateName}).{Name}";
             return $"{parentEvaluateName}.{Name}";
+        }
+    }
+    private class ListedField : ListedMember {
+        public FieldDefToken Token { get; }
+        public CorFieldAttr Attributes { get; }
+        // The constant of a literal field: the element type, the pointer to the value and its length (for strings)
+        public CorElementType LiteralType { get; }
+        public nint LiteralValue { get; }
+        public int LiteralLength { get; }
+        public override bool IsStatic => Attributes.IsFdStatic();
+        public override VariableVisibility Visibility => GetVisibility(Attributes);
+        public bool IsLiteral => Attributes.IsFdLiteral();
+
+        public ListedField(FieldDefToken token, string name, CorFieldAttr attributes, CorElementType literalType, nint literalValue, int literalLength, bool isInline, bool isHidden)
+            : base(name, isInline, isHidden, isExplicitImplementation: false) {
+            Token = token;
+            Attributes = attributes;
+            LiteralType = literalType;
+            LiteralValue = literalValue;
+            LiteralLength = literalLength;
+        }
+    }
+    private class ListedProperty : ListedMember {
+        public PropertyToken Token { get; }
+        public MethodDefToken Getter { get; }
+        public CorMethodAttr GetterAttributes { get; }
+        public override bool IsStatic => GetterAttributes.IsMdStatic();
+        public override VariableVisibility Visibility => GetVisibility(GetterAttributes);
+
+        public ListedProperty(PropertyToken token, MethodDefToken getter, CorMethodAttr getterAttributes, string name, bool isInline, bool isHidden, bool isExplicitImplementation)
+            : base(name, isInline, isHidden, isExplicitImplementation) {
+            Token = token;
+            Getter = getter;
+            GetterAttributes = getterAttributes;
         }
     }
 }

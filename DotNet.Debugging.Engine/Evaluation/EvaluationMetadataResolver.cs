@@ -274,7 +274,7 @@ internal class EvaluationMetadataResolver {
     public ICorDebugType GetCorDebugType(ResolvedRuntimeType type) {
         var elementType = IsValueType(type) ? CorElementType.VALUETYPE : CorElementType.CLASS;
         var typeArguments = type.TypeArguments.IsDefaultOrEmpty ? [] : type.TypeArguments.Select(GetCorDebugType).ToArray();
-        return ((ICorDebugClass2)type.Class).GetParameterizedType(elementType, typeArguments.Length, typeArguments);
+        return ((ICorDebugClass2)type.Class).GetParameterizedType(elementType, typeArguments);
     }
     public ICorDebugType GetCorDebugType(ResolvedCilType type) {
         if (type.ElementType != null) {
@@ -289,7 +289,7 @@ internal class EvaluationMetadataResolver {
         var typeName = GetPrimitiveTypeName(type.Primitive.Value);
         var isClass = type.Primitive == PrimitiveTypeCode.String || type.Primitive == PrimitiveTypeCode.Object;
         var runtimeType = FindRuntimeType("System", typeName.Substring("System.".Length));
-        return ((ICorDebugClass2)runtimeType.Class).GetParameterizedType(isClass ? CorElementType.CLASS : CorElementType.VALUETYPE, 0, []);
+        return ((ICorDebugClass2)runtimeType.Class).GetParameterizedType(isClass ? CorElementType.CLASS : CorElementType.VALUETYPE, []);
     }
     public string GetRuntimeTypeName(ResolvedRuntimeType type) {
         return GetTypeName(type);
@@ -503,6 +503,14 @@ internal class EvaluationMetadataResolver {
     private static bool IsSystemValueType(MetadataReader reader, StringHandle @namespace, StringHandle name) {
         return reader.GetString(@namespace) == "System" && reader.GetString(name) is "ValueType" or "Enum";
     }
+    // The type argument of a 'Nullable<T>' type, the one 'unbox.any' produces a nullable of
+    public bool TryGetNullableUnderlyingType(ResolvedCilType type, out ResolvedCilType underlyingType) {
+        underlyingType = null!;
+        if (type.RuntimeType == null || type.RuntimeType.TypeArguments.IsDefault || type.RuntimeType.TypeArguments.Length != 1 || GetTypeName(type.RuntimeType) != "System.Nullable`1")
+            return false;
+        underlyingType = type.RuntimeType.TypeArguments[0];
+        return true;
+    }
     private static string GetTypeName(ResolvedRuntimeType type) {
         var reader = type.Module.MetadataReader.PeMetadataReader;
         var definition = reader.GetTypeDefinition(type.Handle);
@@ -606,10 +614,14 @@ internal class EvaluationMetadataResolver {
             return reader.GetTypeSpecification(handle).DecodeSignature(this, genericContext);
         }
 
+        // A nested type is qualified by its enclosing types, the form a reference to it from another module takes
         private static string GetFullName(MetadataReader reader, TypeDefinitionHandle handle) {
             var type = reader.GetTypeDefinition(handle);
-            var @namespace = reader.GetString(type.Namespace);
             var name = reader.GetString(type.Name);
+            var declaringType = type.GetDeclaringType();
+            if (!declaringType.IsNil)
+                return $"{GetFullName(reader, declaringType)}+{name}";
+            var @namespace = reader.GetString(type.Namespace);
             return string.IsNullOrEmpty(@namespace) ? name : $"{@namespace}.{name}";
         }
         private static string GetFullName(MetadataReader reader, TypeReferenceHandle handle) {

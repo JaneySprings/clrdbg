@@ -9,7 +9,7 @@ public readonly record struct ParamDefToken {
 
     public bool IsNil => Rid == 0;
 
-    public static readonly ParamDefToken Nil = new ParamDefToken(134217728u);
+    public static readonly ParamDefToken Nil = new ParamDefToken(0x08000000u);
 
     public ParamDefToken(uint value) {
         Value = value;

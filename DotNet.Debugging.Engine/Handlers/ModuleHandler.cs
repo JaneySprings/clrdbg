@@ -40,7 +40,7 @@ public partial class ManagedDebugger {
         DebuggerLoggingService.LogMessage(metadataReader.HasSymbols ? $"  Symbols loaded for {moduleName}" : $"  No symbols found for {moduleName}");
 
         if (JustMyCode && isUserCode && metadataReader.HasSymbols) {
-            corModule.SetJMCStatus(true, 0, []);
+            corModule.SetJMCStatus(true, []);
             // Methods without sequence points (the compiler's '<Main>' bridge over an async Main) are not
             // user code: the runtime then raises no user-first-chance dispatch there, the way Microsoft's
             // debugger has it
@@ -63,6 +63,8 @@ public partial class ManagedDebugger {
             OnBreakpointChanged?.Invoke(breakpoint);
     }
     private void RefreshDynamicModule(ICorDebugModule corModule) {
+        // The importers obtained before the runtime rebuilt the module's metadata see the old metadata
+        corModule.ResetMetaDataInterfaces();
         var modulePath = corModule.GetName();
         var metadataReader = LoadModuleMetadata(corModule, modulePath);
         if (metadataReader == null)

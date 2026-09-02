@@ -10,10 +10,6 @@ public static class EnumExtensions {
         return (attr & CorTypeAttr.tdVisibilityMask) >= CorTypeAttr.tdNestedPublic;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool IsMdPublic(this CorMethodAttr attr) {
-        return (attr & CorMethodAttr.mdMemberAccessMask) == CorMethodAttr.mdPublic;
-    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool IsMdPrivate(this CorMethodAttr attr) {
@@ -40,10 +36,6 @@ public static class EnumExtensions {
         return (attr & CorMethodAttr.mdVtableLayoutMask) == CorMethodAttr.mdVtableLayoutMask;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool IsFdPublic(this CorFieldAttr attr) {
-        return (attr & CorFieldAttr.fdFieldAccessMask) == CorFieldAttr.fdPublic;
-    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool IsFdStatic(this CorFieldAttr attr) {

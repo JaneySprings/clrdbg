@@ -9,7 +9,7 @@ public readonly record struct SignatureToken {
 
     public bool IsNil => Rid == 0;
 
-    public static readonly SignatureToken Nil = new SignatureToken(285212672u);
+    public static readonly SignatureToken Nil = new SignatureToken(0x11000000u);
 
     public SignatureToken(uint value) {
         Value = value;

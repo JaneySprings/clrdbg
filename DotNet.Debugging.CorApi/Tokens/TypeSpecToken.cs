@@ -9,7 +9,7 @@ public readonly record struct TypeSpecToken {
 
     public bool IsNil => Rid == 0;
 
-    public static readonly TypeSpecToken Nil = new TypeSpecToken(452984832u);
+    public static readonly TypeSpecToken Nil = new TypeSpecToken(0x1b000000u);
 
     public TypeSpecToken(uint value) {
         Value = value;

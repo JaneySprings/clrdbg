@@ -3,9 +3,9 @@ using System.Runtime.InteropServices;
 namespace DotNet.Debugging.CorApi.Extensions;
 
 public static class CorDebugThreadExtensions {
-    public static IEnumerable<ICorDebugChain> EnumerateChains(this ICorDebugThread instance) {
-        Marshal.ThrowExceptionForHR(instance.TryEnumerateChains(out var ppChains));
-        return EnumerateChainsCore(ppChains);
+    public static ICorDebugChain[] GetChains(this ICorDebugThread instance) {
+        Marshal.ThrowExceptionForHR(instance.TryEnumerateChains(out var chains));
+        return chains.ToArray<ICorDebugChain>(chains.TryNext);
     }
 
     public static ICorDebugEval CreateEval(this ICorDebugThread instance) {
@@ -36,21 +36,5 @@ public static class CorDebugThreadExtensions {
     public static ICorDebugProcess GetProcess(this ICorDebugThread instance) {
         Marshal.ThrowExceptionForHR(instance.TryGetProcess(out var ppProcess));
         return ppProcess;
-    }
-
-    private static IEnumerable<ICorDebugChain> EnumerateChainsCore(ICorDebugChainEnum enumerator) {
-        while (true) {
-            var array = new ICorDebugChain[1];
-            var errorCode = enumerator.TryNext(1u, array, out var pceltFetched);
-            if (pceltFetched == 0) {
-                yield break;
-            }
-            Marshal.ThrowExceptionForHR(errorCode);
-            if (pceltFetched != 1) {
-                break;
-            }
-            yield return array[0];
-        }
-        throw new InvalidOperationException("Native debugger enumerator returned an invalid item count.");
     }
 }

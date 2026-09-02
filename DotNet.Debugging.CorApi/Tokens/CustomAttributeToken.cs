@@ -9,7 +9,7 @@ public readonly record struct CustomAttributeToken {
 
     public bool IsNil => Rid == 0;
 
-    public static readonly CustomAttributeToken Nil = new CustomAttributeToken(201326592u);
+    public static readonly CustomAttributeToken Nil = new CustomAttributeToken(0x0c000000u);
 
     public CustomAttributeToken(uint value) {
         Value = value;

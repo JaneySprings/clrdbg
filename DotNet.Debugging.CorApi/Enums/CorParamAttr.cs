@@ -1,11 +1,11 @@
 namespace DotNet.Debugging.CorApi;
 
 public enum CorParamAttr {
-    pdIn = 1,
-    pdOut = 2,
-    pdOptional = 16,
-    pdReservedMask = 61440,
-    pdHasDefault = 4096,
-    pdHasFieldMarshal = 8192,
-    pdUnused = 53216
+    pdIn = 0x0001,
+    pdOut = 0x0002,
+    pdOptional = 0x0010,
+    pdReservedMask = 0xf000,
+    pdHasDefault = 0x1000,
+    pdHasFieldMarshal = 0x2000,
+    pdUnused = 0xcfe0
 }

@@ -7,5 +7,5 @@ public enum CorDebugGenerationTypes {
     CorDebug_Gen2 = 2,
     CorDebug_LOH = 3,
     CorDebug_POH = 4,
-    CorDebug_NonGC = int.MaxValue
+    CorDebug_NonGC = 0x7FFFFFFF
 }

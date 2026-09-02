@@ -44,7 +44,7 @@ keyed by it, as a new module changes what an expression may bind to.
 | `ResolveBreakpoint(filePath, line, column)` | The document (exact path, then file name) and `SequencePointResolver`'s choice among its methods' sequence points — see [breakpoints.md](breakpoints.md). | Breakpoint binding, `SetNextStatement`. |
 | `ResolveMethodEntry(methodToken)` | The method's first non-hidden sequence point. | Function breakpoints, `stopAtEntry`. |
 | `GetEntryPointToken()` | `CorHeader.EntryPointTokenOrRelativeVirtualAddress` when it is a MethodDef and not a native entry point. | `stopAtEntry`. |
-| `GetLocalVariableName(methodToken, slot, ilOffset)` | The local scopes containing the offset and the variable with that slot; `DebuggerHidden` and unnamed locals are null. | Locals, assignments. |
+| `GetLocalVariableNames(methodToken, ilOffset)` | The names of the locals in the scopes containing the offset, by slot; `DebuggerHidden` and unnamed locals are absent. | Locals, assignments. |
 | `TryGetStepRange(methodToken, ilOffset)` | The offsets of the sequence point at/before the IP and of the next one. | Statement-wide step ranges. |
 | `GetNextSequencePointOffset(methodToken, ilOffset)` | The first sequence point with source at or after the offset. | Step completion (prolog detection, end of method). |
 | `GetAsyncMethodInfo(methodToken)` | Roslyn's async stepping custom debug information (`54FD2AC5-E925-401A-9C2A-F94F171072F8`: catch handler offset, then yield/resume/MoveNext-token triples) and the last sequence point with source. | The async stepper. |
@@ -93,6 +93,7 @@ Besides the PDB, the engine reads the *live* metadata of the debuggee's modules 
 names, field/method attributes, custom attributes (`DebuggerDisplay`, `DebuggerTypeProxy`,
 `DebuggerBrowsable`, `Flags`, the step-filter attributes in `Metadata/AttributeNames`), enum literals
 and nested type lookups. `Extensions/MetadataImportExtensions` adds the small helpers the engine needs
-(`IsStatic`/`IsPublic`/`HasGetter` on tokens, `HasAttribute`, `FindTypeDef`/`FindNestedTypeDef`,
-`FindProperty`), and `Variables/CustomAttributeReader` decodes attribute blobs (the prolog, a string
+(`IsStatic`/`IsLiteral` on field tokens, `IsNonUserMethod`/`IsPropertyOrOperator` on method tokens,
+`HasAttribute`, `FindTypeDef`/`FindNestedTypeDef`, `FindProperty`), and `Variables/CustomAttributeReader`
+decodes attribute blobs (the prolog, a string
 constructor argument, string/`Type` named arguments, the `DebuggerBrowsableState` integer).

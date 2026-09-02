@@ -9,7 +9,7 @@ public readonly record struct GenericParamConstraintToken {
 
     public bool IsNil => Rid == 0;
 
-    public static readonly GenericParamConstraintToken Nil = new GenericParamConstraintToken(738197504u);
+    public static readonly GenericParamConstraintToken Nil = new GenericParamConstraintToken(0x2c000000u);
 
     public GenericParamConstraintToken(uint value) {
         Value = value;

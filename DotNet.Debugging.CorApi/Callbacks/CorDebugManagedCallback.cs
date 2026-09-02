@@ -206,7 +206,8 @@ public partial class CorDebugManagedCallback : ICorDebugManagedCallback, ICorDeb
     }
 
     int ICorDebugManagedCallback4.TryDataBreakpoint(ICorDebugProcess pProcess, ICorDebugThread pThread, ref byte pContext, uint contextSize) {
-        return HandleEvent(OnDataBreakpoint, new DataBreakpointCorDebugManagedCallbackEventArgs(pProcess, pThread, pContext, contextSize));
+        var context = MemoryMarshal.CreateReadOnlySpan(ref pContext, checked((int)contextSize)).ToArray();
+        return HandleEvent(OnDataBreakpoint, new DataBreakpointCorDebugManagedCallbackEventArgs(pProcess, pThread, context));
     }
 
     int ICorDebugManagedCallback2.TryFunctionRemapOpportunity(ICorDebugAppDomain pAppDomain, ICorDebugThread pThread, ICorDebugFunction pOldFunction, ICorDebugFunction pNewFunction, uint oldILOffset) {

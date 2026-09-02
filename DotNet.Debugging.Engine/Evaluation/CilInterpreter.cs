@@ -50,7 +50,10 @@ internal class CilInterpreter {
     private static ICilLocation[] CreateArguments(ICorDebugILFrame? frame, EvaluationContext context) {
         if (context.RootValue != null)
             return [new CorDebugLocation(context.RootValue)];
-        return frame!.GetArguments().Select(it => (ICilLocation)new CorDebugLocation(it)).ToArray();
+        return frame!.GetArguments().Select(CreateFrameLocation).ToArray();
+    }
+    private static ICilLocation CreateFrameLocation(ICorDebugValue? value) {
+        return value == null ? new UnavailableLocation() : new CorDebugLocation(value);
     }
     // The evaluation method's locals start with the frame's locals (so the expression can read and assign them), the rest are temporaries
     private static ICilLocation[] CreateLocals(CompiledExpression compiled, ICorDebugILFrame? frame, StandaloneSignatureHandle localSignature, bool isTypeContext) {
@@ -61,7 +64,7 @@ internal class CilInterpreter {
         var result = new ICilLocation[localCount];
         for (var i = 0; i < result.Length; i++) {
             result[i] = !isTypeContext && i < frameLocals!.Length
-                ? new CorDebugLocation(frameLocals[i])
+                ? CreateFrameLocation(frameLocals[i])
                 : new TemporaryLocation(CilValue.Null());
         }
         return result;
@@ -310,8 +313,12 @@ internal class CilInterpreter {
                         stack.Push(source);
                         continue;
                     }
-                    var boxed = GetBoxedValue(source);
                     var targetType = resolver.ResolveTypeToken((int)instruction.Operand!);
+                    if (resolver.TryGetNullableUnderlyingType(targetType, out var underlyingType)) {
+                        stack.Push(await UnboxToNullableAsync(source, targetType, underlyingType, resolver, context, handles));
+                        continue;
+                    }
+                    var boxed = GetBoxedValue(source);
                     if (!IsUnboxCompatible(boxed.GetObject(), targetType))
                         throw new InvalidCastException($"InvalidCastException: Cannot unbox the debuggee value to '{GetTypeDisplayName(resolver, targetType)}'");
                     stack.Push(CilValue.FromCorValue(boxed.GetObject()));
@@ -413,10 +420,10 @@ internal class CilInterpreter {
         var array = GetArrayValue(stack.Pop());
 
         if (methodName == "Set") {
-            new CorDebugLocation(array.GetElement(indexCount, indices)).Write(await MaterializeForStoreAsync(element!, context, handles));
+            new CorDebugLocation(array.GetElement(indices)).Write(await MaterializeForStoreAsync(element!, context, handles));
             return;
         }
-        var location = new CorDebugLocation(array.GetElement(indexCount, indices));
+        var location = new CorDebugLocation(array.GetElement(indices));
         stack.Push(methodName == "Address" ? CilValue.FromLocation(location) : handles.Root(location.Read()));
     }
     private async Task<CilValue> NewObjectAsync(int token, Stack<CilValue> stack, EvaluationMetadataResolver resolver, EvaluationContext context, EvaluationHandleScope handles) {
@@ -552,13 +559,25 @@ internal class CilInterpreter {
         var expectedElementType = GetPrimitiveElementType(expectedPrimitive);
         if (value.Value == null && expectedElementType != null && value.CorValue?.UnwrapDebugValue() is ICorDebugGenericValue sourceGeneric) {
             var primitiveResult = (ICorDebugGenericValue)eval.CreateValue(expectedElementType.Value, null);
-            primitiveResult.SetValueFromBytes(sourceGeneric.GetValueAsBytes());
+            var data = sourceGeneric.GetValueAsBytes();
+            // An enum (or a single-field struct) of another size is widened through its integer
+            if (data.Length != primitiveResult.GetSize())
+                data = CilValueEncoding.GetBytes(value.AsInt64(), expectedElementType.Value, primitiveResult.GetSize());
+            primitiveResult.SetValueFromBytes(data);
             return primitiveResult;
         }
         if (value.Value == null)
             return eval.CreateValue(CorElementType.CLASS, null);
         if (value.Value is string text)
             return handles.Track(await debugger.FuncEval.NewStringAsync(eval, text, throwOnException: true));
+        // ICorDebugEval creates no native integers, a nint/nuint result is built as the struct it is in the debuggee
+        if (expectedPrimitive is PrimitiveTypeCode.IntPtr or PrimitiveTypeCode.UIntPtr && resolver != null) {
+            var pointerType = resolver.GetCorDebugType(expectedType!);
+            var pointerResult = handles.Track(await debugger.FuncEval.NewObjectNoConstructorAsync(eval, pointerType.GetClass(), [], throwOnException: true))
+                ?? throw new InvalidOperationException("Failed to create the evaluation result native integer");
+            new CorDebugLocation(pointerResult).Write(value);
+            return pointerResult;
+        }
         if (expectedType?.RuntimeType != null && resolver != null) {
             var typedResult = handles.Track(await debugger.FuncEval.NewObjectNoConstructorAsync(eval, expectedType.RuntimeType.Class, [], throwOnException: true))
                 ?? throw new InvalidOperationException("Failed to create the evaluation result value type");
@@ -568,8 +587,7 @@ internal class CilInterpreter {
 
         var elementType = expectedElementType ?? GetPrimitiveElementType(value.Value);
         var result = (ICorDebugGenericValue)eval.CreateValue(elementType, null);
-        var materializedValue = elementType == CorElementType.BOOLEAN ? value.IsTrue() : value.Value;
-        result.SetValueFromBytes(CilValueEncoding.GetBytes(materializedValue, elementType));
+        result.SetValueFromBytes(CilValueEncoding.GetBytes(value.Value, elementType, result.GetSize()));
         return result;
     }
     private async Task<ICorDebugValue> MaterializeForCallAsync(CilValue value, EvaluationContext context, EvaluationHandleScope handles) {
@@ -662,8 +680,26 @@ internal class CilInterpreter {
 
     private async Task<ICorDebugValue> GetStaticFieldValueAsync(ResolvedRuntimeField field, EvaluationMetadataResolver resolver, EvaluationContext context) {
         var type = resolver.GetCorDebugType(field.DeclaringType);
-        var frame = debugger.GetILFrame(context.ThreadId, context.FrameDepth);
-        return await debugger.FuncEval.GetStaticFieldValueAsync(type, field.Token, frame);
+        return await debugger.FuncEval.GetStaticFieldValueAsync(type, field.Token, () => debugger.GetILFrame(context.ThreadId, context.FrameDepth));
+    }
+    // 'unbox.any Nullable<T>': null becomes an empty Nullable<T>, a boxed T one holding it (the runtime never boxes a Nullable itself)
+    private async Task<CilValue> UnboxToNullableAsync(CilValue source, ResolvedCilType nullableType, ResolvedCilType underlyingType, EvaluationMetadataResolver resolver, EvaluationContext context, EvaluationHandleScope handles) {
+        var nullable = await CreateDefaultValueAsync(nullableType, resolver, context, handles);
+        if (source.IsNull)
+            return nullable;
+
+        var boxed = GetBoxedValue(source);
+        if (!IsUnboxCompatible(boxed.GetObject(), underlyingType))
+            throw new InvalidCastException($"InvalidCastException: Cannot unbox the debuggee value to a nullable of '{GetTypeDisplayName(resolver, underlyingType)}'");
+
+        var nullableObject = nullable.CorValue!.UnwrapDebugValueToObject();
+        var corClass = nullableObject.GetClass();
+        var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
+        var hasValueField = metadataImport.FindField(corClass.GetToken(), "hasValue", 0, 0);
+        var valueField = metadataImport.FindField(corClass.GetToken(), "value", 0, 0);
+        new CorDebugLocation(nullableObject.GetFieldValue(corClass, hasValueField)).Write(CilValue.FromPrimitive(true));
+        new CorDebugLocation(nullableObject.GetFieldValue(corClass, valueField)).Write(CilValue.FromCorValue(boxed.GetObject()));
+        return nullable;
     }
     private async Task<CilValue> CreateDefaultValueAsync(ResolvedCilType type, EvaluationMetadataResolver resolver, EvaluationContext context, EvaluationHandleScope handles) {
         var primitiveType = GetPrimitiveElementType(type.Primitive);
@@ -807,22 +843,24 @@ internal class CilInterpreter {
             : source.CorValue as ICorDebugBoxValue;
         return boxed ?? throw new InvalidCastException("The CIL value is not boxed");
     }
-    // A boxed value unboxes to an exact primitive or runtime type match only, enum/underlying and interface matches are not accepted
-    private static bool IsUnboxCompatible(ICorDebugValue boxedObject, ResolvedCilType targetType) {
-        var unwrapped = boxedObject.UnwrapDebugValue();
+    // A boxed value unboxes to an exact type match only, enum/underlying and interface matches are not accepted. The
+    // runtime reports the object of a boxed primitive as a VALUETYPE of the primitive's class (System.Int32 for a boxed
+    // int), so both a target named by type and a primitive one compare by class
+    private bool IsUnboxCompatible(ICorDebugValue boxedObject, ResolvedCilType targetType) {
+        ICorDebugClass? targetClass = null;
         if (targetType.Primitive != null) {
             var expectedElementType = GetPrimitiveElementType(targetType.Primitive);
-            return unwrapped is ICorDebugGenericValue generic && expectedElementType != null && generic.GetElementType() == expectedElementType;
-        }
-        if (targetType.RuntimeType != null) {
-            var exactType = boxedObject.GetExactType();
-            if (exactType.GetElementType() is not (CorElementType.VALUETYPE or CorElementType.CLASS))
+            if (expectedElementType == null || !primitiveTypes.TryGetClass(expectedElementType.Value, out targetClass))
                 return false;
-            var targetClass = targetType.RuntimeType.Class;
-            return exactType.GetClass().GetToken() == targetClass.GetToken()
-                && exactType.GetClass().GetModule() == targetClass.GetModule();
         }
-        return false;
+        else if (targetType.RuntimeType != null) {
+            targetClass = targetType.RuntimeType.Class;
+        }
+        if (targetClass == null)
+            return false;
+
+        var boxedClass = boxedObject.GetExactType().GetClass();
+        return boxedClass.GetToken() == targetClass.GetToken() && boxedClass.GetModule() == targetClass.GetModule();
     }
     private static bool IsReferenceType(ResolvedCilType type) {
         if (type.Primitive is PrimitiveTypeCode.String or PrimitiveTypeCode.Object || type.ElementType != null)

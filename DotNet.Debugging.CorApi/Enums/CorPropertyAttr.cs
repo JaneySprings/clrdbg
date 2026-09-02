@@ -2,9 +2,9 @@ namespace DotNet.Debugging.CorApi;
 
 // https://learn.microsoft.com/dotnet/core/unmanaged-api/metadata/enumerations/corpropertyattr-enumeration
 public enum CorPropertyAttr {
-    prSpecialName = 512,
-    prReservedMask = 62464,
-    prRTSpecialName = 1024,
-    prHasDefault = 4096,
-    prUnused = 59903
+    prSpecialName = 0x0200,
+    prReservedMask = 0xf400,
+    prRTSpecialName = 0x0400,
+    prHasDefault = 0x1000,
+    prUnused = 0xe9ff
 }

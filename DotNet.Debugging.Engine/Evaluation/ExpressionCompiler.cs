@@ -51,9 +51,15 @@ internal class ExpressionCompiler {
         InvalidateCacheOnModuleChange();
         var cacheKey = CreateCacheKey(expression, context, frame, preferredModule, hasException);
         if (compileCache.TryGetValue(cacheKey, out var entry)) {
+            // A method context serves every IL offset of the span it was compiled for, the same locals are in scope there
+            if (frame == null || entry.Constraints!.Value.AreSatisfied(CreateModuleId(preferredModule), frame.GetFunction().GetToken(), 1, GetILOffset(frame))) {
+                compileOrder.Remove(entry.Node);
+                compileOrder.AddFirst(entry.Node);
+                return entry.Value;
+            }
             compileOrder.Remove(entry.Node);
-            compileOrder.AddFirst(entry.Node);
-            return entry.Value;
+            compileCache.Remove(cacheKey);
+            entry.Value.Dispose();
         }
 
         var blocks = GetMetadataBlocks(preferredModule);
@@ -68,7 +74,7 @@ internal class ExpressionCompiler {
                 var errors = diagnostics.AsEnumerable().Where(it => it.Severity == DiagnosticSeverity.Error).Select(it => it.GetMessage());
                 throw new EvaluationException(string.Join("; ", errors));
             }
-            return AddToCache(cacheKey, new CompiledExpression(result.Assembly, result.TypeName, result.MethodName));
+            return AddToCache(cacheKey, new CompiledExpression(result.Assembly, result.TypeName, result.MethodName), evaluationContext.MethodContextReuseConstraints);
         }
         finally {
             diagnostics.Free();
@@ -78,18 +84,22 @@ internal class ExpressionCompiler {
     private static string CreateCacheKey(string expression, EvaluationContext context, ICorDebugILFrame? frame, ModuleInfo preferredModule, bool hasException) {
         if (context.RootValue != null)
             return $"type|{preferredModule.Id}|{context.RootValue.GetExactType().GetClass().GetToken()}|{hasException}|{expression}";
-
-        var ilOffset = EvaluationContextBase.NormalizeILOffset((uint)frame!.GetIP().pnOffset);
-        return $"method|{preferredModule.Id}|{frame!.GetFunction().GetToken()}|{ilOffset}|{hasException}|{expression}";
+        return $"method|{preferredModule.Id}|{frame!.GetFunction().GetToken()}|{hasException}|{expression}";
     }
-    private CompiledExpression AddToCache(string key, CompiledExpression compiled) {
+    private static int GetILOffset(ICorDebugILFrame frame) {
+        return (int)EvaluationContextBase.NormalizeILOffset((uint)frame.GetIP().pnOffset);
+    }
+    private static ModuleId CreateModuleId(ModuleInfo moduleInfo) {
+        return new ModuleId(moduleInfo.MetadataReader.Mvid, moduleInfo.Name);
+    }
+    private CompiledExpression AddToCache(string key, CompiledExpression compiled, MethodContextReuseConstraints? constraints) {
         if (compileCache.Count >= CacheCapacity) {
             var oldestKey = compileOrder.Last!.Value;
             compileOrder.RemoveLast();
             if (compileCache.Remove(oldestKey, out var oldest))
                 oldest.Value.Dispose();
         }
-        compileCache[key] = new CacheEntry(compiled, compileOrder.AddFirst(key));
+        compileCache[key] = new CacheEntry(compiled, compileOrder.AddFirst(key), constraints);
         return compiled;
     }
     // Everything compiled is bound to the module set, a newly loaded module changes what an expression resolves to
@@ -161,7 +171,7 @@ internal class ExpressionCompiler {
 
     private static Microsoft.CodeAnalysis.CSharp.ExpressionEvaluator.EvaluationContext CreateMethodContext(ImmutableArray<MetadataBlock> blocks, ICorDebugILFrame frame, ModuleInfo moduleInfo) {
         var function = frame.GetFunction();
-        var moduleId = new ModuleId(moduleInfo.MetadataReader.Mvid, moduleInfo.Name);
+        var moduleId = CreateModuleId(moduleInfo);
         var compilation = blocks.ToCompilation(moduleId: default, MakeAssemblyReferencesKind.AllAssemblies).AddReferences(intrinsicMethodsReference);
         var methodToken = function.GetToken();
         var methodHandle = (MethodDefinitionHandle)MetadataTokens.Handle(methodToken);
@@ -172,7 +182,7 @@ internal class ExpressionCompiler {
         var localSignatureToken = function.GetLocalVarSigToken();
         var localSignature = localSignatureToken == 0 ? default : (StandaloneSignatureHandle)MetadataTokens.Handle(localSignatureToken);
         var localInfo = metadataDecoder.GetLocalInfo(localSignature);
-        var ilOffset = EvaluationContextBase.NormalizeILOffset((uint)frame.GetIP().pnOffset);
+        var ilOffset = GetILOffset(frame);
         var pdbReader = moduleInfo.MetadataReader.PdbMetadataReader;
         var debugInfo = pdbReader == null
             ? MethodDebugInfo<TypeSymbol, LocalSymbol>.None
@@ -235,10 +245,13 @@ internal class ExpressionCompiler {
     private class CacheEntry {
         public CompiledExpression Value { get; }
         public LinkedListNode<string> Node { get; }
+        // The method and IL span the expression was compiled for, null for a type (DebuggerDisplay) context
+        public MethodContextReuseConstraints? Constraints { get; }
 
-        public CacheEntry(CompiledExpression value, LinkedListNode<string> node) {
+        public CacheEntry(CompiledExpression value, LinkedListNode<string> node, MethodContextReuseConstraints? constraints) {
             Value = value;
             Node = node;
+            Constraints = constraints;
         }
     }
 

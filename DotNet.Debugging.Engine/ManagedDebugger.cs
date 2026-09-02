@@ -252,7 +252,7 @@ public partial class ManagedDebugger {
         if (process == null)
             return result;
         try {
-            foreach (var thread in process.EnumerateThreads()) {
+            foreach (var thread in process.GetThreads()) {
                 var threadId = thread.GetId();
                 var isMain = threadId == mainThreadId;
                 // The OS name of the main thread is the executable's ('dotnet' on Linux), the host labels it instead
@@ -535,7 +535,7 @@ public partial class ManagedDebugger {
             CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            RedirectStandardInput = launchRequest.Console == ConsoleType.InternalConsole,
+            RedirectStandardInput = true,
         };
         foreach (var argument in launchRequest.Arguments)
             startInfo.ArgumentList.Add(argument);
@@ -546,8 +546,7 @@ public partial class ManagedDebugger {
 
         var started = Process.Start(startInfo) ?? throw new InvalidOperationException("The process could not be started");
         launchedProcess = started;
-        if (launchRequest.Console == ConsoleType.InternalConsole)
-            standardInput = started.StandardInput;
+        standardInput = started.StandardInput;
         _ = Task.Run(() => PumpOutputAsync(started.StandardOutput, isError: false));
         _ = Task.Run(() => PumpOutputAsync(started.StandardError, isError: true));
         DebuggerLoggingService.LogMessage($"Process created suspended with PID: {started.Id}");
@@ -673,10 +672,10 @@ public partial class ManagedDebugger {
     }
 
     private static IEnumerable<ICorDebugFrame> EnumerateFrames(ICorDebugThread thread) {
-        foreach (var chain in thread.EnumerateChains()) {
+        foreach (var chain in thread.GetChains()) {
             if (!chain.IsManaged())
                 continue;
-            foreach (var frame in chain.EnumerateFrames())
+            foreach (var frame in chain.GetFrames())
                 yield return frame;
         }
     }

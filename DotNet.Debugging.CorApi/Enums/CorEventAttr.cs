@@ -1,7 +1,7 @@
 namespace DotNet.Debugging.CorApi;
 
 public enum CorEventAttr {
-    evSpecialName = 512,
-    evReservedMask = 1024,
+    evSpecialName = 0x0200,
+    evReservedMask = 0x0400,
     evRTSpecialName = evReservedMask
 }

@@ -9,7 +9,7 @@ public readonly record struct InterfaceImplToken {
 
     public bool IsNil => Rid == 0;
 
-    public static readonly InterfaceImplToken Nil = new InterfaceImplToken(150994944u);
+    public static readonly InterfaceImplToken Nil = new InterfaceImplToken(0x09000000u);
 
     public InterfaceImplToken(uint value) {
         Value = value;

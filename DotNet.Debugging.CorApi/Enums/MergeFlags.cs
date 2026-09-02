@@ -2,8 +2,8 @@ namespace DotNet.Debugging.CorApi;
 
 public enum MergeFlags {
     None = 0,
-    MergeManifest = 1,
-    DropMemberRefCAs = 2,
-    NoDupCheck = 4,
-    MergeExportedTypes = 8
+    MergeManifest = 0x00000001,
+    DropMemberRefCAs = 0x00000002,
+    NoDupCheck = 0x00000004,
+    MergeExportedTypes = 0x00000008
 }

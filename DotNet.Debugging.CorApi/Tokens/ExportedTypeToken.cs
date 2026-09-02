@@ -9,7 +9,7 @@ public readonly record struct ExportedTypeToken {
 
     public bool IsNil => Rid == 0;
 
-    public static readonly ExportedTypeToken Nil = new ExportedTypeToken(654311424u);
+    public static readonly ExportedTypeToken Nil = new ExportedTypeToken(0x27000000u);
 
     public ExportedTypeToken(uint value) {
         Value = value;

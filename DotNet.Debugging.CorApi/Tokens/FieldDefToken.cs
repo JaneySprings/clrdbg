@@ -9,7 +9,7 @@ public readonly record struct FieldDefToken {
 
     public bool IsNil => Rid == 0;
 
-    public static readonly FieldDefToken Nil = new FieldDefToken(67108864u);
+    public static readonly FieldDefToken Nil = new FieldDefToken(0x04000000u);
 
     public FieldDefToken(uint value) {
         Value = value;

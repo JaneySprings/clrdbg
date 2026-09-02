@@ -3,19 +3,16 @@ using System.Runtime.InteropServices;
 namespace DotNet.Debugging.CorApi.Extensions;
 
 public static class CorDebugILFrameExtensions {
-    public static IEnumerable<ICorDebugValue> EnumerateArguments(this ICorDebugILFrame instance) {
-        Marshal.ThrowExceptionForHR(instance.TryEnumerateArguments(out var ppValueEnum));
-        return EnumerateArgumentsCore(ppValueEnum);
+    // One value per slot, null for a slot the runtime cannot read at this instruction (a variable optimized away)
+    public static ICorDebugValue?[] GetArguments(this ICorDebugILFrame instance) {
+        Marshal.ThrowExceptionForHR(instance.TryEnumerateArguments(out var values));
+        return GetValues(values);
     }
 
-    public static IEnumerable<ICorDebugValue> EnumerateLocalVariables(this ICorDebugILFrame instance) {
-        Marshal.ThrowExceptionForHR(instance.TryEnumerateLocalVariables(out var ppValueEnum));
-        return EnumerateLocalVariablesCore(ppValueEnum);
+    public static ICorDebugValue?[] GetLocalVariables(this ICorDebugILFrame instance) {
+        Marshal.ThrowExceptionForHR(instance.TryEnumerateLocalVariables(out var values));
+        return GetValues(values);
     }
-
-    public static ICorDebugValue[] GetArguments(this ICorDebugILFrame instance) => instance.EnumerateArguments().ToArray();
-
-    public static ICorDebugValue[] GetLocalVariables(this ICorDebugILFrame instance) => instance.EnumerateLocalVariables().ToArray();
 
     public static (int pnOffset, CorDebugMappingResult pMappingResult) GetIP(this ICorDebugILFrame instance) {
         Marshal.ThrowExceptionForHR(instance.TryGetIP(out var pnOffset, out var pMappingResult));
@@ -26,35 +23,23 @@ public static class CorDebugILFrameExtensions {
         Marshal.ThrowExceptionForHR(instance.TrySetIP(checked((uint)nOffset)));
     }
 
-    private static IEnumerable<ICorDebugValue> EnumerateArgumentsCore(ICorDebugValueEnum enumerator) {
-        while (true) {
-            var array = new ICorDebugValue[1];
-            var errorCode = enumerator.TryNext(1u, array, out var pceltFetched);
-            if (pceltFetched == 0) {
-                yield break;
-            }
-            Marshal.ThrowExceptionForHR(errorCode);
-            if (pceltFetched != 1) {
+    // 'Next' stops at a slot it cannot read, reports the ones before it and moves past it, so the fetch
+    // resumes behind the unreadable slot until every slot is accounted for
+    private static ICorDebugValue?[] GetValues(ICorDebugValueEnum values) {
+        Marshal.ThrowExceptionForHR(values.TryGetCount(out var count));
+        var result = new ICorDebugValue?[count];
+        var position = 0;
+        while (position < result.Length) {
+            var remaining = new ICorDebugValue[result.Length - position];
+            var hr = values.TryNext((uint)remaining.Length, remaining, out var fetched);
+            Array.Copy(remaining, 0, result, position, checked((int)fetched));
+            position += (int)fetched;
+            if (hr >= 0)
                 break;
-            }
-            yield return array[0];
+            if (hr != Cor.CORDBG_E_IL_VAR_NOT_AVAILABLE)
+                Marshal.ThrowExceptionForHR(hr);
+            position++;
         }
-        throw new InvalidOperationException("Native debugger enumerator returned an invalid item count.");
-    }
-
-    private static IEnumerable<ICorDebugValue> EnumerateLocalVariablesCore(ICorDebugValueEnum enumerator) {
-        while (true) {
-            var array = new ICorDebugValue[1];
-            var errorCode = enumerator.TryNext(1u, array, out var pceltFetched);
-            if (pceltFetched == 0) {
-                yield break;
-            }
-            Marshal.ThrowExceptionForHR(errorCode);
-            if (pceltFetched != 1) {
-                break;
-            }
-            yield return array[0];
-        }
-        throw new InvalidOperationException("Native debugger enumerator returned an invalid item count.");
+        return result;
     }
 }

@@ -11,7 +11,7 @@ public partial interface ICLRMetaHost {
     int TryGetRuntime(string pwzVersion, ref Guid riid, [MarshalUsing(typeof(UniqueComInterfaceMarshaller<object>))] out object? ppRuntime);
 
     [PreserveSig]
-    int TryGetVersionFromFile(string pwzFilePath, [Out][MarshalUsing(CountElementName = "pcchBuffer")] string[] pwzBuffer, ref uint pcchBuffer);
+    int TryGetVersionFromFile(string pwzFilePath, [Out][MarshalUsing(CountElementName = "pcchBuffer")] char[] pwzBuffer, ref uint pcchBuffer);
 
     [PreserveSig]
     int TryEnumerateInstalledRuntimes(out nint ppEnumerator);

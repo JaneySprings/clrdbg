@@ -2,11 +2,11 @@ namespace DotNet.Debugging.CorApi;
 
 // https://learn.microsoft.com/dotnet/core/unmanaged-api/metadata/enumerations/corvalidatormoduletype-enumeration
 public enum CorValidatorModuleType {
-    ValidatorModuleTypeInvalid = 0,
-    ValidatorModuleTypeMin = 1,
+    ValidatorModuleTypeInvalid = 0x0,
+    ValidatorModuleTypeMin = 0x00000001,
     ValidatorModuleTypePE = ValidatorModuleTypeMin,
-    ValidatorModuleTypeObj = 2,
-    ValidatorModuleTypeEnc = 3,
-    ValidatorModuleTypeIncr = 4,
+    ValidatorModuleTypeObj = 0x00000002,
+    ValidatorModuleTypeEnc = 0x00000003,
+    ValidatorModuleTypeIncr = 0x00000004,
     ValidatorModuleTypeMax = ValidatorModuleTypeIncr
 }

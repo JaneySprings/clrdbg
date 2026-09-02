@@ -9,7 +9,7 @@ public readonly record struct MethodDefToken {
 
     public bool IsNil => Rid == 0;
 
-    public static readonly MethodDefToken Nil = new MethodDefToken(100663296u);
+    public static readonly MethodDefToken Nil = new MethodDefToken(0x06000000u);
 
     public MethodDefToken(uint value) {
         Value = value;

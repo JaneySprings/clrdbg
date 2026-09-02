@@ -141,22 +141,45 @@ internal class CilValue {
             CorElementType.U8 => BitConverter.ToUInt64(data),
             CorElementType.R4 => BitConverter.ToSingle(data),
             CorElementType.R8 => BitConverter.ToDouble(data),
-            CorElementType.I => IntPtr.Size == 8 ? BitConverter.ToInt64(data) : BitConverter.ToInt32(data),
-            CorElementType.U => IntPtr.Size == 8 ? BitConverter.ToUInt64(data) : BitConverter.ToUInt32(data),
+            CorElementType.I => data.Length == 8 ? BitConverter.ToInt64(data) : BitConverter.ToInt32(data),
+            CorElementType.U => data.Length == 8 ? BitConverter.ToUInt64(data) : BitConverter.ToUInt32(data),
             _ => null
         };
     }
-    // Enums and single-field structs are integers to the interpreter
+    // Enums and single-field structs are integers to the interpreter. An enum is read through its 'value__' field,
+    // whose primitive type carries the sign of the underlying type (an 'sbyte' member -1 must not read as 255)
     private bool TryReadValueTypeInteger(out long value) {
         value = 0;
         if (CorValue?.UnwrapDebugValue() is not ICorDebugGenericValue generic || generic.GetElementType() != CorElementType.VALUETYPE)
             return false;
+        if (generic is ICorDebugObjectValue objectValue && TryReadEnumValue(objectValue, out value))
+            return true;
         var data = generic.GetValueAsBytes();
         switch (data.Length) {
             case 1: value = data[0]; return true;
             case 2: value = BitConverter.ToInt16(data); return true;
             case 4: value = BitConverter.ToInt32(data); return true;
             case 8: value = BitConverter.ToInt64(data); return true;
+        }
+        return false;
+    }
+    private static bool TryReadEnumValue(ICorDebugObjectValue objectValue, out long value) {
+        value = 0;
+        var corClass = objectValue.GetClass();
+        var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
+        var valueField = metadataImport.EnumFieldsWithName(corClass.GetToken(), "value__").FirstOrDefault();
+        if (valueField.IsNil)
+            return false;
+        switch (ReadPrimitive(objectValue.GetFieldValue(corClass, valueField))) {
+            case sbyte it: value = it; return true;
+            case byte it: value = it; return true;
+            case short it: value = it; return true;
+            case ushort it: value = it; return true;
+            case int it: value = it; return true;
+            case uint it: value = it; return true;
+            case long it: value = it; return true;
+            case ulong it: value = unchecked((long)it); return true;
+            case char it: value = it; return true;
         }
         return false;
     }

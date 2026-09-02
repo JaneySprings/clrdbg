@@ -9,7 +9,7 @@ public readonly record struct StringToken {
 
     public bool IsNil => Rid == 0;
 
-    public static readonly StringToken Nil = new StringToken(1879048192u);
+    public static readonly StringToken Nil = new StringToken(0x70000000u);
 
     public StringToken(uint value) {
         Value = value;

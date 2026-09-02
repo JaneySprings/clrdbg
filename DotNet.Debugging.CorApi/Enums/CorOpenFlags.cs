@@ -2,16 +2,16 @@ namespace DotNet.Debugging.CorApi;
 
 // https://learn.microsoft.com/dotnet/core/unmanaged-api/metadata/enumerations/coropenflags-enumeration
 public enum CorOpenFlags {
-    ofRead = 0,
-    ofWrite = 1,
+    ofRead = 0x00000000,
+    ofWrite = 0x00000001,
     ofReadWriteMask = ofWrite,
-    ofCopyMemory = 2,
-    ofReadOnly = 16,
-    ofTakeOwnership = 32,
-    ofNoTypeLib = 128,
-    ofNoTransform = 4096,
-    ofReserved1 = 256,
-    ofReserved2 = 512,
-    ofReserved3 = 1024,
-    ofReserved = -4288
+    ofCopyMemory = 0x00000002,
+    ofReadOnly = 0x00000010,
+    ofTakeOwnership = 0x00000020,
+    ofNoTypeLib = 0x00000080,
+    ofNoTransform = 0x00001000,
+    ofReserved1 = 0x00000100,
+    ofReserved2 = 0x00000200,
+    ofReserved3 = 0x00000400,
+    ofReserved = unchecked((int)0xffffef40)
 }

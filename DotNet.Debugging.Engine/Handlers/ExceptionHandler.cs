@@ -145,7 +145,7 @@ public partial class ManagedDebugger {
             if (exception.UnwrapDebugValue() is not ICorDebugExceptionObjectValue exceptionObject)
                 return null;
             var lines = new List<string>();
-            foreach (var frame in exceptionObject.EnumerateExceptionCallStack()) {
+            foreach (var frame in exceptionObject.GetExceptionCallStack()) {
                 // A frame without a module cannot be resolved (e.g. a dynamic method)
                 if (frame.pModule == null)
                     continue;

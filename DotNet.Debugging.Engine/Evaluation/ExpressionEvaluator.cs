@@ -1,5 +1,6 @@
 using DotNet.Debugging.CorApi;
 using DotNet.Debugging.CorApi.Extensions;
+using DotNet.Debugging.Engine.Logging;
 
 namespace DotNet.Debugging.Engine.Evaluation;
 
@@ -27,6 +28,8 @@ internal class ExpressionEvaluator {
             return await interpreter.InterpretAsync(compiled, context);
         }
         catch (Exception ex) {
+            // The client gets the message alone, the log keeps the interpreter's stack for a failure that needs a look
+            DebuggerLoggingService.LogError($"Evaluation of '{expression}' failed", ex);
             return EvaluationResult.FromError($"error: {ex.Message}");
         }
     }

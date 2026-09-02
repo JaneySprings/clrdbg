@@ -9,7 +9,7 @@ public readonly record struct MethodSpecToken {
 
     public bool IsNil => Rid == 0;
 
-    public static readonly MethodSpecToken Nil = new MethodSpecToken(721420288u);
+    public static readonly MethodSpecToken Nil = new MethodSpecToken(0x2b000000u);
 
     public MethodSpecToken(uint value) {
         Value = value;

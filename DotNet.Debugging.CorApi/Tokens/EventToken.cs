@@ -9,7 +9,7 @@ public readonly record struct EventToken {
 
     public bool IsNil => Rid == 0;
 
-    public static readonly EventToken Nil = new EventToken(335544320u);
+    public static readonly EventToken Nil = new EventToken(0x14000000u);
 
     public EventToken(uint value) {
         Value = value;

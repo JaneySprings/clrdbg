@@ -5,28 +5,7 @@ namespace DotNet.Debugging.CorApi.Extensions;
 public static class CorDebugModuleExtensions {
     public static string GetName(this ICorDebugModule instance) {
         Marshal.ThrowExceptionForHR(instance.TryGetName(0u, out var pcchName, null));
-        if (pcchName == 0) {
-            return string.Empty;
-        }
-        for (var i = 0; i < 3; i++) {
-            var num = pcchName;
-            char[] array;
-            int num2;
-            checked {
-                array = new char[(int)num];
-                Marshal.ThrowExceptionForHR(instance.TryGetName(num, out var pcchName2, array));
-                if (pcchName2 > num) {
-                    pcchName = pcchName2;
-                    continue;
-                }
-                num2 = (int)pcchName2;
-            }
-            if (num2 > 0 && array[num2 - 1] == '\0') {
-                num2--;
-            }
-            return new string(array, 0, num2);
-        }
-        throw new InvalidOperationException("Native buffer size did not stabilize.");
+        return NativeStrings.Read(pcchName, (char[] buffer, out uint length) => instance.TryGetName((uint)buffer.Length, out length, buffer));
     }
 
     public static CordbAddress GetBaseAddress(this ICorDebugModule instance) {
@@ -42,11 +21,6 @@ public static class CorDebugModuleExtensions {
     public static ICorDebugFunction GetFunctionFromToken(this ICorDebugModule instance, MethodDefToken methodDef) {
         Marshal.ThrowExceptionForHR(instance.TryGetFunctionFromToken(methodDef, out var ppFunction));
         return ppFunction;
-    }
-
-    public static object? GetMetaDataInterface(this ICorDebugModule instance, ref Guid riid) {
-        Marshal.ThrowExceptionForHR(instance.TryGetMetaDataInterface(ref riid, out var ppObj));
-        return ppObj;
     }
 
     public static int GetSize(this ICorDebugModule instance) {

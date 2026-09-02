@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using DotNet.Debugging.CorApi;
 using DotNet.Debugging.CorApi.Extensions;
 
@@ -20,28 +19,16 @@ internal static class CorDebugValueExtensions {
         throw new InvalidOperationException("The value is not an object");
     }
 
-    public static byte[] GetValueAsBytes(this ICorDebugGenericValue value) {
-        var size = value.GetSize();
-        var buffer = Marshal.AllocHGlobal(size);
-        try {
-            value.GetValue(buffer);
-            var result = new byte[size];
-            Marshal.Copy(buffer, result, 0, size);
-            return result;
-        }
-        finally {
-            Marshal.FreeHGlobal(buffer);
-        }
+    // The runtime copies the value in and out of the pinned array, no native buffer is needed in between
+    public static unsafe byte[] GetValueAsBytes(this ICorDebugGenericValue value) {
+        var result = new byte[value.GetSize()];
+        fixed (byte* buffer = result)
+            value.GetValue((nint)buffer);
+        return result;
     }
-    public static void SetValueFromBytes(this ICorDebugGenericValue value, byte[] bytes) {
-        var buffer = Marshal.AllocHGlobal(bytes.Length);
-        try {
-            Marshal.Copy(bytes, 0, buffer, bytes.Length);
-            value.SetValue(buffer);
-        }
-        finally {
-            Marshal.FreeHGlobal(buffer);
-        }
+    public static unsafe void SetValueFromBytes(this ICorDebugGenericValue value, byte[] bytes) {
+        fixed (byte* buffer = bytes)
+            value.SetValue((nint)buffer);
     }
 
     // Reads an instance, static or literal field declared on the object's type or one of its base types

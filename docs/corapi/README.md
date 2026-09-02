@@ -35,11 +35,12 @@ reference page — that page is the documentation for the type and its members.
 **Throwing convenience layer.** The `DotNet.Debugging.CorApi.Extensions` namespace adds
 classic extension methods over the interfaces the engine uses. They wrap the `Try*`
 calls with `Marshal.ThrowExceptionForHR`, hide the two-call buffer-sizing dance of
-native string getters, and adapt the COM enumerator interfaces into `IEnumerable<T>`:
+native string getters (`NativeStrings`), and fetch the items of a COM enumerator in one
+round trip (`CorDebugEnumExtensions.ToArray`: the count, then a single `Next`):
 
 ```csharp
-var name = appDomain.GetName();                    // TryGetName + throw on failure
-foreach (var assembly in appDomain.EnumerateAssemblies()) { ... }
+var name = module.GetName();                       // TryGetName + throw on failure
+foreach (var chain in thread.GetChains()) { ... }  // TryEnumerateChains + GetCount + Next
 ```
 
 Call sites choose per call: `TryXxx` when an HRESULT is an expected outcome (a common

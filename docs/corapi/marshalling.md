@@ -70,7 +70,9 @@ Three properties of that object model matter in daily use:
   the caller will re-cast to an arbitrary type, and a *fresh, non-cached* wrapper is
   required — `ICorDebugModule.TryGetMetaDataInterface(ref Guid riid, out object ppObj)`
   and `ICorDebugModule3.TryCreateReaderForInMemorySymbols` are the notable sites. The
-  returned `object` is then cast to `IMetaDataImport`, `IMetaDataTables`, etc.
+  returned `object` is then cast to `IMetaDataImport`, `IMetaDataTables`, etc. — and
+  kept per module by `GetMetaDataInterface<T>()`, so the QueryInterface and the wrapper
+  are paid once rather than on every metadata lookup.
 
 Every method is `[PreserveSig] int TryXxx(...)`: the generator is told *not* to convert
 HRESULTs into exceptions, so failure handling stays explicit at the call site (and
