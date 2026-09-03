@@ -10,8 +10,8 @@ public class LaunchDebugAgent : BaseDebugAgent<LaunchConfiguration> {
 
     public LaunchDebugAgent(LaunchConfiguration configuration, DebugSession debugSession) : base(configuration, debugSession) { }
 
-    public override void Connect(ManagedDebugger debugger) {
-        debugger.Launch(Configuration.GetLaunchRequest());
+    public override Task ConnectAsync(ManagedDebugger debugger) {
+        return debugger.LaunchAsync(Configuration.GetLaunchRequest());
     }
 
     public RunInTerminalRequest CreateRunInTerminalRequest(ConsoleType console) {

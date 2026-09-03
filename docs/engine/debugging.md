@@ -7,11 +7,12 @@ this page is about what the engine does with them.
 
 ## 1. Starting the debuggee
 
-Nothing happens on `Launch`, `Attach` or `AttachRemote` — they only record the request, because
-a client sends its breakpoints after the launch request and expects them bound from the very
-first line. The work starts in `ConfigurationDoneAsync`:
+`LaunchAsync`, `AttachAsync` and `AttachRemote` start the debuggee the moment they are called, so
+the host calls them once the breakpoints are set: a client sends its breakpoints after the launch
+request and expects them bound from the very first line, which is why the adapter starts the
+debuggee on `configurationDone` rather than on `launch`.
 
-- **Launch** (`LaunchProcessAsync`): the program is started with `DOTNET_DefaultDiagnosticPortSuspend=1`
+- **Launch** (`LaunchAsync` → `LaunchProcessAsync`): the program is started with `DOTNET_DefaultDiagnosticPortSuspend=1`
   and redirected output (forwarded through `OnOutput`). The runtime then waits for a diagnostics
   client, which gives the debugger time to register for its startup: `DbgShimHost.AttachAsync`
   registers with dbgshim *before* `DiagnosticsClientHelper.ResumeRuntimeAsync` lets the runtime go,
@@ -20,9 +21,9 @@ first line. The work starts in `ConfigurationDoneAsync`:
 - **Launch in a terminal** (`LaunchInTerminalAsync`): the host starts the program through the
   `OnTerminalLaunchRequested` event (the adapter's `runInTerminal` reverse request) and reports the
   pid in `LaunchRequest.ProcessId`; the rest is the launch path above.
-- **Attach** (`AttachAsync`): the same registration by pid; the resume is attempted and its failure
-  ignored, since a running process has nothing to resume.
-- **Remote attach** (`AttachToRemote`, mobile/maccatalyst): `DbgShimHost.CreateRemote` builds an
+- **Attach** (`AttachAsync` → `AttachToProcessAsync`): the same registration by pid; the resume is
+  attempted and its failure ignored, since a running process has nothing to resume.
+- **Remote attach** (`AttachRemote`, mobile/maccatalyst): `DbgShimHost.CreateRemote` builds an
   `ICorDebug` whose transport listens or connects per `RemoteAttachInfo`; `onListenerReady` lets
   the host launch the on-device app, and the `ICorDebugProcess` arrives later through the
   `CreateProcess` callback (`ProcessHandler`) instead of being returned.

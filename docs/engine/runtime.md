@@ -8,8 +8,8 @@ The request-by-request walk-through is in [debugging.md](debugging.md).
 
 ## 1. Obtaining the process
 
-All three start paths are deferred: `Launch`, `Attach` and `AttachRemote` store their argument and
-`ConfigurationDoneAsync` acts on it, after the client has sent its breakpoints.
+All three start paths — `LaunchAsync`, `AttachAsync` and `AttachRemote` — start the debuggee when
+called; the host calls them after the client has sent its breakpoints (the adapter's `configurationDone`).
 
 ### Local processes: `DbgShimHost.AttachAsync`
 

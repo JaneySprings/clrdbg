@@ -7,7 +7,8 @@ namespace DotNet.Debugging.Adapter;
 
 public interface IDebugAgent : IDisposable {
     public BaseConfiguration Configuration { get; }
-    public void Connect(ManagedDebugger debugger);
+    // Starts the debuggee: the launch, the attach or the wait for a remote one
+    public Task ConnectAsync(ManagedDebugger debugger);
 }
 
 public abstract class BaseDebugAgent<TConfiguration> : IDebugAgent where TConfiguration : BaseConfiguration {
@@ -28,7 +29,7 @@ public abstract class BaseDebugAgent<TConfiguration> : IDebugAgent where TConfig
         session = debugSession;
     }
 
-    public abstract void Connect(ManagedDebugger debugger);
+    public abstract Task ConnectAsync(ManagedDebugger debugger);
     public void Dispose() {
         foreach (var disposable in Disposables) {
             try {

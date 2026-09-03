@@ -12,35 +12,36 @@ namespace DotNet.Debugging.Adapter;
 public class MobileDebugAgent : BaseDebugAgent<LaunchConfiguration> {
     public MobileDebugAgent(LaunchConfiguration configuration, DebugSession debugSession) : base(configuration, debugSession) { }
 
-    public override void Connect(ManagedDebugger debugger) {
+    public override Task ConnectAsync(ManagedDebugger debugger) {
         ArgumentNullException.ThrowIfNull(Configuration.MobileOptions);
-        debugger.AttachRemote(GetAttachInfo(), onListenerReady: () => {
-            Logger.Debug($"Debugger listening on {Configuration.MobileOptions.Address}:{Configuration.MobileOptions.Port}");
 
-            Configuration.EnvironmentVariables.Add("CORECLR_ENABLE_PROFILING", "1");
-            Configuration.EnvironmentVariables.Add("CORECLR_PROFILER", "{9DC623E8-C88F-4FD5-AD99-77E67E1D9631}");
-            Configuration.EnvironmentVariables.Add("CORECLR_REMOTE_DEBUGGER_IP", Configuration.MobileOptions.Address!);
-            Configuration.EnvironmentVariables.Add("CORECLR_REMOTE_DEBUGGER_PORT", Configuration.MobileOptions.Port.ToString());
-            Configuration.EnvironmentVariables.Add("CORECLR_REMOTE_DEBUGGER_ISSERVER", Configuration.MobileOptions.IsServer ? "0" : "1");
-            Configuration.EnvironmentVariables.Add("DOTNET_MODIFIABLE_ASSEMBLIES", "debug");
+        var attachInfo = GetRemoteAttachInfo();
+        Configuration.EnvironmentVariables.Add("CORECLR_ENABLE_PROFILING", "1");
+        Configuration.EnvironmentVariables.Add("CORECLR_PROFILER", "{9DC623E8-C88F-4FD5-AD99-77E67E1D9631}");
+        Configuration.EnvironmentVariables.Add("CORECLR_REMOTE_DEBUGGER_IP", attachInfo.Address);
+        Configuration.EnvironmentVariables.Add("CORECLR_REMOTE_DEBUGGER_PORT", attachInfo.Port.ToString());
+        Configuration.EnvironmentVariables.Add("CORECLR_REMOTE_DEBUGGER_ISSERVER", attachInfo.IsServer ? "0" : "1");
+        Configuration.EnvironmentVariables.Add("DOTNET_MODIFIABLE_ASSEMBLIES", "debug");
+        Logger.Debug($"Debugger listening on {attachInfo.Address}:{attachInfo.Port}");
 
-            switch (Configuration.MobileOptions.Platform) {
-                case DebugTarget.Android:
-                    LaunchAndroid();
-                    break;
-                case DebugTarget.IOS:
-                    LaunchAppleMobile();
-                    break;
-                case DebugTarget.Maccatalyst:
-                    LaunchMacCatalyst();
-                    break;
-                case DebugTarget.CoreClr:
-                    throw new NotSupportedException();
-            }
-        });
+        switch (Configuration.MobileOptions.Platform) {
+            case DebugTarget.Android:
+                ConnectAndroid(debugger, attachInfo);
+                break;
+            case DebugTarget.IOS:
+                ConnectAppleMobile(debugger, attachInfo);
+                break;
+            case DebugTarget.Maccatalyst:
+                ConnectMacCatalyst(debugger, attachInfo);
+                break;
+            case DebugTarget.CoreClr:
+                throw new NotSupportedException();
+        }
+
+        return Task.CompletedTask;
     }
 
-    private void LaunchMacCatalyst() {
+    private void ConnectMacCatalyst(ManagedDebugger debugger, RemoteAttachInfo attachInfo) {
         var libraryName = "libvsdbgremotecoreclrtarget.dylib";
         var libraryPath = Path.Combine(Configuration.Program, "Contents", "MonoBundle", libraryName);
         if (!File.Exists(libraryPath))
@@ -48,16 +49,18 @@ public class MobileDebugAgent : BaseDebugAgent<LaunchConfiguration> {
 
         Configuration.EnvironmentVariables.Add("CORECLR_PROFILER_PATH", libraryName);
 
-        var appProcess = new ProcessRunner(AppleSdkLocator.GetOpenPath(), new ProcessArgumentBuilder()
-            .Append("-n", "-W")
-            .Append(Configuration.EnvironmentVariables, (kvp) => $"--env \"{kvp.Key}={kvp.Value}\"")
-            .AppendQuoted(Configuration.Program), ProcessLogger)
-            .Start();
+        debugger.AttachRemote(attachInfo, onListenerReady: () => {
+            var appProcess = new ProcessRunner(AppleSdkLocator.GetOpenPath(), new ProcessArgumentBuilder()
+                .Append("-n", "-W")
+                .Append(Configuration.EnvironmentVariables, (kvp) => $"--env \"{kvp.Key}={kvp.Value}\"")
+                .AppendQuoted(Configuration.Program), ProcessLogger)
+                .Start();
 
-        appProcess.AddFinalizer(() => Protocol.SendEvent(new TerminatedEvent()));
-        Disposables.Add(() => SafeExtensions.Invoke(() => appProcess.Terminate(entireProcessTree: true)));
+            appProcess.AddFinalizer(() => Protocol.SendEvent(new TerminatedEvent()));
+            Disposables.Add(() => SafeExtensions.Invoke(() => appProcess.Terminate(entireProcessTree: true)));
+        });
     }
-    private void LaunchAppleMobile() {
+    private void ConnectAppleMobile(ManagedDebugger debugger, RemoteAttachInfo attachInfo) {
         var libraryName = "libvsdbgremotecoreclrtarget.dylib";
         var libraryPath = Path.Combine(Configuration.Program, libraryName);
         if (!File.Exists(libraryPath))
@@ -75,25 +78,30 @@ public class MobileDebugAgent : BaseDebugAgent<LaunchConfiguration> {
             Disposables.Add(() => proxyProcess.Terminate());
 
             MonoLauncher.InstallDev(Configuration.MobileOptions.Device, Configuration.Program, ProcessLogger);
-            var devProcess = MonoLauncher.LaunchDev(
-                Configuration.MobileOptions.Device, Configuration.Program,
-                Configuration.EnvironmentVariables, ProcessLogger
-            ).Start();
-
-            devProcess.AddFinalizer(() => Protocol.SendEvent(new TerminatedEvent()));
-            Disposables.Add(() => SafeExtensions.Invoke(() => devProcess.Terminate()));
         }
-        else {
-            var simProcess = MonoLauncher.LaunchSim(
-                Configuration.MobileOptions.Device, Configuration.Program,
-                Configuration.EnvironmentVariables, ProcessLogger
-            ).Start();
 
-            simProcess.AddFinalizer(() => Protocol.SendEvent(new TerminatedEvent()));
-            Disposables.Add(() => SafeExtensions.Invoke(() => simProcess.Terminate(entireProcessTree: true)));
-        }
+        debugger.AttachRemote(attachInfo, onListenerReady: () => {
+            if (Configuration.MobileOptions.IsDevice) {
+                var devProcess = MonoLauncher.LaunchDev(
+                    Configuration.MobileOptions.Device, Configuration.Program,
+                    Configuration.EnvironmentVariables, ProcessLogger
+                ).Start();
+
+                devProcess.AddFinalizer(() => Protocol.SendEvent(new TerminatedEvent()));
+                Disposables.Add(() => SafeExtensions.Invoke(() => devProcess.Terminate()));
+            }
+            else {
+                var simProcess = MonoLauncher.LaunchSim(
+                    Configuration.MobileOptions.Device, Configuration.Program,
+                    Configuration.EnvironmentVariables, ProcessLogger
+                ).Start();
+
+                simProcess.AddFinalizer(() => Protocol.SendEvent(new TerminatedEvent()));
+                Disposables.Add(() => SafeExtensions.Invoke(() => simProcess.Terminate(entireProcessTree: true)));
+            }
+        });
     }
-    private void LaunchAndroid() {
+    private void ConnectAndroid(ManagedDebugger debugger, RemoteAttachInfo attachInfo) {
         ArgumentNullException.ThrowIfNullOrEmpty(Configuration.MobileOptions?.Device);
         Configuration.EnvironmentVariables.Add("CORECLR_PROFILER_PATH", "libvsdbgremotecoreclrtarget.so");
 
@@ -107,6 +115,8 @@ public class MobileDebugAgent : BaseDebugAgent<LaunchConfiguration> {
 
         foreach (var port in forwardedPorts)
             AndroidDebugBridge.Forward(Configuration.MobileOptions.Device, port);
+
+        Disposables.Add(() => AndroidDebugBridge.RemoveForward(Configuration.MobileOptions.Device));
         if (Configuration.MobileOptions.UninstallApp)
             AndroidDebugBridge.Uninstall(Configuration.MobileOptions.Device, applicationId, ProcessLogger);
 
@@ -116,12 +126,13 @@ public class MobileDebugAgent : BaseDebugAgent<LaunchConfiguration> {
         AndroidDebugBridge.Shell(Configuration.MobileOptions.Device, "am", "set-debug-app", applicationId);
         AndroidFastDev.TryPushAssemblies(Configuration.MobileOptions.Device, Configuration.MobileOptions.AssetsPath, applicationId, ProcessLogger);
         AndroidFastDev.TrySetEnvironment(Configuration.MobileOptions.Device, Configuration.EnvironmentVariables, Configuration.MobileOptions.AssetsPath, applicationId, ProcessLogger);
-        AndroidDebugBridge.Launch(Configuration.MobileOptions.Device, applicationId, ProcessLogger);
 
-        AndroidDebugBridge.Flush(Configuration.MobileOptions.Device);
-        var logcatProcess = AndroidDebugBridge.Logcat(Configuration.MobileOptions.Device, applicationId, ProcessLogger);
-        Disposables.Add(() => logcatProcess.Terminate());
-        Disposables.Add(() => AndroidDebugBridge.RemoveForward(Configuration.MobileOptions.Device));
+        debugger.AttachRemote(attachInfo, onListenerReady: () => {
+            AndroidDebugBridge.Launch(Configuration.MobileOptions.Device, applicationId, ProcessLogger);
+            AndroidDebugBridge.Flush(Configuration.MobileOptions.Device);
+            var logcatProcess = AndroidDebugBridge.Logcat(Configuration.MobileOptions.Device, applicationId, ProcessLogger);
+            Disposables.Add(() => logcatProcess.Terminate());
+        });
     }
 
     private string GetCoreclrHostLibrary() {
@@ -137,7 +148,7 @@ public class MobileDebugAgent : BaseDebugAgent<LaunchConfiguration> {
 
         return libraryPath;
     }
-    private RemoteAttachInfo GetAttachInfo() {
+    private RemoteAttachInfo GetRemoteAttachInfo() {
         ArgumentNullException.ThrowIfNull(Configuration.MobileOptions);
 
         if (Configuration.MobileOptions.Port <= 0)

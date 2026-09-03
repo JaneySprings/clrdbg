@@ -19,9 +19,8 @@ public partial class DebugSession {
                 session.JustMyCode = configuration.JustMyCode;
                 session.RequireExactSource = configuration.RequireExactSource;
                 session.EnableStepFiltering = configuration.EnableStepFiltering;
-                debugAgent.Connect(session);
             });
-            // Breakpoints arrive after this event and the attach itself is deferred until 'ConfigurationDone'
+            // Breakpoints arrive after this event, the attach itself is made on 'ConfigurationDone'
             Protocol.SendEvent(new InitializedEvent());
             return new AttachResponse();
         });

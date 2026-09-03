@@ -42,9 +42,8 @@ debugger.OnStopped += stop => SendStopped(stop.ThreadId, stop.Reason, stop.HitBr
 debugger.OnModuleLoaded += module => SendModule(module.ToModule(id, justMyCode));
 
 debugger.JustMyCode = true;
-debugger.Launch(new LaunchRequest(program) { Arguments = args, StopAtEntry = false });
 var breakpoints = debugger.SetBreakpoints(path, requests);   // bound when the module loads
-await debugger.ConfigurationDoneAsync();                     // the launch happens here
+await debugger.LaunchAsync(new LaunchRequest(program) { Arguments = args, StopAtEntry = false });
 
 var frames = debugger.GetStackFrames(threadId);              // StackFrameInfo: Name, ModuleName, Location, InstructionPointer
 var reference = debugger.GetLocalsReference(frames[0].Id);   // 0 when the frame has nothing to show

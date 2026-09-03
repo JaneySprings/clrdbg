@@ -65,7 +65,10 @@ public static class AndroidFastDev {
         if (!Directory.Exists(assetsPath))
             throw new DirectoryNotFoundException($"Directory not found: {assetsPath}");
 
-        return string.Join(';', Directory.EnumerateDirectories(assetsPath).Select(abiPath => {
+        var searchDirectories = new List<string>() { assetsPath };
+        searchDirectories.AddRange(Directory.GetDirectories(assetsPath));
+
+        return string.Join(';', searchDirectories.Select(abiPath => {
             if (!abiPath.EndsWith(Path.DirectorySeparatorChar))
                 return abiPath + Path.DirectorySeparatorChar; // Very important thing!!!
             return abiPath;

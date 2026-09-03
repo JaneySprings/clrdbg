@@ -48,10 +48,6 @@ public partial class ManagedDebugger {
     private Process? launchedProcess;
     private StreamWriter? standardInput;
     private ExpressionEvaluator? evaluator;
-    private LaunchRequest? pendingLaunch;
-    private int? pendingAttachProcessId;
-    private RemoteAttachInfo? pendingRemoteAttach;
-    private Action? onRemoteListenerReady;
     private ICorDebugFunctionBreakpoint? entryPointBreakpoint;
     private bool stopAtEntryPending;
     private bool isRemoteAttach;
@@ -125,43 +121,39 @@ public partial class ManagedDebugger {
         }
     }
 
-    // The launch, attach and remote attach are deferred until 'ConfigurationDoneAsync', so the breakpoints are known by then
-    public void Launch(LaunchRequest launchRequest) {
+    // The debuggee runs from the moment it is started, so the host starts it once the breakpoints are set:
+    // a client sends them only after its launch or attach request and expects them bound from the first line
+    public async Task LaunchAsync(LaunchRequest launchRequest) {
         DebuggerLoggingService.LogMessage($"Launching program: {launchRequest.Program} {string.Join(' ', launchRequest.Arguments)}");
-        pendingLaunch = launchRequest;
+        EnsureNotStarted();
+        if (launchRequest.Console == ConsoleType.InternalConsole)
+            await LaunchProcessAsync(launchRequest);
+        else
+            await LaunchInTerminalAsync(launchRequest);
     }
-    public void Attach(int processId) {
-        DebuggerLoggingService.LogMessage($"Storing attach target: {processId}");
-        pendingAttachProcessId = processId;
+    public async Task AttachAsync(int processId) {
+        EnsureNotStarted();
+        // The target may have been started with DOTNET_DefaultDiagnosticPortSuspend, a running one refuses the resume
+        await AttachToProcessAsync(processId, resumeRuntime: true, ignoreResumeFailure: true);
     }
-    // 'onListenerReady' is invoked once the remote transport is listening, which is when the on-device app should be launched so it can connect back
+    // The transport is set up first, 'onListenerReady' then lets the host launch the on-device app so it can connect back,
+    // and the attach is initiated last
     public void AttachRemote(RemoteAttachInfo attachInfo, Action? onListenerReady = null) {
-        DebuggerLoggingService.LogMessage($"Storing remote attach target: {attachInfo.Address}:{attachInfo.Port}");
+        DebuggerLoggingService.LogMessage($"Attaching to remote target on {attachInfo.Address}:{attachInfo.Port} ({attachInfo.Platform})");
+        EnsureNotStarted();
         isRemoteAttach = true;
-        pendingRemoteAttach = attachInfo;
-        onRemoteListenerReady = onListenerReady;
-    }
-    public async Task ConfigurationDoneAsync() {
-        DebuggerLoggingService.LogMessage("ConfigurationDone");
-        if (pendingLaunch != null) {
-            var launchRequest = pendingLaunch;
-            pendingLaunch = null;
-            if (launchRequest.Console == ConsoleType.InternalConsole)
-                await LaunchProcessAsync(launchRequest);
-            else
-                await LaunchInTerminalAsync(launchRequest);
+        corDebug = DbgShimHost.CreateRemote(attachInfo);
+        corDebug.SetManagedHandler(callbacks);
+        onListenerReady?.Invoke();
+        try {
+            // No ICorDebugProcess comes back here, it arrives through the CreateProcess callback instead
+            corDebug.DebugActiveProcess(0, false);
         }
-        else if (pendingRemoteAttach != null) {
-            var attachInfo = pendingRemoteAttach;
-            pendingRemoteAttach = null;
-            AttachToRemote(attachInfo);
+        catch (Exception ex) {
+            DebuggerLoggingService.LogMessage($"DebugActiveProcess(0) threw as expected for a remote attach: {ex.Message}");
         }
-        else if (pendingAttachProcessId != null) {
-            var processId = pendingAttachProcessId.Value;
-            pendingAttachProcessId = null;
-            // The target may have been started with DOTNET_DefaultDiagnosticPortSuspend, a running one refuses the resume
-            await AttachAsync(processId, resumeRuntime: true, ignoreResumeFailure: true);
-        }
+        DebuggerLoggingService.LogMessage($"Debugger listening on port {attachInfo.Port}, awaiting the connection from the debuggee");
+        SendBreakpointStatus();
     }
 
     public void Continue() {
@@ -552,7 +544,7 @@ public partial class ManagedDebugger {
         DebuggerLoggingService.LogMessage($"Process created suspended with PID: {started.Id}");
 
         stopAtEntryPending = launchRequest.StopAtEntry;
-        await AttachAsync(started.Id, resumeRuntime: true, ignoreResumeFailure: false);
+        await AttachToProcessAsync(started.Id, resumeRuntime: true, ignoreResumeFailure: false);
         OnProcessStarted?.Invoke(started.Id);
     }
     private async Task LaunchInTerminalAsync(LaunchRequest launchRequest) {
@@ -561,10 +553,10 @@ public partial class ManagedDebugger {
         await Task.Run(() => handler.Invoke(launchRequest));
         var processId = launchRequest.ProcessId ?? throw new InvalidOperationException("The terminal launch did not provide the id of the started process");
         stopAtEntryPending = launchRequest.StopAtEntry;
-        await AttachAsync(processId, resumeRuntime: true, ignoreResumeFailure: false);
+        await AttachToProcessAsync(processId, resumeRuntime: true, ignoreResumeFailure: false);
         OnProcessStarted?.Invoke(processId);
     }
-    private async Task AttachAsync(int processId, bool resumeRuntime, bool ignoreResumeFailure) {
+    private async Task AttachToProcessAsync(int processId, bool resumeRuntime, bool ignoreResumeFailure) {
         DebuggerLoggingService.LogMessage($"Attaching to process: {processId}");
         // The registration is made before the runtime is resumed, so the startup notification is not missed
         var attachTask = DbgShimHost.AttachAsync(processId, target => AttachToRuntime(target, processId));
@@ -588,22 +580,10 @@ public partial class ManagedDebugger {
         corDebug = target;
         process = target.DebugActiveProcess(processId, false);
     }
-    // The transport is set up first, the on-device app is launched to connect back and the attach is initiated last
-    private void AttachToRemote(RemoteAttachInfo attachInfo) {
-        DebuggerLoggingService.LogMessage($"Attaching to remote target on {attachInfo.Address}:{attachInfo.Port} ({attachInfo.Platform})");
-        corDebug = DbgShimHost.CreateRemote(attachInfo);
-        corDebug.SetManagedHandler(callbacks);
-        onRemoteListenerReady?.Invoke();
-        onRemoteListenerReady = null;
-        try {
-            // No ICorDebugProcess comes back here, it arrives through the CreateProcess callback instead
-            corDebug.DebugActiveProcess(0, false);
-        }
-        catch (Exception ex) {
-            DebuggerLoggingService.LogMessage($"DebugActiveProcess(0) threw as expected for a remote attach: {ex.Message}");
-        }
-        DebuggerLoggingService.LogMessage($"Debugger listening on port {attachInfo.Port}, awaiting the connection from the debuggee");
-        SendBreakpointStatus();
+    // A debugger drives one debuggee: a second start would replace the native objects of the first
+    private void EnsureNotStarted() {
+        if (corDebug != null)
+            throw new InvalidOperationException("The debugger is already attached to a debuggee");
     }
     // A breakpoint event for every breakpoint, so the client shows the pending ones as unverified until they bind
     private void SendBreakpointStatus() {
