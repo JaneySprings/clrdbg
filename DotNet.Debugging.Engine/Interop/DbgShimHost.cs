@@ -17,8 +17,9 @@ internal static class DbgShimHost {
     // moment the callback returns. On Unix the runtime then marks itself debugger-attached and blocks again until the
     // debugger continues, so a late attach is harmless - but on Windows nothing holds it, and a debuggee that finishes
     // quickly can be exiting by the time a post-callback DebugActiveProcess reaches it (E_ACCESSDENIED).
-    // The registration is made synchronously, so a caller can resume a suspended runtime right after this returns its task
-    public static async Task AttachAsync(int processId, Action<ICorDebug> attach) {
+    // The registration is made synchronously, so a caller can resume a suspended runtime right after this returns its task;
+    // a caller that then cannot resume it cancels the wait, which withdraws the registration
+    public static async Task AttachAsync(int processId, Action<ICorDebug> attach, CancellationToken cancellationToken = default) {
         if (runtimeStartupRegistration != null)
             throw new InvalidOperationException("A runtime startup registration is already in progress");
 
@@ -38,6 +39,7 @@ internal static class DbgShimHost {
                     Marshal.GetExceptionForHR(result));
             }
 
+            using var cancellation = cancellationToken.Register(() => registration.Completion.TrySetCanceled(cancellationToken));
             await registration.Completion.Task.ConfigureAwait(false);
         }
         finally {
@@ -78,10 +80,11 @@ internal static class DbgShimHost {
             if (corDebug == null || hresult != Cor.S_OK)
                 throw new InvalidOperationException($"The runtime startup registration failed: 0x{hresult:X8}", Marshal.GetExceptionForHR(hresult));
             registration.Attach.Invoke(corDebug);
-            registration.Completion.SetResult();
+            registration.Completion.TrySetResult();
         }
         catch (Exception ex) {
-            registration.Completion.SetException(ex);
+            // A completion cancelled meanwhile takes neither, and nothing may throw out of here
+            registration.Completion.TrySetException(ex);
         }
     }
     private static bool IsProcessAlive(int processId) {

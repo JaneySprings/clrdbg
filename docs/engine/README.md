@@ -40,16 +40,28 @@ DebuggerLoggingService.CustomLogger = new EngineLogger();   // before anything l
 var debugger = new ManagedDebugger();
 debugger.OnStopped += stop => SendStopped(stop.ThreadId, stop.Reason, stop.HitBreakpointIds);
 debugger.OnModuleLoaded += module => SendModule(module.ToModule(id, justMyCode));
+debugger.OnSymbolsRequested += request => request.SymbolFilePath = FindPdb(request.SymbolFileName, request.PdbGuid);
+debugger.OnTerminalLaunchRequested += request => request.ProcessId = RunInTerminal(request);
+
+// Every request goes through InvokeAsync: it takes the engine's lock and first dispatches the runtime
+// callbacks queued so far. A bare call would race the callback loop over the engine's dictionaries
+Task<T> Invoke<T>(Func<T> request) => debugger.InvokeAsync(() => Task.FromResult(request()));
 
 debugger.JustMyCode = true;
-var breakpoints = debugger.SetBreakpoints(path, requests);   // bound when the module loads
-await debugger.LaunchAsync(new LaunchRequest(program) { Arguments = args, StopAtEntry = false });
+var breakpoints = await Invoke(() => debugger.SetBreakpoints(path, requests));   // bound when the module loads
+await debugger.InvokeAsync(async () => {
+    await debugger.LaunchAsync(new LaunchRequest(program) { Arguments = args, StopAtEntry = false });
+    return true;
+});
 
-var frames = debugger.GetStackFrames(threadId);              // StackFrameInfo: Name, ModuleName, Location, InstructionPointer
-var reference = debugger.GetLocalsReference(frames[0].Id);   // 0 when the frame has nothing to show
-var locals = await debugger.GetVariablesAsync(reference);    // VariableInfo: Name, Value, Type, Kind, Visibility, VariablesReference
-var result = await debugger.EvaluateAsync("items.Count * 2", frames[0].Id);
+var frames = await Invoke(() => debugger.GetStackFrames(threadId));              // StackFrameInfo: Name, ModuleName, Location, InstructionPointer
+var reference = await Invoke(() => debugger.GetLocalsReference(frames[0].Id));   // 0 when the frame has nothing to show
+var page = await debugger.InvokeAsync(() => debugger.GetVariablesAsync(reference, 0, 25));   // VariablePage: TotalCount and one page of VariableInfo (Name, Value, Type, Kind, Visibility, VariablesReference)
+var result = await debugger.InvokeAsync(() => debugger.EvaluateAsync("items.Count * 2", frames[0].Id));
 ```
+
+Listings are paged: `GetVariablesAsync(reference, start, count)` names every entry but reads and
+formats only the requested page, and `VariablePage.TotalCount` tells the host how many there are.
 
 **Events carry engine facts, not protocol verbs.** `OnStopped(StopInfo)` says *why* and *where*
 (`StopReason.Breakpoint` with the hit breakpoint ids, `Step`, `Pause`, `Entry`, plus the
@@ -57,7 +69,12 @@ var result = await debugger.EvaluateAsync("items.Count * 2", frames[0].Id);
 (`FirstChance`, `UserUnhandled`, `Unhandled`) and type name and leaves the decision to the
 subscriber — it either does nothing (the debuggee stays stopped) or calls `Continue()`.
 `OnModuleLoaded(ModuleInfo)`, `OnBreakpointChanged(Breakpoint)`, `OnThreadStarted/Exited`,
-`OnProcessStarted`, `OnExited`, `OnOutput` and `OnLogPoint` complete the set.
+`OnProcessStarted`, `OnExited`, `OnOutput` and `OnLogPoint` report what happened. Two events ask the
+host for something: `OnSymbolsRequested(SymbolsRequest)` when a module's PDB is not next to it — the
+subscriber may locate it (a search path, a symbol server) and set `SymbolFilePath`, without a
+subscriber such a module silently gets no symbols — and `OnTerminalLaunchRequested(LaunchRequest)` for
+a launch with `ConsoleType.IntegratedTerminal`/`ExternalTerminal`, whose subscriber starts the program
+in the client's terminal and sets `ProcessId`; a terminal launch without one fails outright.
 
 **Handles instead of objects.** Frame ids and variables references are integers issued by the
 engine (`FrameReferenceManager`, `VariableManager`). They are the engine's own bookkeeping, not
@@ -66,7 +83,7 @@ objects are neutered whenever the debuggee runs, and a variables reference keeps
 `ICorDebugHandleValue` behind an expanded value alive until the next continue clears it.
 
 **Statuses, not messages.** A `Breakpoint` exposes `BreakpointStatus` (`Pending`, `NotProcessed`,
-`NoSymbols`, `NoMatchingFunctions`, `Bound`, `Error` with `Error` text); a `VariableInfo` exposes
+`NoSymbols`, `SourceMismatch`, `NoMatchingFunctions`, `Bound`, `Error` with `Error` text); a `VariableInfo` exposes
 `Kind`, `Visibility` and `IsError`; a `StackFrameInfo` exposes `Kind`, `ModuleName`, the method
 signature and a `SourceLocation`. The user-facing strings and the composed display names are the
 adapter's (`Resources`, `DebuggerExtensions`, `ServerExtensions`).

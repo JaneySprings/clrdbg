@@ -131,11 +131,21 @@ eval.CallParameterizedFunction / NewParameterizedObject / NewParameterizedObject
 eval.NewParameterizedArray / NewString
 IsRunning = true; process.Continue()
 await WaitForEvalEventAsync()       ── the engine keeps dispatching callbacks meanwhile
+   5 s without completion          → eval.Abort(); 5 s more → ICorDebugEval2.RudeAbort()
+                                      the wait goes on (it is dispatching callbacks), the completion
+                                      the abort brings is released, EvaluationTimeoutException
 EvalComplete   → eval.GetResult() (CORDBG_S_FUNC_EVAL_HAS_NO_RESULT for void)
-EvalException  → the thrown exception object; with throwOnException an EvaluationException
-                 "Evaluation threw System.InvalidOperationException" and the handle released
+EvalException  → the thrown exception object; with throwOnException an EvaluationThrewException
+                 "Evaluation threw System.InvalidOperationException" (the type name kept on the
+                 exception) and the handle released
 IsRunning = false
 ```
+
+The time-out is what keeps a blocking getter — `Console.ReadLine()`, a semaphore nothing releases, a
+socket read — from holding the engine's lock, and with it every later request, for the rest of the
+session: the wait runs on the thread that holds `syncLock`. The `ImplicitEvalBudgetMilliseconds` of
+`VariableProvider` is a different thing — it decides whether to *start* another `ToString`/
+`DebuggerDisplay` evaluation in a listing, never bounds one in flight.
 
 `IsRunning` is what the breakpoint and exception handlers consult to continue through stops the
 evaluated code produces. Two helpers sit on top: `GetStaticFieldValueAsync` (retrying after the

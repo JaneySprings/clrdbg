@@ -65,9 +65,12 @@ known.
 
 ### Debuggee output
 
-A launched process has stdout/stderr redirected; each line is forwarded through `OnOutput` with a
-newline appended. The data-received callbacks run on background threads, so a throwing subscriber is
-caught and logged rather than taking the adapter down. Attached processes keep their own console.
+A launched process has stdout/stderr redirected. Two background pumps (`PumpOutputAsync`, one per
+stream) forward whatever `ReadAsync` returns through `OnOutput` as raw chunks — deliberately neither
+split into lines nor newline-terminated: an unterminated prompt such as `Enter name: ` has to reach the
+client before the debuggee blocks on reading the answer, and a line-based pump would hold it back until
+the newline that only arrives after the user has answered. Whatever a pump throws is logged rather than
+taking the adapter down. Attached processes keep their own console.
 
 ## 2. The callback loop
 

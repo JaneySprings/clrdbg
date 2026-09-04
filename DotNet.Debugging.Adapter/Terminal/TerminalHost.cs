@@ -44,9 +44,11 @@ public static class TerminalHost {
         foreach (var argument in request.Arguments)
             startInfo.ArgumentList.Add(argument);
 
-        startInfo.Environment[ManagedDebugger.DiagnosticPortSuspendVariable] = "1";
         foreach (var (key, value) in request.Environment)
             startInfo.Environment[key] = value;
+        // Set last: the debugger attaches to this process only once its id has travelled back, so the runtime must
+        // wait for it whatever the user's environment says
+        startInfo.Environment[ManagedDebugger.DiagnosticPortSuspendVariable] = "1";
 
         return Process.Start(startInfo) ?? throw new InvalidOperationException("The process could not be started");
     }

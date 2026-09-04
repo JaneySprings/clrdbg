@@ -74,6 +74,9 @@ public partial class ManagedDebugger {
             return;
         }
 
+        // The stop abandons what is left of the step, including an async step out that has no stepper and waits
+        // for its task through the notification breakpoint: it must not fire after the user has moved on
+        stepController.Disable();
         var location = breakpoint.ResolvedLocation?.Location ?? GetSourceLocation(thread.GetActiveFrame());
         OnStopped?.Invoke(new StopInfo(thread.GetId(), StopReason.Breakpoint, location, [breakpoint.Id]));
     }
@@ -86,7 +89,7 @@ public partial class ManagedDebugger {
             return false;
 
         ClearEntryPointBreakpoint();
-        stepController.CancelStep();
+        stepController.Disable();
         OnStopped?.Invoke(new StopInfo(thread.GetId(), StopReason.Entry, GetSourceLocation(thread.GetActiveFrame())));
         return true;
     }

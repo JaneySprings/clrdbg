@@ -137,11 +137,7 @@ public class MobileDebugAgent : BaseDebugAgent<LaunchConfiguration> {
 
     private string GetCoreclrHostLibrary() {
         var runtime = $"{RuntimeInfo.GetOperationSystem()}-{RuntimeInfo.GetArchitecture()}";
-        // mscordbi hands on Windows (Android)
-        // coreclrhost may fail after first launch on Unix
-        var libraryName = RuntimeInfo.IsWindows
-            ? $"{RuntimeInfo.LibPrefix}vsdbgremotecoreclrhost{RuntimeInfo.LibExtension}"
-            : $"{RuntimeInfo.LibPrefix}remotemscordbihost{RuntimeInfo.LibExtension}";
+        var libraryName = $"{RuntimeInfo.LibPrefix}remotemscordbihost{RuntimeInfo.LibExtension}";
         var libraryPath = Path.Combine(Configuration.RemoteHostDirectory!, runtime, libraryName);
         if (!File.Exists(libraryPath))
             throw new FileNotFoundException($"File not found: {libraryPath}");

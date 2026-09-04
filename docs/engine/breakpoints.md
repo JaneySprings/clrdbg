@@ -15,7 +15,7 @@ condition, log message) or a `FunctionBreakpointRequest` (name, condition, hit c
 | `Id` | Session-unique, increasing. Replacing a file's breakpoints issues new ids. |
 | `FilePath` / `FunctionName` | One of the two is set; `IsFunctionBreakpoint` tells them apart. |
 | `Line`, `Column`, `EndLine`, `EndColumn` | The requested line until bound, the resolved statement span afterwards. |
-| `Status` | `Pending` (no debuggee yet), `NotProcessed` (debuggee running, no module resolved it yet), `NoSymbols` (no loaded module with symbols covers the document), `NoMatchingFunctions`, `Bound`, `Error` (+ `Error` text). `Verified` is `Status == Bound`. |
+| `Status` | `Pending` (no debuggee yet), `NotProcessed` (debuggee running, no module resolved it yet), `NoSymbols` (no loaded module with symbols covers the document), `SourceMismatch` (a module has an equally named document whose content differs from the local file — reported with `SourceMismatchModule`, the adapter prints a warning), `NoMatchingFunctions`, `Bound`, `Error` (+ `Error` text). `Verified` is `Status == Bound`. |
 | `Location` | The bound `SourceLocation`: document path as in the PDB, span, checksum, Source Link URL. |
 | `HitCount` | Incremented on every hit, before the hit condition is checked. |
 | `CorBreakpoint` / `FunctionBindings` (internal) | The `ICorDebugFunctionBreakpoint`(s) behind it — one for a source breakpoint, one per matching method for a function breakpoint. |
@@ -36,7 +36,11 @@ client shows them unverified until their module arrives.
 Binding a source breakpoint (`TryBind`) asks each module with symbols to resolve it:
 
 1. `ModuleMetadataReader.FindDocument` looks the document up by full path (case-insensitive, `\`
-   normalized to `/`), falling back to a file-name match for PDBs built from another location.
+   normalized to `/`), falling back to a file-name match for PDBs built from another location. A
+   file-name match is verified against the PDB's document checksum: one whose content matches counts as
+   exact, one that differs is rejected with `ManagedDebugger.RequireExactSource` on (the default) and
+   makes the breakpoint `SourceMismatch` when nothing else resolves it. A binding made by file name
+   alone is later moved to a module whose document matches exactly (`TryRebind`).
 2. `SequencePointResolver.Resolve` chooses the sequence point (below).
 3. `ICorDebugFunction.GetILCode().CreateBreakpoint(ilOffset)` + `Activate(true)`; the breakpoint
    takes the resolved span and `Location`, and `OnBreakpointChanged` reports it.
@@ -91,23 +95,28 @@ an empty parameter) is an `ArgumentException` and becomes `BreakpointStatus.Erro
 debuggee or moving on:
 
 1. A function evaluation is running → continue (the hit belongs to evaluated code).
-2. A step is in progress → if the step is already complete, continue: the `StepComplete` callback is
-   queued right behind this one and reports the stop, so the breakpoint at the step destination is
-   not reported twice. Otherwise the breakpoint came first (inside a stepped-over call) and cancels
-   the step.
+2. A step is in progress and already complete → continue: the `StepComplete` callback is queued right
+   behind this one and reports the stop, so the breakpoint at the step destination is not reported
+   twice. A step still in flight is left alone here — see 8.
 3. Not an `ICorDebugFunctionBreakpoint` → continue.
 4. The `AsyncStepper` gets a look: its yield/resume breakpoints continue, its
    `NotifyDebuggerOfWaitCompletion` one turns into a step out ([stepping.md](stepping.md)).
 5. The `stopAtEntry` breakpoint (matched by identity, or by not being any known breakpoint) →
-   `OnStopped(StopReason.Entry)`.
+   every step is disabled, `OnStopped(StopReason.Entry)`.
 6. Unknown breakpoint → continue.
 7. `HitCount++`, then the hit condition: `3` / `== 3` (exactly), `>= 3`, `> 3`, `<= 3`, `< 3`,
-   `% 3` (every third hit); unparsable conditions never stop.
-8. The condition, evaluated in the top frame of the hitting thread
+   `% 3` (every third hit); unparsable conditions never stop — and a hit that does not stop leaves an
+   in-flight step alone, the step carries on past the breakpoint.
+8. From here the breakpoint either stops or evaluates in the debuggee, neither of which a plain step
+   survives: the stepper is cancelled (`CancelStep`) — a breakpoint that stops wins over the step, and
+   an evaluation would have the stepper complete inside the evaluated code. An async step out, which
+   has no stepper, keeps waiting through 9 and 10.
+9. The condition, evaluated in the top frame of the hitting thread
    ([evaluation.md](evaluation.md)); a compile or runtime error counts as "not met".
-9. A log message: every `{expression}` is evaluated and replaced by its display value (left as-is
-   when it fails), `OnLogPoint` receives the text and the debuggee continues.
-10. `OnStopped(StopReason.Breakpoint)` with the breakpoint's `Location` (the resolved one for source
+10. A log message: every `{expression}` is evaluated and replaced by its display value (left as-is
+    when it fails), `OnLogPoint` receives the text and the debuggee continues.
+11. Every step is disabled (`StepController.Disable`, the async notification breakpoint included), then
+    `OnStopped(StopReason.Breakpoint)` with the breakpoint's `Location` (the resolved one for source
     breakpoints, the current frame's for function breakpoints) and `[breakpoint.Id]`.
 
 ## Entry point

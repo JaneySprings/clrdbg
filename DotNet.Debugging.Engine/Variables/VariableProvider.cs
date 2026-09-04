@@ -68,22 +68,31 @@ internal class VariableProvider {
         var slots = new List<VariableSlot>();
         await AddVariablesAsync(reference, slots);
 
-        var pageStart = Math.Clamp(start, 0, slots.Count);
-        var pageEnd = Math.Clamp(start + count, pageStart, slots.Count);
+        // A slot stands for one entry or for a block of them (the elements of an array), the page is cut out of the entries
+        var totalCount = slots.Sum(it => it.Count);
+        var pageStart = Math.Clamp(start, 0, totalCount);
+        var pageEnd = Math.Clamp(start + count, pageStart, totalCount);
         var variables = new List<VariableInfo>(pageEnd - pageStart);
         limitImplicitEvals = true;
         implicitEvalTime.Reset();
         try {
-            for (var i = pageStart; i < pageEnd; i++) {
-                var variable = await slots[i].MaterializeAsync();
-                if (variable != null)
-                    variables.Add(variable);
+            var position = 0;
+            foreach (var slot in slots) {
+                if (position >= pageEnd)
+                    break;
+                var slotEnd = position + slot.Count;
+                for (var i = Math.Max(position, pageStart); i < Math.Min(slotEnd, pageEnd); i++) {
+                    var variable = await slot.MaterializeAsync(i - position);
+                    if (variable != null)
+                        variables.Add(variable);
+                }
+                position = slotEnd;
             }
         }
         finally {
             limitImplicitEvals = false;
         }
-        return new VariablePage(variables, slots.Count);
+        return new VariablePage(variables, totalCount);
     }
     private async Task AddVariablesAsync(VariableReference reference, List<VariableSlot> result) {
         switch (reference.Kind) {
@@ -151,11 +160,18 @@ internal class VariableProvider {
                 try {
                     var context = new EvaluationContext(debugger.GetThread(threadId), threadId, frameDepth, value);
                     using var result = await debugger.GetEvaluator().EvaluateAsync($"$\"{text}\"", context);
-                    if (result.Error != null) {
+                    if (result.TimedOut) {
+                        // Cut off like a value past the budget, the way Microsoft's debugger shows one whose evaluation it aborted
+                        DebuggerLoggingService.LogMessage("DebuggerDisplay evaluation timed out");
+                        text = $"{{{formatted.TypeName}}}";
+                    }
+                    else if (result.Error != null) {
                         DebuggerLoggingService.LogMessage($"DebuggerDisplay evaluation error: {result.Error}");
                         return new ValueDisplay(formatted.TypeName, result.Error, null, true);
                     }
-                    text = ValueFormatter.Format(result.Value!, false).Value;
+                    else {
+                        text = ValueFormatter.Format(result.Value!, false).Value;
+                    }
                 }
                 finally {
                     implicitEvalTime.Stop();
@@ -488,14 +504,22 @@ internal class VariableProvider {
                     var getter = module.GetFunctionFromToken(member.Getter);
                     var eval = debugger.GetThread(reference.ThreadId).CreateEval();
                     ICorDebugValue[] arguments = isStatic ? [] : [value];
-                    return debugger.FuncEval.CallFunctionAsync(eval, getter, type.GetTypeParameters(), arguments);
+                    return debugger.FuncEval.CallFunctionAsync(eval, getter, type.GetTypeParameters(), arguments, throwOnException: true);
                 };
                 if (browsable == DebuggerBrowsableState.RootHidden) {
                     await AddRootHiddenMemberAsync(name, invokeGetterAsync, reference, result, evaluateName, VariableKind.Property, visibility);
                     continue;
                 }
+                var propertyName = member.Name;
                 result.Add(new VariableSlot(name, async () => {
-                    var propertyValue = await invokeGetterAsync();
+                    ICorDebugValue? propertyValue;
+                    try {
+                        propertyValue = await invokeGetterAsync();
+                    }
+                    catch (EvaluationThrewException ex) {
+                        // A getter that throws is a failed read, worded the way Microsoft's debugger words it - not the exception as the value
+                        return VariableInfo.CreateError(name, $"'{propertyName}' threw an exception of type '{ex.ExceptionTypeName}'");
+                    }
                     if (propertyValue == null)
                         return null;
 
@@ -600,19 +624,22 @@ internal class VariableProvider {
         var elementTypeName = TypeNameFormatter.GetTypeName(arrayValue.GetExactType().GetFirstTypeParameter());
         return $"new System.Linq.SystemCore_EnumerableDebugView<{elementTypeName}>({reference.EvaluateName}).Items";
     }
-    // The elements are named by their index alone, so only the ones of the requested page are ever read and formatted
+    // The elements are one block slot named by their index, so a listing costs nothing per element: only the ones
+    // of the requested page are ever named, read and formatted
     private void AddArrayElementSlots(ICorDebugValue arraySource, VariableReference reference, List<VariableSlot> result, string? parentEvaluateName) {
         var arrayValue = (ICorDebugArrayValue)arraySource.UnwrapDebugValue();
+        var count = arrayValue.GetCount();
+        if (count == 0)
+            return;
         var rank = arrayValue.GetRank();
         var dimensions = arrayValue.GetDimensions(rank);
         var baseIndices = arrayValue.HasBaseIndicies() ? arrayValue.GetBaseIndicies(rank) : new uint[rank];
-        var count = arrayValue.GetCount();
-        for (var i = 0; i < count; i++) {
-            var position = i;
-            var name = GetElementName(position, dimensions, baseIndices);
+        Func<int, string> getElementName = position => GetElementName(position, dimensions, baseIndices);
+        result.Add(new VariableSlot(count, getElementName, async position => {
+            var name = getElementName(position);
             var evaluateName = parentEvaluateName == null ? name : parentEvaluateName + name;
-            result.Add(new VariableSlot(name, async () => await CreateVariableAsync(name, ReadArrayElement(arraySource, position), reference.ThreadId, reference.FrameDepth, evaluateName)));
-        }
+            return await CreateVariableAsync(name, ReadArrayElement(arraySource, position), reference.ThreadId, reference.FrameDepth, evaluateName);
+        }));
     }
     // The name of the element at a row major position: '[2]', or '[0, 1]' for a multidimensional array
     private static string GetElementName(int position, uint[] dimensions, uint[] baseIndices) {

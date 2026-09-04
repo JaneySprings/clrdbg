@@ -210,6 +210,8 @@ internal class AsyncStepper {
             var function = coreLib.Module.GetFunctionFromToken(methodDef);
             var breakpoint = function.GetILCode().CreateBreakpoint(0);
             breakpoint.Activate(true);
+            // The breakpoint of a step out that never completed would stay armed for the rest of the session otherwise
+            notifyDebuggerBreakpoint?.Deactivate();
             notifyDebuggerBreakpoint = new AsyncBreakpoint(breakpoint, coreLib.Module, methodDef, 0);
             return true;
         }
@@ -223,9 +225,10 @@ internal class AsyncStepper {
         var step = currentStep!;
         stepController.CancelStep();
 
-        // The builder's id tells the resumed invocation apart from other invocations of the same method
+        // The builder's id tells the resumed invocation apart from other invocations of the same method; a builder
+        // without one (a custom async method builder) leaves the thread id to stand in at the resume point
         var function = frame.GetFunction();
-        step.AsyncIdHandle = await GetAsyncIdAsync(frame) ?? throw new InvalidOperationException("The async method builder has no debugger id");
+        step.AsyncIdHandle = await GetAsyncIdAsync(frame);
 
         var awaitInfo = step.Awaits.First(it => it.YieldOffset == hitBreakpoint.ILOffset);
         var resumeBreakpoint = function.GetILCode().CreateBreakpoint((int)awaitInfo.ResumeOffset);

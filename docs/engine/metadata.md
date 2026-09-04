@@ -8,9 +8,14 @@ with the `ICorDebugModule` it describes.
 ## Loading a module
 
 `ModuleHandler.HandleModuleLoaded` creates the reader from the module's file
-(`ModuleMetadataReader.TryLoad(path)`), or from the debuggee's memory for in-memory modules
-(`ICorDebugProcess.ReadMemory` of the module's image range). `System.Reflection.Metadata`'s
-`PEReader` prefetches the whole image, so the file is not kept open.
+(`ModuleMetadataReader.TryLoad(path)`), from the debuggee's memory for in-memory modules
+(`ICorDebugProcess.ReadMemory` of the module's image range), or — for a dynamic module
+(Reflection.Emit, how mocking libraries build their proxies) — from a copy of the metadata the
+runtime's own importer hands out (`IMetaDataTables2.GetMetaDataStorage()`). A dynamic module has no
+image and gains metadata with every type defined in it, so its reader is rebuilt on every `LoadClass`
+callback (`RefreshDynamicModule`, after `ResetMetaDataInterfaces` so the importer sees the new
+metadata), and a module that had nothing to read when it loaded is registered at its first class load.
+`System.Reflection.Metadata`'s `PEReader` prefetches the whole image, so the file is not kept open.
 
 Symbols are looked for in the PE's debug directory:
 
@@ -31,7 +36,8 @@ cannot bind to it, and the stepper does not stop in it with `JustMyCode`.
 | `IsUserCode` | The JIT flags: `CORDEBUG_JIT_DISABLE_OPTIMIZATION` or `CORDEBUG_JIT_ENABLE_ENC` mean the assembly was built for debugging by the user — the Just My Code heuristic. User modules with symbols get `SetJMCStatus(true)` when `JustMyCode` is on. |
 | `Version` | The file version (`FileVersionInfo`), falling back to the assembly version from metadata; the adapter formats it as vsdbg does (`1.00.0.0`). |
 | `HasSymbols`, `SymbolFilePath` | From the reader. |
-| `BaseAddress`, `Module`, `MetadataReader` (internal) | The key the engine looks modules up by (`GetModule`/`FindModule`), and the objects behind it. |
+| `IsDynamic` | `ICorDebugModule.IsDynamic`: a module the debuggee emitted at run time — no file, no image, no base address. |
+| `Module`, `MetadataReader`, `Id` (internal) | The `ICorDebugModule` and the reader behind the info. Modules are looked up (`GetModule`/`FindModule`) by the `ICorDebugModule` object itself — the COM wrappers are one per runtime object for as long as they are held, and a base address could not serve as the key, a dynamic module has none. `Id` is a session-unique number for caches keyed by module. |
 
 Loading a module increments `ManagedDebugger.ModulesVersion`; the expression compiler's caches are
 keyed by it, as a new module changes what an expression may bind to.
@@ -41,7 +47,7 @@ keyed by it, as a new module changes what an expression may bind to.
 | Method | Reads | Used by |
 |---|---|---|
 | `GetSourceLocation(methodToken, ilOffset)` | The non-hidden sequence point at the offset, or the closest one before it (the IP at a return is past the last point). Returns a `SourceLocation` with the document path, span, checksum and Source Link URL. | Stack frames, stop locations, step completion. |
-| `ResolveBreakpoint(filePath, line, column)` | The document (exact path, then file name) and `SequencePointResolver`'s choice among its methods' sequence points — see [breakpoints.md](breakpoints.md). | Breakpoint binding, `SetNextStatement`. |
+| `ResolveBreakpoint(filePath, line, column, requireExactSource, out sourceMismatch)` | The document (exact path, then file name — see below) and `SequencePointResolver`'s choice among its methods' sequence points — see [breakpoints.md](breakpoints.md). | Breakpoint binding, `SetNextStatement`. |
 | `ResolveMethodEntry(methodToken)` | The method's first non-hidden sequence point. | Function breakpoints, `stopAtEntry`. |
 | `GetEntryPointToken()` | `CorHeader.EntryPointTokenOrRelativeVirtualAddress` when it is a MethodDef and not a native entry point. | `stopAtEntry`. |
 | `GetLocalVariableNames(methodToken, ilOffset)` | The names of the locals in the scopes containing the offset, by slot; `DebuggerHidden` and unnamed locals are absent. | Locals, assignments. |
@@ -56,8 +62,11 @@ Document checksums are reported with their algorithm — SHA-1 (`ff1816ec-…`) 
 (`8829d00f-…`), other algorithms are dropped — so a client can detect edited sources.
 
 Paths are compared with `\` normalized to `/` and case-insensitively; a PDB built on another machine
-(or with `PathMap`) still finds its documents by file name, at the risk of confusing two files with
-the same name in one assembly.
+(or with `PathMap`) still finds its documents by file name. A file-name match whose checksum equals
+the local file's counts as exact; one whose content differs is accepted only with
+`ManagedDebugger.RequireExactSource` off (it defaults to on), because any module with an equally named
+source would capture the breakpoint otherwise — with it on, such a rejected match is reported through
+`sourceMismatch`, which becomes `BreakpointStatus.SourceMismatch`.
 
 ## Source Link
 

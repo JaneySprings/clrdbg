@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using DotNet.Debugging.CorApi;
 using DotNet.Debugging.CorApi.Extensions;
 using DotNet.Debugging.Engine.Extensions;
+using DotNet.Debugging.Engine.Logging;
 using DotNet.Debugging.Engine.Variables;
 
 namespace DotNet.Debugging.Engine.Evaluation;
@@ -9,6 +10,13 @@ namespace DotNet.Debugging.Engine.Evaluation;
 // Runs code in the debuggee (ICorDebugEval) and waits for its completion. While an evaluation runs the
 // debuggee is continued, so every callback that arrives until the EvalComplete one is dispatched as usual
 internal class FuncEvalRunner {
+    // An evaluation that does not complete in time is aborted: the wait holds the engine's lock, so a getter that
+    // blocks (a lock nothing releases, a read that never returns) would otherwise wedge every later request for
+    // the rest of the session. Microsoft's debugger cuts evaluations off the same way
+    private const int EvalTimeoutMilliseconds = 5000;
+    // An abort completes the evaluation once its thread reaches a safe point; a thread that never does is aborted rudely
+    private const int AbortTimeoutMilliseconds = 5000;
+
     private readonly Func<Task<CorDebugManagedCallbackEventArgs>> waitForEvalEvent;
 
     public bool IsRunning { get; private set; }
@@ -89,7 +97,7 @@ internal class FuncEvalRunner {
         IsRunning = true;
         try {
             eval.GetThread().GetProcess().Continue(false);
-            var evalEvent = await waitForEvalEvent();
+            var evalEvent = await WaitForCompletionAsync(eval);
             if (evalEvent is EvalCompleteCorDebugManagedCallbackEventArgs completeEvent) {
                 if (completeEvent.Eval != eval)
                     throw new EvaluationException("The EvalComplete callback does not belong to the running evaluation");
@@ -103,7 +111,7 @@ internal class FuncEvalRunner {
                     return exceptionValue;
 
                 try {
-                    throw new EvaluationException($"Evaluation threw {TypeNameFormatter.GetTypeName(exceptionValue.GetExactType())}");
+                    throw new EvaluationThrewException(TypeNameFormatter.GetTypeName(exceptionValue.GetExactType()));
                 }
                 finally {
                     if (exceptionValue is ICorDebugHandleValue handle)
@@ -115,6 +123,27 @@ internal class FuncEvalRunner {
         finally {
             IsRunning = false;
         }
+    }
+    // Waits for the completion callback, aborting the evaluation when it takes too long. The wait keeps dispatching
+    // the callbacks arriving meanwhile, so it is never abandoned: the abort is requested alongside it, and the
+    // completion the abort brings ends it
+    private async Task<CorDebugManagedCallbackEventArgs> WaitForCompletionAsync(ICorDebugEval eval) {
+        var waitTask = waitForEvalEvent();
+        if (await Task.WhenAny(waitTask, Task.Delay(EvalTimeoutMilliseconds)) == waitTask)
+            return await waitTask;
+
+        DebuggerLoggingService.LogMessage($"The evaluation did not complete within {EvalTimeoutMilliseconds} ms, aborting it");
+        eval.TryAbort();
+        if (await Task.WhenAny(waitTask, Task.Delay(AbortTimeoutMilliseconds)) != waitTask) {
+            DebuggerLoggingService.LogMessage("The evaluation did not respond to the abort, aborting it rudely");
+            if (eval is ICorDebugEval2 eval2)
+                eval2.TryRudeAbort();
+        }
+        await waitTask;
+        // Whatever the completion carries (the abort's exception, a late result) is released, the caller gets the timeout
+        if (eval.TryGetResult(out var result) == Cor.S_OK && result is ICorDebugHandleValue handle)
+            handle.TryDispose();
+        throw new EvaluationTimeoutException();
     }
     private static ICorDebugValue? GetFunctionResult(ICorDebugEval eval) {
         var result = eval.TryGetResult(out var value);

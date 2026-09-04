@@ -64,24 +64,37 @@ placeholder over the remote (mobile) transport:
   / `CORDBG_E_CLASS_NOT_LOADED`; literal (`const`) fields are formatted straight from metadata.
 - **Properties** are read by evaluating their getter with the *reference* value as receiver (a
   dereferenced object cannot be passed to a func eval) and the exact type's type arguments; properties
-  without a getter are skipped. A getter that throws shows the error as the value.
-- **Visibility.** `Kind` (`Data`/`Property`) and `Visibility` (`Public`/`Private`/`Protected`/`Internal`)
-  come from the field/getter attributes. Every type shows its public members inline and groups the
-  non-public ones under `Non-Public members` when they exist. Static members go into a
-  `Static members` group; group nodes have `Kind = Group`.
+  without a getter are skipped. A getter that throws is a failed read — an error entry reading
+  `'Name' threw an exception of type 'System.InvalidOperationException'`, the wording of Microsoft's
+  debugger — never the thrown exception presented as the property's value.
+- **Visibility.** `Kind` (`Data`/`Property`, plus `Group` for the group nodes below and `ResultsView`)
+  and `Visibility` (`Public`/`Private`/`Protected`/`Internal`) come from the field/getter attributes.
+  Every type shows its public members inline and groups the non-public ones under `Non-Public members`
+  when they exist. Static members go into a `Static members` group; group nodes have `Kind = Group`.
 - **`DebuggerBrowsable`**: `Never` hides the member, `RootHidden` replaces an array-valued member by
   its elements.
 - **`DebuggerTypeProxy`**: the proxy is instantiated in the debuggee (`.ctor(value)`, the
   first constructor found by name) and its public members are listed instead of the value's, which
   remain reachable through a `Raw View` group.
 - **Arrays** list `[i]` elements, `[i, j]` for a multidimensional array (the logical indices, honouring
-  non-zero lower bounds); elements are re-read from the source value when their page is requested, as a
-  dereferenced array value is neutered by any func eval; an empty array has no children.
+  non-zero lower bounds). The elements are one *block* slot in the listing (`VariableSlot.Count`), named
+  and read by offset, so listing an array costs nothing per element — a ten-million-element array
+  builds one slot, and only the page requested is ever named, read and formatted. Elements are re-read
+  from the source value when their page is requested, as a dereferenced array value is neutered by any
+  func eval; an empty array has no children.
+- **`Results View`**: a value whose type implements `IEnumerable`/`IEnumerable<T>` (checked on the
+  type and its bases) gets a `Results View` node (`Kind = ResultsView`, the adapter marks it as having
+  side effects) whose expansion enumerates the value in the debuggee — `System.Linq.Enumerable.ToArray`
+  over it, loading `System.Linq` first when the debuggee has not — and lists the array's elements with
+  `new System.Linq.SystemCore_EnumerableDebugView<T>(value).Items[i]` evaluate names; an empty
+  enumeration shows the `Empty` row ("Enumeration yielded no results") the way VS does. A
+  `DebuggerTypeProxy` expansion has no `Results View`, its `Raw View` does not either.
 - **Members are read once per type.** Listing a type's members reads the metadata of each field and
   property getter a single time; the static, literal and visibility decisions and the func-eval of a
   getter are taken from that copy when the page holding the member is materialized.
-- Members are sorted ordinally, groups last (`Static members`, `Non-Public members`, `Raw View`);
-  a member that cannot be read becomes an error entry (`IsError`, the message as the value).
+- Members are sorted ordinally, groups last and in this order: `Static members`, `Non-Public members`,
+  `Raw View`, `Results View`; a member that cannot be read becomes an error entry (`IsError`, the
+  message as the value).
 
 **Evaluate names** are full expressions: `parent.Member` for instance members, `Namespace.Type.Member`
 for statics, `parent[0]` for elements, the bare name for hoisted locals.
@@ -108,7 +121,10 @@ cases that need code to run in the debuggee:
 | exception, or a type overriding `ToString()` | The `{ToString()}` template, evaluated the same way. |
 | any other object | `{Namespace.Type}`. |
 
-A failed template evaluation makes the variable an error entry with the error text.
+A failed template evaluation makes the variable an error entry with the error text — except a
+time-out: an implicit evaluation the engine had to abort ([evaluation.md](evaluation.md)) falls back to
+`{TypeName}` like one past the listing's two-second implicit-eval budget, the way Microsoft's debugger
+shows a value whose evaluation it cut off.
 `TypeNameFormatter` renders types as C#: keywords for primitives, `string[]`/`int[,]`, generic
 instantiations with the arguments consumed by arity along the nesting chain (`Outer<string>.Inner<int>`),
 `System.Nullable<T>` as `T?`, `System.String`/`System.Object`/`System.Decimal` and boxed primitives as

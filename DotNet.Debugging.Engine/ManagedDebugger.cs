@@ -61,8 +61,6 @@ public partial class ManagedDebugger {
     public bool EnableStepFiltering { get; set; } = true;
     // Whether ICorDebug reports the debuggee as executing. A state that cannot be read counts as not running
     public bool IsRunning => process != null && process.TryIsRunning(out var isRunning) == Cor.S_OK && isRunning;
-    // Whether the debuggee's standard input is held open for writing, which only an internal-console launch is
-    public bool HasStandardInput => standardInput != null;
     public int ProcessId { get; private set; }
 
     internal FuncEvalRunner FuncEval { get; }
@@ -559,13 +557,26 @@ public partial class ManagedDebugger {
     private async Task AttachToProcessAsync(int processId, bool resumeRuntime, bool ignoreResumeFailure) {
         DebuggerLoggingService.LogMessage($"Attaching to process: {processId}");
         // The registration is made before the runtime is resumed, so the startup notification is not missed
-        var attachTask = DbgShimHost.AttachAsync(processId, target => AttachToRuntime(target, processId));
+        using var attachCancellation = new CancellationTokenSource();
+        var attachTask = DbgShimHost.AttachAsync(processId, target => AttachToRuntime(target, processId), attachCancellation.Token);
         if (resumeRuntime) {
             try {
                 await DiagnosticsClientHelper.ResumeRuntimeAsync(processId);
             }
             catch (Exception ex) when (ignoreResumeFailure) {
                 DebuggerLoggingService.LogMessage($"Failed to resume the runtime of the attach target (already running?): {ex.Message}");
+            }
+            catch {
+                // The runtime stays parked and its startup never comes: the registration is withdrawn, or it would
+                // refuse every later attach made from this process
+                attachCancellation.Cancel();
+                try {
+                    await attachTask;
+                }
+                catch (Exception attachException) {
+                    DebuggerLoggingService.LogMessage($"The attach was withdrawn: {attachException.Message}");
+                }
+                throw;
             }
         }
         await attachTask;

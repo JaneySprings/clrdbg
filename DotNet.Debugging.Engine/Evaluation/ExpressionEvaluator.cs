@@ -30,7 +30,7 @@ internal class ExpressionEvaluator {
         catch (Exception ex) {
             // The client gets the message alone, the log keeps the interpreter's stack for a failure that needs a look
             DebuggerLoggingService.LogError($"Evaluation of '{expression}' failed", ex);
-            return EvaluationResult.FromError($"error: {ex.Message}");
+            return EvaluationResult.FromError($"error: {ex.Message}", ex is EvaluationTimeoutException);
         }
     }
 

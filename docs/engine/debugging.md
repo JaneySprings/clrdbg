@@ -68,10 +68,11 @@ behind them are gone once the debuggee runs (`ClearReferences`), and tolerates
 
 `SetBreakpoints(file, requests)` replaces the file's breakpoints; `SetFunctionBreakpoints` replaces
 all function breakpoints. Binding (`BreakpointManager.TryBind`) asks every module with symbols to
-`ResolveBreakpoint(file, line, column)`:
+`ResolveBreakpoint(file, line, column, requireExactSource, out sourceMismatch)`:
 
 - `ModuleMetadataReader.FindDocument` matches the document by full path first, then by file name
-  (PDBs built elsewhere);
+  (PDBs built elsewhere) — a file-name match whose checksum differs from the local file is rejected
+  with `RequireExactSource` (the default) and reported as `BreakpointStatus.SourceMismatch`;
 - `SequencePointResolver` picks the sequence point: the one covering the position with the latest
   start (which naturally selects the innermost lambda), netcoredbg's containment rule when several
   start at the same position, and the next line with code when none covers it;
@@ -84,13 +85,14 @@ Function breakpoints parse `Namespace.Type<T>.Method<U>(int, string)` into a
 point; a breakpoint can therefore hold several bindings.
 
 When a breakpoint callback arrives (`BreakpointHandler.HandleBreakpointAsync`) the decisions are
-made in this order: continue if an evaluation is running; if a step is in progress, continue when
-the step is already complete (its `StepComplete` callback is queued right behind and reports the
-stop) or cancel the step otherwise; give the `AsyncStepper` its breakpoints; handle the entry
-breakpoint; then for a user breakpoint count the hit, check the hit condition
-(`BreakpointManager.CheckHitCondition`: `3`, `==3`, `>=3`, `<3`, `%3`), evaluate the condition,
-print a logpoint (`OnLogPoint`, `{expression}` placeholders evaluated in the top frame) and
-continue, or raise `OnStopped` with `StopReason.Breakpoint` and the breakpoint id.
+made in this order: continue if an evaluation is running; continue if a step in progress is already
+complete (its `StepComplete` callback is queued right behind and reports the stop); give the
+`AsyncStepper` its breakpoints; handle the entry breakpoint; then for a user breakpoint count the
+hit and check the hit condition (`BreakpointManager.CheckHitCondition`: `3`, `==3`, `>=3`, `<3`,
+`%3`) — a hit that does not stop leaves a step in flight alone; only past that point is the step
+cancelled, before the condition is evaluated, a logpoint printed (`OnLogPoint`, `{expression}`
+placeholders evaluated in the top frame) and continued, or every step disabled and `OnStopped`
+raised with `StopReason.Breakpoint` and the breakpoint id ([breakpoints.md](breakpoints.md)).
 
 ## 5. Stepping
 
@@ -100,19 +102,23 @@ continue, or raise `OnStopped` with `StopReason.Breakpoint` and the breakpoint i
   and security stubs, never stops at unmapped code, honours JMC, and steps the whole *statement*:
   the IL range from the current sequence point to the next (`ModuleMetadataReader.TryGetStepRange`)
   rather than one instruction. Step out is `StepOut()`.
-- On `StepComplete` (`TryCompleteStep`) the engine decides whether this is a place to stop: a frame
-  in a module without symbols stops without a location; a frame with symbols but no sequence point
-  at the offset (compiler-generated code) keeps stepping into; a `STEP_CALL` landing in a callee's
-  prolog steps over to its first statement; past the last statement of a
-  `DebuggerHidden`/`DebuggerStepThrough`/`DebuggerNonUserCode` method it keeps stepping. Otherwise
-  `OnStopped(StopReason.Step)` carries the `SourceLocation`.
+- On `StepComplete` (`TryCompleteStep`) the engine decides whether this is a place to stop: a step
+  into a module without symbols steps out again (any other arrival there stops without a location); a
+  frame with symbols but no sequence point at the offset (compiler-generated code) keeps stepping into;
+  a `DebuggerHidden`/`DebuggerStepThrough` method (and `DebuggerNonUserCode` under Just My Code) is
+  stepped through wherever the step landed in it; a step into a property accessor or an operator steps
+  out again (`EnableStepFiltering`); a `STEP_CALL` landing in a callee's prolog steps over to its first
+  statement; a hidden cleanup region (`using`/`lock` finally, `await using` dispose) is crossed; a skipped
+  method returning into the stepped statement resumes the step. Otherwise `OnStopped(StopReason.Step)`
+  carries the `SourceLocation`. The full decision list is in [stepping.md](stepping.md).
 
 `AsyncStepper` handles `await`: a plain step over an await would run until the method returns to
 its caller. Using the async stepping information Roslyn writes to the PDB (yield/resume offsets),
-it plants a breakpoint at the next *yield* point while the plain stepper runs. If the yield point is
+it plants a breakpoint at every *yield* point while the plain stepper runs. If a yield point is
 reached the step is cancelled, the builder's `ObjectIdForDebugger` is captured, and a breakpoint is
-moved to the *resume* point; when that one is hit by the same invocation (same thread, or the same
-builder id on another thread) an ordinary step resumes from there. Stepping out of an async method
+moved to that await's *resume* point; when that one is hit by the same invocation (the same builder
+id — the thread id only stands in when the id cannot be read) an ordinary step resumes from there.
+Stepping out of an async method
 asks the builder for `SetNotificationForWaitCompletion(true)` and breaks in
 `Task.NotifyDebuggerOfWaitCompletion`, from where a step out lands in the resumed caller.
 
@@ -124,12 +130,19 @@ after stopping it reports `StopReason.Pause` for the requested thread. A pause i
 the process is not running — including the moment right after an attach, when the runtime is
 still delivering its synthetic attach callbacks.
 
-Exceptions come through two callbacks. `Exception` (first chance or unhandled) raises
-`OnExceptionThrown` with `FirstChance`/`Unhandled`; the host applies its filters and calls
-`Continue()` when it does not want the stop. `Exception2` follows the dispatch: a first-chance
-notification in a user-code frame marks the thread, and when the catch handler is found in
-non-user code for a marked thread the engine raises `UserUnhandled` — an exception that passed
-through user code and is about to be swallowed by a library.
+Exceptions come through two callbacks, and which one raises the first-chance stop depends on
+`JustMyCode` (default on). `Exception` arrives at the raise itself, first chance or unhandled: it
+always raises `OnExceptionThrown` with `Unhandled`, but a first-chance one only with Just My Code
+*off* — with it on, the first-chance stop is deferred to `Exception2`'s `USER_FIRST_CHANCE`
+notification, where Microsoft's debugger stops: the exception's recorded stack trace has reached user
+code there, and every dispatch entering user code stops again (the way vsdbg re-breaks on each rethrow
+of an exception propagating through an async chain). An exception that never reaches user code does
+not stop at all under Just My Code — the reason a "break on all exceptions" filter stays quiet for one
+thrown and caught inside a library. `Exception2` also follows the dispatch for the third kind: a
+first-chance notification in a user-code frame marks the thread, and when the catch handler is found
+in non-user code for a marked thread the engine raises `UserUnhandled` — an exception that passed
+through user code and is about to be swallowed by a library. In every case the host applies its
+filters and calls `Continue()` when it does not want the stop.
 
 ## 7. Inspecting state
 
