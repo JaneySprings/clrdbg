@@ -20,8 +20,10 @@ The same path serves the `evaluate` request, breakpoint conditions, logpoint pla
 
 ## Compiling: `ExpressionCompiler`
 
-The Roslyn expression compiler (`Microsoft.CodeAnalysis.CSharp.ExpressionEvaluator`, made
-accessible with Krafs.Publicizer) compiles against **metadata blocks** — the raw metadata of the
+The Roslyn expression compiler (`Microsoft.CodeAnalysis.CSharp.ExpressionEvaluator`, internal to
+Roslyn and driven through the reflection wrappers of `Reflection/` — one `Internal*` class per Roslyn
+type, each resolving its members once and naming the one a Roslyn update moved) compiles against
+**metadata blocks** — the raw metadata of the
 debuggee's loaded modules, obtained through `IMetaDataTables2.GetMetaDataStorage()`. When the same
 assembly identity is loaded more than once (several `AssemblyLoadContext`s) only one module per
 identity is passed, preferring the one the evaluation binds against, so the tokens emitted into the

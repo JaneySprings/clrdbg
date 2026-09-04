@@ -8,19 +8,8 @@
 	</PropertyGroup>
 
 	<ItemGroup>
-		<!-- The Roslyn expression compiler internals used by the expression evaluator -->
-		<Publicize IncludeCompilerGeneratedMembers="false" Include="Microsoft.CodeAnalysis" />
-		<Publicize IncludeCompilerGeneratedMembers="false" Include="Microsoft.CodeAnalysis.CSharp" />
-		<Publicize IncludeCompilerGeneratedMembers="false" Include="Microsoft.CodeAnalysis.ExpressionEvaluator.ExpressionCompiler" />
-		<Publicize IncludeCompilerGeneratedMembers="false" Include="Microsoft.CodeAnalysis.CSharp.ExpressionEvaluator.ExpressionCompiler" />
-	</ItemGroup>
-
-	<ItemGroup>
-		<PackageReference Include="Krafs.Publicizer">
-			<PrivateAssets>all</PrivateAssets>
-			<IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-		</PackageReference>
 		<PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+		<!-- The Roslyn expression compiler is internal, the evaluator reaches it through Reflection/ -->
 		<PackageReference Include="MP.Microsoft.CodeAnalysis.CSharp.ExpressionEvaluator.ExpressionCompiler" />
 		<PackageReference Include="Microsoft.Diagnostics.NETCore.Client" />
 		<PackageReference Include="Microsoft.Diagnostics.DbgShim" />

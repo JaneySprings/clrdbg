@@ -14,8 +14,5 @@
     <PackageVersion Include="Microsoft.Diagnostics.DbgShim" Version="9.0.661903" />
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="$(CodeAnalysisVersion)" />
     <PackageVersion Include="MP.Microsoft.CodeAnalysis.CSharp.ExpressionEvaluator.ExpressionCompiler" Version="$(CodeAnalysisVersion)" />
-
-    <!-- To Remove -->
-    <PackageVersion Include="Krafs.Publicizer" Version="2.3.0" />
   </ItemGroup>
 </Project>
