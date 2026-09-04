@@ -17,9 +17,9 @@ internal static class InternalMethodContextReuseConstraints {
 
     // 'reuseSpan' is the ILSpan read from the method's debug information
     public static object Create(object moduleId, int methodToken, int methodVersion, object reuseSpan) {
-        return constructor.Invoke([moduleId, methodToken, methodVersion, reuseSpan]);
+        return constructor.InvokeUnwrapped([moduleId, methodToken, methodVersion, reuseSpan]);
     }
     public static bool AreSatisfied(object constraints, object moduleId, int methodToken, int methodVersion, int ilOffset) {
-        return (bool)areSatisfiedMethod.Invoke(constraints, [moduleId, methodToken, methodVersion, ilOffset])!;
+        return (bool)areSatisfiedMethod.InvokeUnwrapped(constraints, [moduleId, methodToken, methodVersion, ilOffset])!;
     }
 }

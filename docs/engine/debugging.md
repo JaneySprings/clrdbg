@@ -142,7 +142,10 @@ thrown and caught inside a library. `Exception2` also follows the dispatch for t
 first-chance notification in a user-code frame marks the thread, and when the catch handler is found
 in non-user code for a marked thread the engine raises `UserUnhandled` — an exception that passed
 through user code and is about to be swallowed by a library. In every case the host applies its
-filters and calls `Continue()` when it does not want the stop.
+filters and calls `Continue()` when it does not want the stop — inside the callback, which the engine
+records: a stop the host took abandons any step in flight, a continued exception leaves it running.
+The engine does not read that back from `ICorDebugProcess.IsRunning`, which can still report the
+process stopped right after a continue issued inside a callback.
 
 ## 7. Inspecting state
 

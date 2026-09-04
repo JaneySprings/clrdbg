@@ -27,16 +27,16 @@ internal static class InternalCompilationExtensions {
     // compiler builds one when it does not know which module the expression will bind against
     public static CSharpCompilation ToCompilation(object metadataBlocks) {
         var allAssemblies = Enum.Parse(makeAssemblyReferencesKindType, "AllAssemblies");
-        return (CSharpCompilation)toCompilationMethod.Invoke(null, [metadataBlocks, InternalModuleId.Default, allAssemblies])!;
+        return (CSharpCompilation)toCompilationMethod.InvokeUnwrapped(null, [metadataBlocks, InternalModuleId.Default, allAssemblies])!;
     }
     // The user's method behind a frame's method: the kickoff method of a state machine's MoveNext, the method itself otherwise
     public static object? GetSourceMethod(CSharpCompilation compilation, object moduleId, MethodDefinitionHandle methodHandle) {
-        return getSourceMethodMethod.Invoke(null, [compilation, moduleId, methodHandle]);
+        return getSourceMethodMethod.InvokeUnwrapped(null, [compilation, moduleId, methodHandle]);
     }
     public static object GetMethod(CSharpCompilation compilation, object moduleId, MethodDefinitionHandle methodHandle) {
-        return getMethodMethod.Invoke(null, [compilation, moduleId, methodHandle])!;
+        return getMethodMethod.InvokeUnwrapped(null, [compilation, moduleId, methodHandle])!;
     }
     public static object GetType(CSharpCompilation compilation, object moduleId, int typeToken) {
-        return getTypeMethod.Invoke(null, [compilation, moduleId, typeToken])!;
+        return getTypeMethod.InvokeUnwrapped(null, [compilation, moduleId, typeToken])!;
     }
 }

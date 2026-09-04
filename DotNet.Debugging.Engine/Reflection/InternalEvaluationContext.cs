@@ -24,12 +24,12 @@ internal static class InternalEvaluationContext {
     // MethodSymbol? currentSourceMethod, ImmutableArray<LocalSymbol> locals, ImmutableSortedSet<int> inScopeHoistedLocalSlots,
     // MethodDebugInfo<TypeSymbol, LocalSymbol> methodDebugInfo); the constraints are null for a type context
     public static object Create(object? reuseConstraints, CSharpCompilation compilation, object currentFrame, object? currentSourceMethod, object locals, ImmutableSortedSet<int> inScopeHoistedLocalSlots, object methodDebugInfo) {
-        return constructor.Invoke([reuseConstraints, compilation, currentFrame, currentSourceMethod, locals, inScopeHoistedLocalSlots, methodDebugInfo]);
+        return constructor.InvokeUnwrapped([reuseConstraints, compilation, currentFrame, currentSourceMethod, locals, inScopeHoistedLocalSlots, methodDebugInfo]);
     }
     // The CompileResult, null when the expression did not compile - the diagnostics say why. 'aliases' is an
     // ImmutableArray<Alias>; the result properties and the test data are of no use here
     public static object? CompileExpression(object context, string expression, DkmEvaluationFlags flags, object aliases, object diagnostics) {
-        return compileExpressionMethod.Invoke(context, [expression, flags, aliases, diagnostics, null, null]);
+        return compileExpressionMethod.InvokeUnwrapped(context, [expression, flags, aliases, diagnostics, null, null]);
     }
     // The constraints a method context was created with, null for a type context
     public static object? GetMethodContextReuseConstraints(object context) {

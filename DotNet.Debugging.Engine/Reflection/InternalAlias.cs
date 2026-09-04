@@ -19,7 +19,7 @@ internal static class InternalAlias {
     }
 
     public static object Create(DkmClrAliasKind kind, string name, string fullName, string typeName) {
-        return constructor.Invoke([kind, name, fullName, typeName, Guid.Empty, null]);
+        return constructor.InvokeUnwrapped([kind, name, fullName, typeName, Guid.Empty, null]);
     }
     // An ImmutableArray<Alias> of the given aliases
     public static object CreateArray(IReadOnlyList<object> aliases) {

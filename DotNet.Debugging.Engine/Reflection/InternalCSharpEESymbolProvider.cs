@@ -15,6 +15,6 @@ internal static class InternalCSharpEESymbolProvider {
 
     // (SourceAssemblySymbol sourceAssembly, PEModuleSymbol module, PEMethodSymbol method)
     public static object Create(object sourceAssembly, object peModule, object peMethod) {
-        return constructor.Invoke([sourceAssembly, peModule, peMethod]);
+        return constructor.InvokeUnwrapped([sourceAssembly, peModule, peMethod]);
     }
 }

@@ -15,6 +15,6 @@ internal static class InternalModuleId {
     }
 
     public static object Create(Guid mvid, string displayName) {
-        return constructor.Invoke([mvid, displayName]);
+        return constructor.InvokeUnwrapped([mvid, displayName]);
     }
 }

@@ -14,6 +14,6 @@ internal static class InternalEvaluationContextBase {
 
     // The special offsets of a prolog or epilog (0xffffffff and friends) are mapped to offset 0
     public static int NormalizeILOffset(uint ilOffset) {
-        return (int)normalizeILOffsetMethod.Invoke(null, [ilOffset])!;
+        return (int)normalizeILOffsetMethod.InvokeUnwrapped(null, [ilOffset])!;
     }
 }

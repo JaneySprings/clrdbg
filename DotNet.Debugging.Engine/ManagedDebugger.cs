@@ -50,6 +50,8 @@ public partial class ManagedDebugger {
     private ExpressionEvaluator? evaluator;
     private ICorDebugFunctionBreakpoint? entryPointBreakpoint;
     private bool stopAtEntryPending;
+    // An exception stop is being reported and the subscriber has not continued it (yet)
+    private bool isExceptionStopPending;
     private bool isRemoteAttach;
     private int? mainThreadId;
     private int nextModuleId;
@@ -156,6 +158,7 @@ public partial class ManagedDebugger {
 
     public void Continue() {
         ArgumentNullException.ThrowIfNull(process);
+        isExceptionStopPending = false;
         ClearReferences();
         var result = process.TryContinue(false);
         if (result == Cor.CORDBG_E_SUPERFLOUS_CONTINUE)
@@ -463,7 +466,7 @@ public partial class ManagedDebugger {
     }
     private async Task DispatchEventAsync(CorDebugManagedCallbackEventArgs callbackEvent) {
         try {
-            DebuggerLoggingService.LogMessage($"Event: {callbackEvent.GetType().Name}");
+            DebuggerLoggingService.LogMessage($"Event: {DescribeEvent(callbackEvent)}");
             switch (callbackEvent) {
                 case LogMessageCorDebugManagedCallbackEventArgs logMessage:
                     HandleLogMessage(logMessage);
@@ -617,6 +620,38 @@ public partial class ManagedDebugger {
         catch (Exception ex) {
             DebuggerLoggingService.LogMessage($"Stopped reading the debuggee output: {ex.Message}");
         }
+    }
+
+    // The callback and what tells its occurrences apart: the thread, an exception dispatch's stage and frame, a step's reason
+    private string DescribeEvent(CorDebugManagedCallbackEventArgs callbackEvent) {
+        try {
+            switch (callbackEvent) {
+                case BreakpointCorDebugManagedCallbackEventArgs breakpoint:
+                    return $"Breakpoint on thread {breakpoint.Thread.GetId()} at {DescribeFrame(breakpoint.Thread.GetActiveFrame())}";
+                case StepCompleteCorDebugManagedCallbackEventArgs stepComplete:
+                    return $"StepComplete ({stepComplete.Reason}) on thread {stepComplete.Thread.GetId()} at {DescribeFrame(stepComplete.Thread.GetActiveFrame())}";
+                case ExceptionCorDebugManagedCallbackEventArgs exception:
+                    return $"Exception ({(exception.Unhandled ? "unhandled" : "first chance")}) on thread {exception.Thread.GetId()} at {DescribeFrame(exception.Thread.GetActiveFrame())}";
+                case Exception2CorDebugManagedCallbackEventArgs dispatch:
+                    return $"Exception2 ({dispatch.DwEventType}) on thread {dispatch.Thread.GetId()}, frame {DescribeFrame(dispatch.Frame)}, offset IL_{dispatch.NOffset:X4}";
+                case EvalCompleteCorDebugManagedCallbackEventArgs evalComplete:
+                    return $"EvalComplete on thread {evalComplete.Thread.GetId()}";
+                case EvalExceptionCorDebugManagedCallbackEventArgs evalException:
+                    return $"EvalException on thread {evalException.Thread.GetId()}";
+                default:
+                    return callbackEvent.GetType().Name;
+            }
+        }
+        catch {
+            return callbackEvent.GetType().Name;
+        }
+    }
+    private static string DescribeFrame(ICorDebugFrame? frame) {
+        if (frame is not ICorDebugILFrame ilFrame)
+            return frame == null ? "no frame" : "non-IL frame";
+        var function = ilFrame.GetFunction();
+        var methodName = function.GetModule().GetMetaDataInterface<IMetaDataImport>().GetMethodProps(function.GetToken()).szMethod;
+        return $"{methodName} IL_{ilFrame.GetIP().pnOffset:X4}";
     }
 
     private void ContinueProcess() {

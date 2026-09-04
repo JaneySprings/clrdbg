@@ -2,6 +2,7 @@ using DotNet.Debugging.CorApi;
 using DotNet.Debugging.CorApi.Extensions;
 using DotNet.Debugging.Engine.Enums;
 using DotNet.Debugging.Engine.Extensions;
+using DotNet.Debugging.Engine.Logging;
 using DotNet.Debugging.Engine.Models;
 
 namespace DotNet.Debugging.Engine.Stepping;
@@ -174,6 +175,7 @@ internal class StepController {
         }
 
         stepper = newStepper;
+        DebuggerLoggingService.LogMessage($"Stepper created on thread {thread.GetId()}: {kind} at IL_{ilFrame.GetIP().pnOffset:X4}");
         return newStepper;
     }
     public void CancelStep() {

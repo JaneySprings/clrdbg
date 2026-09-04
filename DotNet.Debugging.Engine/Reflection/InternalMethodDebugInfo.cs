@@ -36,16 +36,16 @@ internal static class InternalMethodDebugInfo {
 
     // Reads the portable PDB's custom debug information of the method around the offset
     public static object ReadFromPortable(MetadataReader pdbReader, int methodToken, int ilOffset, object symbolProvider) {
-        return readFromPortableMethod.Invoke(null, [pdbReader, methodToken, ilOffset, symbolProvider, false])!;
+        return readFromPortableMethod.InvokeUnwrapped(null, [pdbReader, methodToken, ilOffset, symbolProvider, false])!;
     }
     // Adds the method's locals (named by the PDB, typed by the local signature) to an ArrayBuilder<LocalSymbol>
     public static void GetLocals(object localsBuilder, object symbolProvider, object debugInfo, object localInfo) {
-        getLocalsMethod.Invoke(null, [localsBuilder, symbolProvider, localVariableNamesField.GetValue(debugInfo), localInfo, dynamicLocalMapField.GetValue(debugInfo), tupleLocalMapField.GetValue(debugInfo)]);
+        getLocalsMethod.InvokeUnwrapped(null, [localsBuilder, symbolProvider, localVariableNamesField.GetValue(debugInfo), localInfo, dynamicLocalMapField.GetValue(debugInfo), tupleLocalMapField.GetValue(debugInfo)]);
     }
     // The slots of the hoisted locals in scope at the offset; the reuse span is narrowed to the scopes consulted
     public static ImmutableSortedSet<int> GetInScopeHoistedLocalIndices(object debugInfo, int ilOffset, ref object reuseSpan) {
         var arguments = new object?[] { ilOffset, reuseSpan };
-        var result = (ImmutableSortedSet<int>)getInScopeHoistedLocalIndicesMethod.Invoke(debugInfo, arguments)!;
+        var result = (ImmutableSortedSet<int>)getInScopeHoistedLocalIndicesMethod.InvokeUnwrapped(debugInfo, arguments)!;
         reuseSpan = arguments[1]!;
         return result;
     }

@@ -13,7 +13,7 @@ internal static class InternalMetadataBlock {
     }
 
     public static object Create(object moduleId, Guid generationId, nint pointer, int size) {
-        return constructor.Invoke([moduleId, generationId, (IntPtr)pointer, size]);
+        return constructor.InvokeUnwrapped([moduleId, generationId, (IntPtr)pointer, size]);
     }
     // An ImmutableArray<MetadataBlock> of the given blocks
     public static object CreateArray(IReadOnlyList<object> blocks) {

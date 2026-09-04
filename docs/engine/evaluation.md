@@ -67,8 +67,12 @@ from `System.Reflection.Emit.OpCodes`, operands and branch targets resolved to i
 
 The method's arguments are the frame's arguments (or the root object), its first locals are the
 frame's locals — so `x = 5` in the evaluate window writes the real local — and the remaining slots
-are temporaries. The frame's generic arguments are split into the declaring type's and the
-method's by the type's arity, for `!0`/`!!0` resolution.
+are temporaries. A frame slot is fetched from a fresh frame on every access (`CorDebugLocation` with
+a fetch): the frame does not survive a func eval, and the runtime's value object of a value-typed
+slot is a snapshot taken when it is obtained — an instance call on the slot (`maybe = 8` is a
+`Nullable<int>` constructor call on the local's address) changes the debuggee's memory behind it,
+which only a fresh fetch shows. The frame's generic arguments are split into the declaring type's
+and the method's by the type's arity, for `!0`/`!!0` resolution.
 
 | Opcode family | Execution |
 |---|---|
@@ -88,6 +92,29 @@ method's by the type's arity, for `!0`/`!!0` resolution.
 Anything else (`throw`, exception blocks, delegates, `calli`, pointer arithmetic, `localloc`, …) is a
 `NotSupportedException` naming the opcode and IL offset; other failures are wrapped with the offset
 and opcode as well.
+
+**Syntax the evaluator does not support** (`Handlers/EvaluationSyntaxTests.UnsupportedSyntaxIsReportedTest`
+keeps the list, each form is reported as an error):
+
+- lambdas (`numbers.Any(n => n > 2)`, `((Func<int, int>)(x => x + 1))(2)`): a delegate over code
+  that only exists in the expression assembly (the compiler's `<>c` closure class); a delegate the
+  debuggee already holds is invoked fine;
+- anonymous types (`new { Name = "x" }`): a type of the expression assembly;
+- array initializers of constants (`new[] { 1, 2, 3 }`): `RuntimeHelpers.InitializeArray` over a data
+  field of the expression assembly (`ldtoken` of a `<PrivateImplementationDetails>` field);
+- multidimensional array creation (`new int[2, 3]`): a `newobj` on the array type's own constructor;
+- variables declared by patterns (`boxed is int n ? n + 1 : 0`, `count is var any`): Roslyn's
+  expression compiler turns declared locals into pseudo-variables (`CreateVariable`/`GetVariableAddress`)
+  by rewriting `BoundLocal` references, which a pattern's declaration is not — its code generator then
+  fails on the undeclared local. `out var` works;
+- string constructors (`new string('x', 3)`): the runtime refuses them in a func eval.
+
+Assignments to a slot of a reference type take the source reference whatever the slot holds
+(`boxed = "text"` on an `object` local holding a boxed `int`), values copy their bytes into the
+unwrapped destination (an enum or struct the evaluation produced is a box). A constant called through
+`constrained.` (`Options.C.ToString()`) is boxed as the constrained type, not as its underlying
+integer. Constants fold unchecked (`(sbyte)200` is `-56`), the way the compiler options of the
+expression compiler have it.
 
 **Calls.** A call target is one of:
 

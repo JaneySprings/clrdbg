@@ -17,12 +17,12 @@ internal static class InternalGeneratedNameParser {
     }
 
     public static GeneratedNameKind GetKind(string name) {
-        return ToKind(getKindMethod.Invoke(null, [name])!);
+        return ToKind(getKindMethod.InvokeUnwrapped(null, [name])!);
     }
     // The offsets delimit the original name inside the generated one ('<count>5__1' -> 'count')
     public static bool TryParseGeneratedName(string name, out GeneratedNameKind kind, out int openBracketOffset, out int closeBracketOffset) {
         var arguments = new object?[] { name, null, null, null };
-        var parsed = (bool)tryParseGeneratedNameMethod.Invoke(null, arguments)!;
+        var parsed = (bool)tryParseGeneratedNameMethod.InvokeUnwrapped(null, arguments)!;
         kind = ToKind(arguments[1]!);
         openBracketOffset = (int)arguments[2]!;
         closeBracketOffset = (int)arguments[3]!;

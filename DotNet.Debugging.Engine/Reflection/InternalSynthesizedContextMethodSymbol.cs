@@ -15,6 +15,6 @@ internal static class InternalSynthesizedContextMethodSymbol {
 
     // (NamedTypeSymbol container)
     public static object Create(object containingType) {
-        return constructor.Invoke([containingType]);
+        return constructor.InvokeUnwrapped([containingType]);
     }
 }

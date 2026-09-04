@@ -21,10 +21,10 @@ internal static class InternalMetadataDecoder {
     }
 
     public static object Create(object peModule, object peMethod) {
-        return constructor.Invoke([peModule, peMethod]);
+        return constructor.InvokeUnwrapped([peModule, peMethod]);
     }
     // The ImmutableArray<LocalInfo<TypeSymbol>> of the method's local signature, empty for a nil handle
     public static object GetLocalInfo(object decoder, StandaloneSignatureHandle localSignature) {
-        return getLocalInfoMethod.Invoke(decoder, [localSignature])!;
+        return getLocalInfoMethod.InvokeUnwrapped(decoder, [localSignature])!;
     }
 }

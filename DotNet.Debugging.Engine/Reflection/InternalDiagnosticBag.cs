@@ -21,15 +21,15 @@ internal static class InternalDiagnosticBag {
 
     // Taken from Roslyn's pool, 'Free' returns it
     public static object GetInstance() {
-        return getInstanceMethod.Invoke(null, null)!;
+        return getInstanceMethod.InvokeUnwrapped(null, null)!;
     }
     public static bool HasAnyErrors(object diagnostics) {
-        return (bool)hasAnyErrorsMethod.Invoke(diagnostics, null)!;
+        return (bool)hasAnyErrorsMethod.InvokeUnwrapped(diagnostics, null)!;
     }
     public static IEnumerable<Diagnostic> AsEnumerable(object diagnostics) {
-        return (IEnumerable<Diagnostic>)asEnumerableMethod.Invoke(diagnostics, null)!;
+        return (IEnumerable<Diagnostic>)asEnumerableMethod.InvokeUnwrapped(diagnostics, null)!;
     }
     public static void Free(object diagnostics) {
-        freeMethod.Invoke(diagnostics, null);
+        freeMethod.InvokeUnwrapped(diagnostics, null);
     }
 }

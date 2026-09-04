@@ -72,11 +72,18 @@ public partial class ManagedDebugger {
 
     private void RaiseExceptionStop(int threadId, ExceptionStopKind kind) {
         exceptionStopKinds[threadId] = kind;
+        // Whether the subscriber continued is recorded by 'Continue' itself, not read back from the runtime:
+        // 'IsRunning' can still report the process stopped right after a continue issued inside a callback (the
+        // runtime side takes it up later), and a step disabled on that reading is a step lost
+        isExceptionStopPending = true;
         OnExceptionThrown!.Invoke(new ExceptionStopInfo(threadId, kind, GetExceptionTypeName(threadId), exceptionModules.GetValueOrDefault(threadId)));
+        var stopTaken = isExceptionStopPending;
+        isExceptionStopPending = false;
+        DebuggerLoggingService.LogMessage($"Exception stop ({kind}) on thread {threadId}: {(stopTaken ? "taken by the subscriber" : "continued by the subscriber")}");
         // The subscriber continued: its filters did not match and no stop was taken, so a step in flight
         // (e.g. over an await whose task faulted, or over a call that throws and catches internally)
         // keeps going. A stop that was taken abandons the step instead
-        if (!IsRunning)
+        if (stopTaken)
             stepController.Disable();
     }
     private bool IsUserCodeFrame(ICorDebugFrame? frame) {

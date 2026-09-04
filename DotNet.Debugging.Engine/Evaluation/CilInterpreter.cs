@@ -25,7 +25,7 @@ internal class CilInterpreter {
         var decoded = compiled.GetDecodedMethod(compiled.EntryMethod);
         var frame = context.RootValue == null ? debugger.GetILFrame(context.ThreadId, context.FrameDepth) : null;
         var arguments = CreateArguments(frame, context);
-        var locals = CreateLocals(compiled, frame, body.LocalSignature, context.RootValue != null);
+        var locals = CreateLocals(compiled, frame, body.LocalSignature, context, context.RootValue != null);
 
         ICorDebugType[] typeGenericArguments;
         ICorDebugType[] methodGenericArguments;
@@ -47,27 +47,40 @@ internal class CilInterpreter {
         return EvaluationResult.FromValue(value, handles.Detach(value));
     }
 
-    private static ICilLocation[] CreateArguments(ICorDebugILFrame? frame, EvaluationContext context) {
+    private ICilLocation[] CreateArguments(ICorDebugILFrame? frame, EvaluationContext context) {
         if (context.RootValue != null)
             return [new CorDebugLocation(context.RootValue)];
-        return frame!.GetArguments().Select(CreateFrameLocation).ToArray();
-    }
-    private static ICilLocation CreateFrameLocation(ICorDebugValue? value) {
-        return value == null ? new UnavailableLocation() : new CorDebugLocation(value);
+        var arguments = frame!.GetArguments();
+        var result = new ICilLocation[arguments.Length];
+        for (var i = 0; i < result.Length; i++) {
+            var index = i;
+            result[i] = arguments[i] == null ? new UnavailableLocation() : new CorDebugLocation(() => GetFrame(context).GetArguments()[index]!);
+        }
+        return result;
     }
     // The evaluation method's locals start with the frame's locals (so the expression can read and assign them), the rest are temporaries
-    private static ICilLocation[] CreateLocals(CompiledExpression compiled, ICorDebugILFrame? frame, StandaloneSignatureHandle localSignature, bool isTypeContext) {
+    private ICilLocation[] CreateLocals(CompiledExpression compiled, ICorDebugILFrame? frame, StandaloneSignatureHandle localSignature, EvaluationContext context, bool isTypeContext) {
         var localCount = localSignature.IsNil
             ? 0
             : compiled.MetadataReader.GetStandaloneSignature(localSignature).DecodeLocalSignature(LocalCountSignatureProvider.Instance, genericContext: null).Length;
         var frameLocals = frame?.GetLocalVariables();
         var result = new ICilLocation[localCount];
         for (var i = 0; i < result.Length; i++) {
-            result[i] = !isTypeContext && i < frameLocals!.Length
-                ? CreateFrameLocation(frameLocals[i])
-                : new TemporaryLocation(CilValue.Null());
+            var index = i;
+            if (isTypeContext || i >= frameLocals!.Length)
+                result[i] = new TemporaryLocation(CilValue.Null());
+            else if (frameLocals[i] == null)
+                result[i] = new UnavailableLocation();
+            else
+                result[i] = new CorDebugLocation(() => GetFrame(context).GetLocalVariables()[index]!);
         }
         return result;
+    }
+    // A frame slot is fetched from the frame on every access, the frame anew each time: the frame does not survive
+    // a func eval, and the value object of a value-typed slot is a snapshot - an instance call on the slot (a struct
+    // constructor, a mutating method) changes the debuggee's memory behind it, which only a fresh fetch shows
+    private ICorDebugILFrame GetFrame(EvaluationContext context) {
+        return debugger.GetILFrame(context.ThreadId, context.FrameDepth);
     }
     private static ICilLocation[] CreateTemporaryLocals(EvaluationMetadataResolver resolver, StandaloneSignatureHandle localSignature) {
         var count = resolver.GetEvaluationLocalCount(localSignature);
@@ -467,7 +480,7 @@ internal class CilInterpreter {
             var receiver = receiverValue.Location != null ? receiverValue.Dereference() : receiverValue;
             if (receiver.IsNull)
                 throw new NullReferenceException();
-            callArguments[0] = await MaterializeReceiverAsync(receiver, context, constrainedType, handles);
+            callArguments[0] = await MaterializeReceiverAsync(receiver, context, constrainedType, resolver, handles);
         }
 
         // The declaring type's arguments come from the receiver's exact type when there is one, walked up to the
@@ -639,7 +652,7 @@ internal class CilInterpreter {
             argument.Location.Write(handles.Root(CilValue.FromCorValue(argument.Value)));
     }
     // Instance calls need a reference receiver: value types are boxed, honouring the 'constrained.' prefix
-    private async Task<ICorDebugValue> MaterializeReceiverAsync(CilValue value, EvaluationContext context, ResolvedCilType? constrainedType, EvaluationHandleScope handles) {
+    private async Task<ICorDebugValue> MaterializeReceiverAsync(CilValue value, EvaluationContext context, ResolvedCilType? constrainedType, EvaluationMetadataResolver resolver, EvaluationHandleScope handles) {
         if (constrainedType != null && value.CorValue?.UnwrapDebugValue() is ICorDebugGenericValue sourceGeneric) {
             var exactType = value.CorValue.GetExactType();
             var boxed = await BoxBytesAsync(exactType.GetClass(), exactType.GetTypeParameters(), sourceGeneric.GetValueAsBytes(), context, handles);
@@ -649,6 +662,9 @@ internal class CilInterpreter {
             return value.CorValue;
         if (value.Value == null)
             return await MaterializeForCallAsync(value, context, handles);
+        // A host constant called through 'constrained.' (an enum member's ToString) is that type's value, not its underlying integer's
+        if (constrainedType != null && constrainedType.RuntimeType != null)
+            return await BoxHostValueAsync(value.Value, resolver.GetCorDebugType(constrainedType), context, handles);
 
         var elementType = GetPrimitiveElementType(value.Value);
         if (!primitiveTypes.TryGetClass(elementType, out var boxedClass))
@@ -659,16 +675,21 @@ internal class CilInterpreter {
         if (value.Location != null)
             value = value.Dereference();
 
-        byte[] data;
         if (value.CorValue?.UnwrapDebugValue() is ICorDebugGenericValue sourceGeneric)
-            data = sourceGeneric.GetValueAsBytes();
-        else if (value.Value != null)
-            data = CilValueEncoding.GetBytes(value.Value, GetPrimitiveElementType(value.Value));
-        else
-            throw new InvalidOperationException("Cannot box a null value");
-
-        var boxed = await BoxBytesAsync(targetType.GetClass(), targetType.GetTypeParameters(), data, context, handles);
-        return CilValue.FromCorValue(boxed);
+            return CilValue.FromCorValue(await BoxBytesAsync(targetType.GetClass(), targetType.GetTypeParameters(), sourceGeneric.GetValueAsBytes(), context, handles));
+        if (value.Value != null)
+            return CilValue.FromCorValue(await BoxHostValueAsync(value.Value, targetType, context, handles));
+        throw new InvalidOperationException("Cannot box a null value");
+    }
+    // A host value boxed as the target type, encoded to the box's own element type and size (an enum backed by a
+    // byte takes one byte of the host's integer)
+    private async Task<ICorDebugValue> BoxHostValueAsync(object hostValue, ICorDebugType targetType, EvaluationContext context, EvaluationHandleScope handles) {
+        var eval = context.Thread.CreateEval();
+        var boxed = handles.Track(await debugger.FuncEval.NewObjectNoConstructorAsync(eval, targetType.GetClass(), targetType.GetTypeParameters(), throwOnException: true))
+            ?? throw new InvalidOperationException("Failed to box the CIL value");
+        var generic = (ICorDebugGenericValue)boxed.UnwrapDebugValue();
+        generic.SetValueFromBytes(CilValueEncoding.GetBytes(hostValue, generic.GetElementType(), generic.GetSize()));
+        return boxed;
     }
     private async Task<ICorDebugValue> BoxBytesAsync(ICorDebugClass corClass, ICorDebugType[] typeArguments, byte[] data, EvaluationContext context, EvaluationHandleScope handles) {
         var eval = context.Thread.CreateEval();

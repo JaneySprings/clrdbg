@@ -23,10 +23,18 @@ internal class UnavailableLocation : ICilLocation {
 }
 
 internal class CorDebugLocation : ICilLocation {
-    public ICorDebugValue Value { get; }
+    private readonly ICorDebugValue? value;
+    private readonly Func<ICorDebugValue>? fetch;
+
+    // Fetched anew on every access when the location was created with a fetch (a frame slot): the value object of a
+    // value type is a snapshot, and the debuggee's memory behind it changes under an instance call on the slot
+    public ICorDebugValue Value => fetch != null ? fetch() : value!;
 
     public CorDebugLocation(ICorDebugValue value) {
-        Value = value;
+        this.value = value;
+    }
+    public CorDebugLocation(Func<ICorDebugValue> fetch) {
+        this.fetch = fetch;
     }
 
     // A by-reference slot (a 'ref' parameter or local, the 'this' of a struct method) holds the address of a
@@ -38,6 +46,14 @@ internal class CorDebugLocation : ICilLocation {
     }
     public void Write(CilValue source) {
         var storage = GetStorageValue();
+        // A source referencing a heap object (a string, a class instance, an array) goes into a reference slot as that
+        // reference whatever the slot holds now: an 'object' slot holding a boxed primitive unwraps to that primitive,
+        // and writing the source's bytes into the box would not be an assignment. Values (a boxed enum or struct the
+        // evaluation produced, a host primitive) keep copying their bytes into the unwrapped destination
+        if (storage is ICorDebugReferenceValue slotReference && IsHeapObjectReference(source)) {
+            WriteReference(slotReference, source);
+            return;
+        }
         var destination = storage.UnwrapDebugValue();
 
         // Value-typed storage. Value-type locations may be surfaced as an ICorDebugReferenceValue (e.g. enum locals),
@@ -64,34 +80,44 @@ internal class CorDebugLocation : ICilLocation {
         // slot itself, never into the dereferenced target, and null zeroes the slot. The dereferenced destination of a
         // non-null string slot is the string's data (generic STRING), which must never be written as bytes
         if (storage is ICorDebugReferenceValue destinationReference) {
-            if (source.IsNull) {
-                destinationReference.SetValue(default);
-                return;
-            }
-            if (source.CorValue is ICorDebugReferenceValue sourceReference) {
-                destinationReference.SetValue(sourceReference.GetValue());
-                return;
-            }
-            if (source.CorValue is ICorDebugHeapValue2 sourceHeap) {
-                var handle = sourceHeap.CreateHandle(CorDebugHandleType.HANDLE_STRONG);
-                try {
-                    destinationReference.SetValue(handle.GetValue());
-                }
-                finally {
-                    handle.TryDispose();
-                }
-                return;
-            }
-            throw new NotSupportedException("Cannot store a non-reference CIL value in a reference debuggee location");
+            WriteReference(destinationReference, source);
+            return;
         }
 
         throw new NotSupportedException("The CIL value cannot be stored in this debuggee location");
+    }
+    private static void WriteReference(ICorDebugReferenceValue destinationReference, CilValue source) {
+        if (source.IsNull) {
+            destinationReference.SetValue(default);
+            return;
+        }
+        if (source.CorValue is ICorDebugReferenceValue sourceReference) {
+            destinationReference.SetValue(sourceReference.GetValue());
+            return;
+        }
+        if (source.CorValue is ICorDebugHeapValue2 sourceHeap) {
+            var handle = sourceHeap.CreateHandle(CorDebugHandleType.HANDLE_STRONG);
+            try {
+                destinationReference.SetValue(handle.GetValue());
+            }
+            finally {
+                handle.TryDispose();
+            }
+            return;
+        }
+        throw new NotSupportedException("Cannot store a non-reference CIL value in a reference debuggee location");
     }
 
     private ICorDebugValue GetStorageValue() {
         if (Value is ICorDebugReferenceValue byRef && byRef.GetElementType() == CorElementType.BYREF)
             return byRef.Dereference();
         return Value;
+    }
+    private static bool IsHeapObjectReference(CilValue source) {
+        if (source.CorValue is not ICorDebugReferenceValue reference || reference.IsNull())
+            return false;
+        var target = reference.Dereference();
+        return target is ICorDebugStringValue or ICorDebugArrayValue || (target is ICorDebugObjectValue && target is not ICorDebugBoxValue);
     }
     private static bool IsValueType(CorElementType elementType) {
         return elementType is CorElementType.VALUETYPE or CorElementType.BOOLEAN or CorElementType.CHAR

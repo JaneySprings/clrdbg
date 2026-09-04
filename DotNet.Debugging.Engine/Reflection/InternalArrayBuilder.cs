@@ -19,13 +19,13 @@ internal static class InternalArrayBuilder {
 
     // Taken from Roslyn's pool, 'ToImmutableAndFree' returns it
     public static object GetInstance() {
-        return getInstanceMethod.Invoke(null, null)!;
+        return getInstanceMethod.InvokeUnwrapped(null, null)!;
     }
     public static void AddRange(object builder, object immutableArray) {
-        addRangeMethod.Invoke(builder, [immutableArray]);
+        addRangeMethod.InvokeUnwrapped(builder, [immutableArray]);
     }
     // The ImmutableArray<LocalSymbol> built
     public static object ToImmutableAndFree(object builder) {
-        return toImmutableAndFreeMethod.Invoke(builder, null)!;
+        return toImmutableAndFreeMethod.InvokeUnwrapped(builder, null)!;
     }
 }

@@ -56,7 +56,7 @@ internal static class RoslynReflection {
     public static object CreateImmutableArray(Type elementType, Array items) {
         var createRange = typeof(ImmutableArray).GetMethods(BindingFlags.Public | BindingFlags.Static)
             .Single(it => it.Name == nameof(ImmutableArray.CreateRange) && it.IsGenericMethodDefinition && it.GetParameters().Length == 1 && it.GetGenericArguments().Length == 1);
-        return createRange.MakeGenericMethod(elementType).Invoke(null, [items])!;
+        return createRange.MakeGenericMethod(elementType).InvokeUnwrapped(null, [items])!;
     }
     public static object EmptyImmutableArray(Type elementType) {
         return GetField(MakeImmutableArrayType(elementType), nameof(ImmutableArray<int>.Empty)).GetValue(null)!;
@@ -64,6 +64,14 @@ internal static class RoslynReflection {
     // 'default(ImmutableArray<T>)', the uninitialized array some Roslyn members take for "none"
     public static object DefaultImmutableArray(Type elementType) {
         return Activator.CreateInstance(MakeImmutableArrayType(elementType))!;
+    }
+
+    // Invokes without the TargetInvocationException wrapper: what Roslyn throws is the error worth reporting
+    public static object? InvokeUnwrapped(this MethodInfo method, object? target, object?[]? arguments) {
+        return method.Invoke(target, BindingFlags.DoNotWrapExceptions, null, arguments, null);
+    }
+    public static object InvokeUnwrapped(this ConstructorInfo constructor, object?[]? arguments) {
+        return constructor.Invoke(BindingFlags.DoNotWrapExceptions, null, arguments, null);
     }
 
     private static MissingMemberException Missing(Type type, string member) {

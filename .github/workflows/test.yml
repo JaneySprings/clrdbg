@@ -45,3 +45,12 @@ jobs:
 
       - name: Run tests
         run: dotnet test DotNet.Debugging.Tests/DotNet.Debugging.Tests.csproj -p:Configuration=Release
+
+      # The engine logs every runtime callback, which is what a failure like a lost step is diagnosed from
+      - name: Upload the engine logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-logs-${{ matrix.platform }}
+          path: DotNet.Debugging.Tests/bin/**/logs/*.log
+          if-no-files-found: warn

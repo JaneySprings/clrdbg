@@ -2,6 +2,7 @@ using DotNet.Debugging.CorApi;
 using DotNet.Debugging.CorApi.Extensions;
 using DotNet.Debugging.Engine.Enums;
 using DotNet.Debugging.Engine.Extensions;
+using DotNet.Debugging.Engine.Logging;
 using DotNet.Debugging.Engine.Models;
 using DotNet.Debugging.Engine.Variables;
 
@@ -235,6 +236,7 @@ internal class AsyncStepper {
         resumeBreakpoint.Activate(true);
         step.ReplaceBreakpoints(new AsyncBreakpoint(resumeBreakpoint, function.GetModule(), function.GetToken(), awaitInfo.ResumeOffset));
         step.Status = AsyncStepStatus.ResumeBreakpoint;
+        DebuggerLoggingService.LogMessage($"Async step: yielded on thread {step.ThreadId} at IL_{hitBreakpoint.ILOffset:X4}, builder id {DescribeId(step.AsyncIdHandle)}, resume breakpoint at IL_{awaitInfo.ResumeOffset:X4}");
     }
     private async Task HandleResumeBreakpointAsync(ICorDebugThread thread, ICorDebugILFrame frame) {
         var step = currentStep!;
@@ -242,8 +244,10 @@ internal class AsyncStepper {
         // method can resume on the stepping thread. The builder's id decides whenever it is available,
         // the thread id only stands in when it cannot be read
         var isSameInvocation = step.ThreadId == thread.GetId();
+        var currentId = "not read";
         if (step.AsyncIdHandle != null) {
             var asyncId = await GetAsyncIdAsync(frame);
+            currentId = DescribeId(asyncId);
             if (asyncId != null) {
                 var currentAddress = asyncId.Dereference().GetAddress();
                 var storedAddress = step.AsyncIdHandle.Dereference().GetAddress();
@@ -251,6 +255,7 @@ internal class AsyncStepper {
                 asyncId.TryDispose();
             }
         }
+        DebuggerLoggingService.LogMessage($"Async step: resume breakpoint on thread {thread.GetId()} (yielded on {step.ThreadId}), builder id {currentId}, stored {DescribeId(step.AsyncIdHandle)}, same invocation: {isSameInvocation}");
         if (!isSameInvocation)
             return;
 
@@ -260,6 +265,17 @@ internal class AsyncStepper {
         ClearActiveStep();
         if (!await TrySetupAsync(thread, kind))
             stepController.CreateStepper(thread, kind);
+        DebuggerLoggingService.LogMessage($"Async step: resumed, {(stepController.IsStepping ? "plain stepper created" : "carried by breakpoints")}");
+    }
+    private static string DescribeId(ICorDebugHandleValue? id) {
+        if (id == null)
+            return "unavailable";
+        try {
+            return $"0x{id.Dereference().GetAddress().Value:X}";
+        }
+        catch (Exception ex) {
+            return $"unreadable ({ex.Message})";
+        }
     }
 
     private async Task<ICorDebugHandleValue?> GetAsyncIdAsync(ICorDebugILFrame frame) {
