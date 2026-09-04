@@ -113,5 +113,8 @@ public class LaunchConfiguration : BaseConfiguration {
             Arguments = profile.CommandLineArgs.Split(' ').ToList(); //TODO: update split
         if (profile.EnvironmentVariables != null)
             EnvironmentVariables = profile.EnvironmentVariables;
+
+        if (!string.IsNullOrEmpty(profile.ApplicationUrl))
+            EnvironmentVariables.TryAdd("ASPNETCORE_URLS", profile.ApplicationUrl);
     }
 }
