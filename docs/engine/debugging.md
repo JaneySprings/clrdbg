@@ -179,7 +179,7 @@ process stopped right after a continue issued inside a callback.
 `EvaluateAsync(expression, frameId)`:
 
 1. `ExpressionCompiler` compiles the expression with the Roslyn expression compiler
-   (`Microsoft.CodeAnalysis.CSharp.ExpressionEvaluator`, publicized) against metadata blocks built
+   (rebuilt from the Roslyn sources in `DotNet.Debugging.Evaluation`) against metadata blocks built
    from the loaded modules' metadata — one module per assembly identity, preferring the frame's —
    in the frame's method context (locals, hoisted locals, constants from the PDB) or in a type
    context for `DebuggerDisplay` templates. Compiled expressions are cached until a module loads.

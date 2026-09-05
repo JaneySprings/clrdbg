@@ -9,13 +9,12 @@
 
 	<ItemGroup>
 		<PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
-		<!-- The Roslyn expression compiler is internal, the evaluator reaches it through Reflection/ -->
-		<PackageReference Include="MP.Microsoft.CodeAnalysis.CSharp.ExpressionEvaluator.ExpressionCompiler" />
 		<PackageReference Include="Microsoft.Diagnostics.NETCore.Client" />
 		<PackageReference Include="Microsoft.Diagnostics.DbgShim" />
 	</ItemGroup>
 
 	<ItemGroup>
 		<ProjectReference Include="..\DotNet.Debugging.CorApi\DotNet.Debugging.CorApi.csproj" />
+		<ProjectReference Include="..\DotNet.Debugging.Evaluation\DotNet.Debugging.Evaluation.csproj" />
 	</ItemGroup>
 </Project>

@@ -1,0 +1,14 @@
+# The vendored Roslyn sources are compiled as they are: the analyzer findings the repository's .editorconfig raises to
+# warnings and the nullable findings of a newer compiler are not fixed here, so they are not reported here either (a
+# per-category setting overrides the repository's, a bulk one would not). Survives update.sh, which only replaces src/
+[*.cs]
+dotnet_analyzer_diagnostic.category-Style.severity = none
+dotnet_analyzer_diagnostic.category-Design.severity = none
+dotnet_analyzer_diagnostic.category-Interoperability.severity = none
+dotnet_analyzer_diagnostic.category-Performance.severity = none
+dotnet_analyzer_diagnostic.category-Reliability.severity = none
+dotnet_analyzer_diagnostic.category-Security.severity = none
+dotnet_analyzer_diagnostic.category-Usage.severity = none
+dotnet_diagnostic.CS8602.severity = none
+dotnet_diagnostic.CS8603.severity = none
+dotnet_diagnostic.CS8765.severity = none

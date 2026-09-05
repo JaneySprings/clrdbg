@@ -1,0 +1,52 @@
+<Project Sdk="Microsoft.NET.Sdk">
+	<Import Project="..\Common.Build.props" />
+	<Import Project="Roslyn\Roslyn.props" />
+
+	<PropertyGroup>
+		<OutputType>Library</OutputType>
+		<RootNamespace>DotNet.Debugging.Evaluation</RootNamespace>
+		<AssemblyName>Microsoft.CodeAnalysis.CSharp.ExpressionEvaluator.ExpressionCompiler</AssemblyName>
+		<SignAssembly>true</SignAssembly>
+		<PublicSign>true</PublicSign>
+		<AssemblyOriginatorKeyFile>Roslyn\MicrosoftSharedPublicKey.snk</AssemblyOriginatorKeyFile>
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+		<!-- The Roslyn sources bring their own usings and are compiled the way their own project compiles them -->
+		<ImplicitUsings>disable</ImplicitUsings>
+		<DefineConstants>$(DefineConstants);EXPRESSIONCOMPILER</DefineConstants>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<!-- A strong named assembly may only befriend one it names a key for -->
+		<InternalsVisibleTo Remove="DotNet.Debugging.Tests" />
+	</ItemGroup>
+	<ItemGroup>
+		<Compile Remove="Roslyn\src\ExpressionEvaluator\Core\Source\ExpressionCompiler\DkmUtilities.cs" />
+		<Compile Remove="Roslyn\src\ExpressionEvaluator\Core\Source\ExpressionCompiler\ExpressionCompiler.cs" />
+		<Compile Remove="Roslyn\src\ExpressionEvaluator\Core\Source\ExpressionCompiler\ExpressionEvaluatorFatalError.cs" />
+		<Compile Remove="Roslyn\src\ExpressionEvaluator\Core\Source\ExpressionCompiler\FrameDecoder.cs" />
+		<Compile Remove="Roslyn\src\ExpressionEvaluator\Core\Source\ExpressionCompiler\InstructionDecoder.cs" />
+		<Compile Remove="Roslyn\src\ExpressionEvaluator\Core\Source\ExpressionCompiler\LanguageInstructionDecoder.cs" />
+		<Compile Remove="Roslyn\src\ExpressionEvaluator\CSharp\Source\ExpressionCompiler\CSharpExpressionCompiler.cs" />
+		<Compile Remove="Roslyn\src\ExpressionEvaluator\CSharp\Source\ExpressionCompiler\CSharpFrameDecoder.cs" />
+		<Compile Remove="Roslyn\src\ExpressionEvaluator\CSharp\Source\ExpressionCompiler\CSharpInstructionDecoder.cs" />
+		<Compile Remove="Roslyn\src\ExpressionEvaluator\CSharp\Source\ExpressionCompiler\CSharpLanguageInstructionDecoder.cs" />
+		<Compile Remove="Roslyn\src\ExpressionEvaluator\CSharp\Source\ExpressionCompiler\CSharpMetadataContext.cs" />
+		<!-- Named by MetadataUtilities the way Roslyn's own project names it -->
+		<EmbeddedResource Include="Roslyn\src\ExpressionEvaluator\Core\Source\ExpressionCompiler\Resources\WindowsProxy.winmd" LogicalName="Microsoft.CodeAnalysis.ExpressionEvaluator.Resources.WindowsProxy.winmd" />
+	</ItemGroup>
+	<ItemGroup>
+		<PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+		<PackageReference Include="Microsoft.DiaSymReader" />
+	</ItemGroup>
+
+
+	<Target Name="StripDebugConstant" BeforeTargets="CoreCompile">
+		<PropertyGroup>
+			<DefineConstants>$(DefineConstants.Replace('DEBUG', ''))</DefineConstants>
+		</PropertyGroup>
+	</Target>
+	<Target Name="CheckVendoredRoslynVersion" BeforeTargets="CoreCompile">
+		<Error Condition="'$(RoslynVendoredVersion)' != '$(CodeAnalysisVersion)'"
+		       Text="The vendored Roslyn sources are $(RoslynVendoredVersion) but Microsoft.CodeAnalysis.CSharp is $(CodeAnalysisVersion): run DotNet.Debugging.Evaluation/Roslyn/update.sh" />
+	</Target>
+</Project>

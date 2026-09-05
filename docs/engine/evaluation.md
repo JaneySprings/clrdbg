@@ -20,11 +20,10 @@ The same path serves the `evaluate` request, breakpoint conditions, logpoint pla
 
 ## Compiling: `ExpressionCompiler`
 
-The Roslyn expression compiler (`Microsoft.CodeAnalysis.CSharp.ExpressionEvaluator`, internal to
-Roslyn and driven through the reflection wrappers of `Reflection/` — one `Internal*` class per Roslyn
-type, each resolving its members once and naming the one a Roslyn update moved) compiles against
-**metadata blocks** — the raw metadata of the
-debuggee's loaded modules, obtained through `IMetaDataTables2.GetMetaDataStorage()`. When the same
+The Roslyn expression compiler (rebuilt from the Roslyn sources in the
+[`DotNet.Debugging.Evaluation`](../evaluation/README.md) project and driven through its
+`ExpressionContext`) compiles against **metadata blocks** — the raw metadata of the debuggee's loaded
+modules, obtained through `IMetaDataTables2.GetMetaDataStorage()`. When the same
 assembly identity is loaded more than once (several `AssemblyLoadContext`s) only one module per
 identity is passed, preferring the one the evaluation binds against, so the tokens emitted into the
 expression assembly refer to the instance the user is debugging.
@@ -43,12 +42,12 @@ Two contexts exist:
 
 When the thread has a current exception, a `$exception` alias is registered so the expression can name
 it. The compiler also needs `Microsoft.VisualStudio.Debugger.Clr.IntrinsicMethods` — the debugger
-intrinsics it emits calls to for synthetic variables and aliases — which the engine compiles once at
-startup into a small in-memory assembly (`CreateIntrinsicMethodsAssembly`).
+intrinsics it emits calls to for synthetic variables and aliases — which `DotNet.Debugging.Evaluation`
+compiles once into a small in-memory assembly (`IntrinsicMethodsReference`).
 
 Compilation errors come back as the diagnostic messages joined with `; `. Results are cached in an
 LRU of 256 entries keyed by context kind, module, method token, whether an exception is present and
-the text; a method-context entry also records the `MethodContextReuseConstraints` Roslyn computed
+the text; a method-context entry also records the `ReuseConstraints` Roslyn computed
 (the IL span in which the same locals are in scope) and serves every IL offset inside it, so stepping
 through a scope does not recompile the watches. The cache and the metadata blocks are dropped
 whenever a module loads (`ManagedDebugger.ModulesVersion`).

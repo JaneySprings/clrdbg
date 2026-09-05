@@ -1,30 +1,22 @@
-using System.Collections.Immutable;
-using System.Reflection.Metadata;
-using System.Reflection.Metadata.Ecma335;
 using DotNet.Debugging.CorApi;
 using DotNet.Debugging.CorApi.Extensions;
 using DotNet.Debugging.Engine.Models;
-using DotNet.Debugging.Engine.Reflection;
+using DotNet.Debugging.Evaluation;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
-using Microsoft.VisualStudio.Debugger.Clr;
-using Microsoft.VisualStudio.Debugger.Evaluation;
 
 namespace DotNet.Debugging.Engine.Evaluation;
 
-// Compiles C# expressions with the Roslyn expression compiler against the metadata of the loaded modules. The
-// compiler is internal to Roslyn, it is driven through the wrappers of 'Reflection/'; the Roslyn objects passed
-// between them (metadata blocks, evaluation contexts, symbols) are held as plain objects here
+// Compiles C# expressions with the Roslyn expression compiler (DotNet.Debugging.Evaluation) against the metadata of
+// the loaded modules
 internal class ExpressionCompiler {
     private const int CacheCapacity = 256;
-    private static readonly PortableExecutableReference intrinsicMethodsReference = MetadataReference.CreateFromImage(CreateIntrinsicMethodsAssembly());
 
     private readonly ManagedDebugger debugger;
     private readonly Dictionary<string, CacheEntry> compileCache = new Dictionary<string, CacheEntry>();
     private readonly LinkedList<string> compileOrder = new LinkedList<string>();
-    // The ImmutableArray<MetadataBlock> per preferred module
-    private readonly Dictionary<ModuleInfo, object> metadataBlocksCache = new Dictionary<ModuleInfo, object>();
+    private readonly Dictionary<ModuleInfo, EvaluationMetadata> metadataCache = new Dictionary<ModuleInfo, EvaluationMetadata>();
     private int cachedModulesVersion = -1;
 
     public ExpressionCompiler(ManagedDebugger debugger) {
@@ -51,7 +43,7 @@ internal class ExpressionCompiler {
         var cacheKey = CreateCacheKey(expression, context, frame, preferredModule, hasException);
         if (compileCache.TryGetValue(cacheKey, out var entry)) {
             // A method context serves every IL offset of the span it was compiled for, the same locals are in scope there
-            if (frame == null || InternalMethodContextReuseConstraints.AreSatisfied(entry.Constraints!, CreateModuleId(preferredModule), frame.GetFunction().GetToken(), 1, GetILOffset(frame))) {
+            if (frame == null || entry.Constraints!.AreSatisfied(preferredModule.MetadataReader.Mvid, preferredModule.Name, frame.GetFunction().GetToken(), GetILOffset(frame))) {
                 compileOrder.Remove(entry.Node);
                 compileOrder.AddFirst(entry.Node);
                 return entry.Value;
@@ -61,24 +53,15 @@ internal class ExpressionCompiler {
             entry.Value.Dispose();
         }
 
-        var blocks = GetMetadataBlocks(preferredModule);
-        var evaluationContext = context.RootValue == null
-            ? CreateMethodContext(blocks, frame!, preferredModule)
-            : CreateTypeContext(blocks, context.RootValue, preferredModule);
-
-        var diagnostics = InternalDiagnosticBag.GetInstance();
-        try {
-            var result = InternalEvaluationContext.CompileExpression(evaluationContext, expression, DkmEvaluationFlags.TreatAsExpression, GetAliases(hasException), diagnostics);
-            if (result == null || InternalDiagnosticBag.HasAnyErrors(diagnostics)) {
-                var errors = InternalDiagnosticBag.AsEnumerable(diagnostics).Where(it => it.Severity == DiagnosticSeverity.Error).Select(it => it.GetMessage());
-                throw new EvaluationException(string.Join("; ", errors));
-            }
-            var compiled = new CompiledExpression(InternalCompileResult.GetAssembly(result), InternalCompileResult.GetTypeName(result), InternalCompileResult.GetMethodName(result));
-            return AddToCache(cacheKey, compiled, InternalEvaluationContext.GetMethodContextReuseConstraints(evaluationContext));
-        }
-        finally {
-            InternalDiagnosticBag.Free(diagnostics);
-        }
+        var metadata = GetMetadata(preferredModule);
+        var expressionContext = context.RootValue == null
+            ? CreateMethodContext(metadata, frame!, preferredModule)
+            : CreateTypeContext(metadata, context.RootValue, preferredModule);
+        var result = expressionContext.Compile(expression, hasException);
+        if (result.Assembly == null)
+            throw new EvaluationException(string.Join("; ", result.Errors));
+        var compiled = new CompiledExpression(result.Assembly, result.TypeName!, result.MethodName!);
+        return AddToCache(cacheKey, compiled, expressionContext.ReuseConstraints);
     }
 
     private static string CreateCacheKey(string expression, EvaluationContext context, ICorDebugILFrame? frame, ModuleInfo preferredModule, bool hasException) {
@@ -87,13 +70,10 @@ internal class ExpressionCompiler {
         return $"method|{preferredModule.Id}|{frame!.GetFunction().GetToken()}|{hasException}|{expression}";
     }
     private static int GetILOffset(ICorDebugILFrame frame) {
-        return InternalEvaluationContextBase.NormalizeILOffset((uint)frame.GetIP().pnOffset);
+        return ExpressionContext.NormalizeILOffset((uint)frame.GetIP().pnOffset);
     }
-    private static object CreateModuleId(ModuleInfo moduleInfo) {
-        return InternalModuleId.Create(moduleInfo.MetadataReader.Mvid, moduleInfo.Name);
-    }
-    // 'constraints' is the MethodContextReuseConstraints of a method context, null for a type one
-    private CompiledExpression AddToCache(string key, CompiledExpression compiled, object? constraints) {
+    // 'constraints' are the ones of a method context, null for a type one
+    private CompiledExpression AddToCache(string key, CompiledExpression compiled, ReuseConstraints? constraints) {
         if (compileCache.Count >= CacheCapacity) {
             var oldestKey = compileOrder.Last!.Value;
             compileOrder.RemoveLast();
@@ -112,13 +92,7 @@ internal class ExpressionCompiler {
             entry.Value.Dispose();
         compileCache.Clear();
         compileOrder.Clear();
-        metadataBlocksCache.Clear();
-    }
-    // The ImmutableArray<Alias> of the pseudo variables the expression may name
-    private static object GetAliases(bool hasException) {
-        if (!hasException)
-            return InternalAlias.Empty;
-        return InternalAlias.CreateArray([InternalAlias.Create(DkmClrAliasKind.Exception, "Error", "$exception", typeof(Exception).AssemblyQualifiedName!)]);
+        metadataCache.Clear();
     }
 
     // The metadata passed to the Roslyn evaluator, addressed in the readers' own storage (the runtime's importer
@@ -126,23 +100,23 @@ internal class ExpressionCompiler {
     // (the same assembly in several AssemblyLoadContexts) only one per identity is kept so Roslyn binds types
     // against a single instance - the module the evaluation binds against is preferred, as the tokens emitted
     // into the evaluation assembly must match the instance the user is debugging
-    private object GetMetadataBlocks(ModuleInfo preferredModule) {
-        if (metadataBlocksCache.TryGetValue(preferredModule, out var cached))
+    private EvaluationMetadata GetMetadata(ModuleInfo preferredModule) {
+        if (metadataCache.TryGetValue(preferredModule, out var cached))
             return cached;
 
         var modules = GetModulesPreferring(preferredModule);
-        var blocks = new List<object>(modules.Count);
+        var blocks = new List<ModuleMetadataBlock>(modules.Count);
         foreach (var moduleInfo in modules) {
             var (pointer, size) = moduleInfo.MetadataReader.GetMetadataStorage();
             var reader = moduleInfo.MetadataReader.PeMetadataReader;
             var module = reader.GetModuleDefinition();
             var generationId = module.GenerationId.IsNil ? Guid.Empty : reader.GetGuid(module.GenerationId);
-            blocks.Add(InternalMetadataBlock.Create(CreateModuleId(moduleInfo), generationId, pointer, size));
+            blocks.Add(new ModuleMetadataBlock(moduleInfo.MetadataReader.Mvid, moduleInfo.Name, generationId, pointer, size));
         }
 
-        var blocksArray = InternalMetadataBlock.CreateArray(blocks);
-        metadataBlocksCache[preferredModule] = blocksArray;
-        return blocksArray;
+        var metadata = new EvaluationMetadata(blocks);
+        metadataCache[preferredModule] = metadata;
+        return metadata;
     }
     private List<ModuleInfo> GetModulesPreferring(ModuleInfo preferredModule) {
         var modulesByIdentity = new Dictionary<string, List<ModuleInfo>>(StringComparer.Ordinal);
@@ -171,89 +145,22 @@ internal class ExpressionCompiler {
         return $"{reader.GetString(assembly.Name)}|{assembly.Version}|{culture}|{publicKey}";
     }
 
-    // What Roslyn's own EvaluationContext.CreateMethodContext does, with the portable PDB read directly through
-    // its metadata reader rather than through a symbol reader. Returns the C# EvaluationContext
-    private static object CreateMethodContext(object blocks, ICorDebugILFrame frame, ModuleInfo moduleInfo) {
+    // The frame's method with the portable PDB read directly through the module's metadata reader
+    private static ExpressionContext CreateMethodContext(EvaluationMetadata metadata, ICorDebugILFrame frame, ModuleInfo moduleInfo) {
         var function = frame.GetFunction();
-        var moduleId = CreateModuleId(moduleInfo);
-        var compilation = InternalCompilationExtensions.ToCompilation(blocks).AddReferences(intrinsicMethodsReference);
-        var methodToken = function.GetToken();
-        var methodHandle = (MethodDefinitionHandle)MetadataTokens.Handle(methodToken);
-        var currentSourceMethod = InternalCompilationExtensions.GetSourceMethod(compilation, moduleId, methodHandle);
-        var currentFrame = InternalCompilationExtensions.GetMethod(compilation, moduleId, methodHandle);
-        var containingModule = InternalSymbol.GetContainingModule(currentFrame);
-        var symbolProvider = InternalCSharpEESymbolProvider.Create(InternalCSharpCompilation.GetSourceAssembly(compilation), containingModule, currentFrame);
-        var metadataDecoder = InternalMetadataDecoder.Create(containingModule, currentFrame);
-        var localSignatureToken = function.GetLocalVarSigToken();
-        var localSignature = localSignatureToken == 0 ? default : (StandaloneSignatureHandle)MetadataTokens.Handle(localSignatureToken);
-        var localInfo = InternalMetadataDecoder.GetLocalInfo(metadataDecoder, localSignature);
-        var ilOffset = GetILOffset(frame);
-        var pdbReader = moduleInfo.MetadataReader.PdbMetadataReader;
-        var debugInfo = pdbReader == null
-            ? InternalMethodDebugInfo.None
-            : InternalMethodDebugInfo.ReadFromPortable(pdbReader, methodToken, ilOffset, symbolProvider);
-        var reuseSpan = InternalMethodDebugInfo.GetReuseSpan(debugInfo);
-        var locals = InternalArrayBuilder.GetInstance();
-        InternalMethodDebugInfo.GetLocals(locals, symbolProvider, debugInfo, localInfo);
-        var hoistedLocals = InternalMethodDebugInfo.GetInScopeHoistedLocalIndices(debugInfo, ilOffset, ref reuseSpan);
-        InternalArrayBuilder.AddRange(locals, InternalMethodDebugInfo.GetLocalConstants(debugInfo));
-
-        return InternalEvaluationContext.Create(
-            InternalMethodContextReuseConstraints.Create(moduleId, methodToken, methodVersion: 1, reuseSpan),
-            compilation,
-            currentFrame,
-            currentSourceMethod,
-            InternalArrayBuilder.ToImmutableAndFree(locals),
-            hoistedLocals,
-            debugInfo);
+        return ExpressionContext.CreateMethodContext(metadata, moduleInfo.MetadataReader.Mvid, moduleInfo.Name, function.GetToken(), function.GetLocalVarSigToken(), GetILOffset(frame), moduleInfo.MetadataReader.PdbMetadataReader);
     }
-    private static object CreateTypeContext(object blocks, ICorDebugValue rootValue, ModuleInfo moduleInfo) {
-        var rootType = rootValue.GetExactType();
-        var moduleId = CreateModuleId(moduleInfo);
-        var compilation = InternalCompilationExtensions.ToCompilation(blocks).AddReferences(intrinsicMethodsReference);
-        var currentType = InternalCompilationExtensions.GetType(compilation, moduleId, rootType.GetClass().GetToken());
-        return InternalEvaluationContext.Create(
-            null,
-            compilation,
-            InternalSynthesizedContextMethodSymbol.Create(currentType),
-            currentSourceMethod: null,
-            locals: InternalLocalSymbol.DefaultImmutableArray,
-            inScopeHoistedLocalSlots: ImmutableSortedSet<int>.Empty,
-            methodDebugInfo: InternalMethodDebugInfo.None);
-    }
-
-    // The debugger intrinsics the Roslyn evaluator emits calls to, handled by the interpreter
-    private static ImmutableArray<byte> CreateIntrinsicMethodsAssembly() {
-        const string source = """
-            namespace Microsoft.VisualStudio.Debugger.Clr;
-
-            public static class IntrinsicMethods
-            {
-                public static void CreateVariable(System.Type type, string name, System.Guid customTypeInfoPayloadTypeId, byte[] customTypeInfoPayload) { }
-                public static object GetObjectByAlias(string name) => throw null;
-                public static ref T GetVariableAddress<T>(string name) => throw null;
-                public static System.Exception GetException() => throw null;
-            }
-            """;
-        var compilation = CSharpCompilation.Create(
-            "DotNet.Debugging.Intrinsics",
-            [SyntaxFactory.ParseSyntaxTree(source)],
-            [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-        using var stream = new MemoryStream();
-        var result = compilation.Emit(stream);
-        if (!result.Success)
-            throw new InvalidOperationException(string.Join("; ", result.Diagnostics.Select(it => it.GetMessage())));
-        return ImmutableArray.Create(stream.ToArray());
+    private static ExpressionContext CreateTypeContext(EvaluationMetadata metadata, ICorDebugValue rootValue, ModuleInfo moduleInfo) {
+        return ExpressionContext.CreateTypeContext(metadata, moduleInfo.MetadataReader.Mvid, moduleInfo.Name, rootValue.GetExactType().GetClass().GetToken());
     }
 
     private class CacheEntry {
         public CompiledExpression Value { get; }
         public LinkedListNode<string> Node { get; }
-        // The MethodContextReuseConstraints (method and IL span) the expression was compiled for, null for a type (DebuggerDisplay) context
-        public object? Constraints { get; }
+        // The method and IL span the expression was compiled for, null for a type (DebuggerDisplay) context
+        public ReuseConstraints? Constraints { get; }
 
-        public CacheEntry(CompiledExpression value, LinkedListNode<string> node, object? constraints) {
+        public CacheEntry(CompiledExpression value, LinkedListNode<string> node, ReuseConstraints? constraints) {
             Value = value;
             Node = node;
             Constraints = constraints;

@@ -10,7 +10,7 @@ using DotNet.Debugging.Engine.Extensions;
 using DotNet.Debugging.Engine.Logging;
 using DotNet.Debugging.Engine.Metadata;
 using DotNet.Debugging.Engine.Models;
-using DotNet.Debugging.Engine.Reflection;
+using DotNet.Debugging.Evaluation;
 
 namespace DotNet.Debugging.Engine.Variables;
 
@@ -220,7 +220,7 @@ internal class VariableProvider {
             var thisValue = arguments[0];
             if (thisValue != null && (methodProps.szMethod == "MoveNext" || methodProps.szMethod.Contains(">b"))) {
                 var containingTypeName = metadataImport.GetTypeDefProps(function.GetClass().GetToken()).szTypeDef;
-                var containingTypeKind = InternalGeneratedNameParser.GetKind(containingTypeName);
+                var containingTypeKind = GeneratedNames.GetKind(containingTypeName);
                 if (containingTypeKind is GeneratedNameKind.StateMachineType or GeneratedNameKind.LambdaDisplayClass) {
                     // 'this' is the generated class, the user's 'this' is one of its fields (absent when the user's method is static)
                     hoistedLocalsContainer = thisValue;
@@ -271,7 +271,7 @@ internal class VariableProvider {
         var corClass = objectValue.GetClass();
         var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
         foreach (var field in metadataImport.EnumFields(corClass.GetToken())) {
-            if (InternalGeneratedNameParser.GetKind(metadataImport.GetFieldProps(field).szField) != GeneratedNameKind.DisplayClassLocalOrField)
+            if (GeneratedNames.GetKind(metadataImport.GetFieldProps(field).szField) != GeneratedNameKind.DisplayClassLocalOrField)
                 continue;
             await AddClosureMembersAsync(objectValue.GetFieldValue(corClass, field), reference, result);
             break;
@@ -282,7 +282,7 @@ internal class VariableProvider {
         var objectValue = generatedInstance.UnwrapDebugValueToObject();
         var corClass = objectValue.GetClass();
         foreach (var field in metadataImport.EnumFields(corClass.GetToken())) {
-            var kind = InternalGeneratedNameParser.GetKind(metadataImport.GetFieldProps(field).szField);
+            var kind = GeneratedNames.GetKind(metadataImport.GetFieldProps(field).szField);
             if (kind == GeneratedNameKind.ThisProxyField)
                 return objectValue.GetFieldValue(corClass, field);
             if (kind == GeneratedNameKind.DisplayClassLocalOrField) {
@@ -838,7 +838,7 @@ internal class VariableProvider {
         displayName = fieldName ?? string.Empty;
         if (fieldName == null)
             return false;
-        if (!InternalGeneratedNameParser.TryParseGeneratedName(fieldName, out var kind, out var openBracketOffset, out var closeBracketOffset))
+        if (!GeneratedNames.TryParseGeneratedName(fieldName, out var kind, out var openBracketOffset, out var closeBracketOffset))
             return true;
         if (kind != GeneratedNameKind.HoistedLocalField)
             return false;

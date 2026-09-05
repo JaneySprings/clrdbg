@@ -28,3 +28,12 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## Roslyn
+
+`DotNet.Debugging.Evaluation/Roslyn/src` is a verbatim copy of the expression compiler sources of
+**Roslyn** by the .NET Foundation and contributors: https://github.com/dotnet/roslyn (the commit is
+recorded in `DotNet.Debugging.Evaluation/Roslyn/Roslyn.props`), licensed under MIT
+(`DotNet.Debugging.Evaluation/Roslyn/License.txt`). The way the Visual Studio debugger dependency is
+removed (`DotNet.Debugging.Evaluation/Shims`) follows the
+`MP.Microsoft.CodeAnalysis.CSharp.ExpressionEvaluator.ExpressionCompiler` package by MattParkerDev.

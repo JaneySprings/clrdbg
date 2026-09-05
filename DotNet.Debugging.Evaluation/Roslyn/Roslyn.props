@@ -1,0 +1,7 @@
+<!-- Written by update.sh: the Roslyn version vendored under src/ and the dotnet/roslyn commit it was copied from -->
+<Project>
+  <PropertyGroup>
+    <RoslynVendoredVersion>5.9.0</RoslynVendoredVersion>
+    <RoslynVendoredCommit>35d9211b841e7613c1d2f8f5af6d628ace696c4c</RoslynVendoredCommit>
+  </PropertyGroup>
+</Project>
