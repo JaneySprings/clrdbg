@@ -87,11 +87,15 @@ Breakpoint callback → AsyncStepper.TryHandleBreakpointAsync
                                                          (another invocation: keep waiting → Continue)
 ```
 
-"Same invocation" means the same `ObjectIdForDebugger` on the method builder
-(`AsyncTaskMethodBuilder<T>` and friends expose it for exactly this). The id is read once at the
-yield point through a func eval, kept in a strong handle, and compared by address at the resume
-point; an address of zero on either side is accepted as a match, and only when the id cannot be
-read does a matching thread id stand in. A matching thread id alone proves nothing — the pool
+"Same invocation" means the same task on the method builder (the state machine box, which
+`AsyncTaskMethodBuilder<T>` and friends keep in `m_task`). The id is read at the yield point and kept
+in a strong handle, then compared by address at the resume point; an address of zero on either side
+is accepted as a match, and only when the id cannot be read does a matching thread id stand in. The
+field is read directly, without a func eval, whenever the task exists — at every resume, and at a
+yield past the method's first: a breakpoint hit while an eval runs is continued through, so another
+invocation of the same method resuming past the shared resume breakpoint during one would lose the
+step. Only at a first yield, where the task does not exist yet, is it created through the builder's
+`ObjectIdForDebugger` property, which the method keeps as its box from then on. A matching thread id alone proves nothing — the pool
 reuses threads, so another invocation of the same method can resume on the stepping thread. The
 yield breakpoint is only honoured on the thread that set the step up, which is safe there: until
 the stepped invocation yields, it occupies that thread itself.

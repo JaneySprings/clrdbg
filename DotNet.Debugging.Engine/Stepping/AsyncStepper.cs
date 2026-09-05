@@ -278,12 +278,38 @@ internal class AsyncStepper {
         }
     }
 
+    // The builder's task identifies the invocation. It is read from the builder's field whenever it exists (at every
+    // resume, at a yield past the method's first one): a func eval of the debugger property lets the debuggee run
+    // meanwhile, and a breakpoint hit during an eval is continued through - another invocation of the method resuming
+    // past the shared resume breakpoint then loses the step. The property is only asked at a first yield, where the
+    // task does not exist yet and the property creates it (the box the method keeps from then on)
     private async Task<ICorDebugHandleValue?> GetAsyncIdAsync(ICorDebugILFrame frame) {
         var builder = GetAsyncBuilder(frame);
         if (builder == null)
             return null;
+        var task = ReadBuilderTask(builder);
+        if (task != null)
+            return task;
         var objectId = await debugger.FuncEval.GetPropertyValueAsync(builder, frame, "ObjectIdForDebugger");
         return objectId as ICorDebugHandleValue;
+    }
+    // A strong handle to the builder's 'm_task' (the async void builder keeps its task builder in '_builder'), null
+    // while the task does not exist or the builder is not one of the runtime's
+    private static ICorDebugHandleValue? ReadBuilderTask(ICorDebugValue builder) {
+        try {
+            var objectValue = builder.UnwrapDebugValueToObject();
+            var corClass = objectValue.GetClass();
+            var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
+            var innerBuilder = metadataImport.EnumFieldsWithName(corClass.GetToken(), "_builder").SingleOrDefault();
+            if (!innerBuilder.IsNil)
+                return ReadBuilderTask(objectValue.GetFieldValue(corClass, innerBuilder).UnwrapDebugValue());
+            if (GetBuilderTask(objectValue, corClass, metadataImport) is not ICorDebugReferenceValue reference || reference.Dereference() is not ICorDebugHeapValue2 heapValue)
+                return null;
+            return heapValue.CreateHandle(CorDebugHandleType.HANDLE_STRONG);
+        }
+        catch {
+            return null;
+        }
     }
     // The '<>t__builder' field of the state machine 'this'
     private static ICorDebugValue? GetAsyncBuilder(ICorDebugILFrame frame) {

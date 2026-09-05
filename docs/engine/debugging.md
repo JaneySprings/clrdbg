@@ -115,7 +115,7 @@ raised with `StopReason.Breakpoint` and the breakpoint id ([breakpoints.md](brea
 `AsyncStepper` handles `await`: a plain step over an await would run until the method returns to
 its caller. Using the async stepping information Roslyn writes to the PDB (yield/resume offsets),
 it plants a breakpoint at every *yield* point while the plain stepper runs. If a yield point is
-reached the step is cancelled, the builder's `ObjectIdForDebugger` is captured, and a breakpoint is
+reached the step is cancelled, the builder's task (read from its field, or created through `ObjectIdForDebugger` at a first yield) is captured as the invocation's identity, and a breakpoint is
 moved to that await's *resume* point; when that one is hit by the same invocation (the same builder
 id — the thread id only stands in when the id cannot be read) an ordinary step resumes from there.
 Stepping out of an async method
