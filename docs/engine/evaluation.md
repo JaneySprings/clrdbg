@@ -45,7 +45,13 @@ it. The compiler also needs `Microsoft.VisualStudio.Debugger.Clr.IntrinsicMethod
 intrinsics it emits calls to for synthetic variables and aliases — which `DotNet.Debugging.Evaluation`
 compiles once into a small in-memory assembly (`IntrinsicMethodsReference`).
 
-Compilation errors come back as the diagnostic messages joined with `; `. Results are cached in an
+Compilation errors come back as the diagnostic messages joined with `; `. When the errors blame an
+assembly the debuggee has not loaded — an unknown type's, or `System.Linq` for an extension method
+that could be one of its, found the way Roslyn's own compiler does (`GetMissingAssemblyIdentities`) —
+`ExpressionEvaluator` loads it into the debuggee (`Assembly.Load`, a module event follows) and compiles
+again, once per assembly; a program that never used LINQ can still evaluate `strings.Where(...)`.
+Deliberate divergence: Microsoft's debugger reads the missing assembly's metadata from disk and
+interprets its IL itself. Results are cached in an
 LRU of 256 entries keyed by context kind, module, method token, whether an exception is present and
 the text; a method-context entry also records the `ReuseConstraints` Roslyn computed
 (the IL span in which the same locals are in scope) and serves every IL offset inside it, so stepping
@@ -61,6 +67,7 @@ from `System.Reflection.Emit.OpCodes`, operands and branch targets resolved to i
 | `CilValue` holds | Used for |
 |---|---|
 | `Value` — a host primitive, string or `ResolvedCilType` | Constants, arithmetic results, `ldtoken`, interpolated-string builders. |
+| `Value` — a `HostObject`, `HostDelegate`, `HostFunction` or `HostSequence` (`HostValues.cs`) | What only exists in the debugger: an instance of a type the expression assembly declares (a closure, a display class, an anonymous type), a delegate the expression created, the function `ldftn` pushed, a sequence a System.Linq operator computed here. See *Code the expression declares* below. |
 | `CorValue` — a debuggee `ICorDebugValue` | Everything read from the debuggee; reference values are pinned with strong handles (`EvaluationHandleScope.Root`) so they survive later func evals. |
 | `Location` — an `ICilLocation` | Addresses: a debuggee slot (`CorDebugLocation`: local, argument, field, element), a host temporary (`TemporaryLocation`), a synthetic variable (`SyntheticVariableLocation`, a one-element array allocated in the debuggee) or a slot the runtime cannot read at this instruction (`UnavailableLocation`, optimized away - reading it fails with vsdbg's message). A by-reference slot (a `ref` parameter or local, the `this` of a struct method) reads as the location it points to, which the IL then dereferences with `ldind`/`ldobj`. |
 
@@ -75,7 +82,8 @@ and the method's by the type's arity, for `!0`/`!!0` resolution.
 
 | Opcode family | Execution |
 |---|---|
-| `ldc.*`, `ldnull`, `ldstr`, `ldtoken` | Host constants (`ldtoken` pushes the resolved type). |
+| `ldc.*`, `ldnull`, `ldstr`, `ldtoken` | Host constants (`ldtoken` pushes the resolved type, or the data field of an array initializer). |
+| `ldftn`, `ldvirtftn` | A `HostFunction` naming the method; the delegate constructor that follows turns it into a `HostDelegate`. |
 | `ldarg*`, `ldloc*`, `starg`, `stloc`, `ldarga`, `ldloca` | Read/write through the locations; `ld*` of references roots them. |
 | `add … shr.un`, `neg`, `not`, `ceq … clt.un`, `conv.*` | On the host, with int32/int64/float promotion, overflow-checked and unsigned variants, NaN-aware comparisons; enum and small struct values read as integers (an enum through its `value__` field, so the underlying type's sign holds). Host values are written back with wrapping bit reinterpretation (`CilValueEncoding`): an unsigned slot holds its signed twin on the stack, a comparison result stores into a `bool`, and a native integer takes the debuggee's pointer size. |
 | `br*`, `beq … ble.un`, `switch` | Branches by instruction index. |
@@ -83,30 +91,59 @@ and the method's by the type's arity, for `!0`/`!!0` resolution.
 | `newarr`, `ldlen`, `ldelem*`, `stelem*`, `ldelema` | `NewParameterizedArray` for primitive and reference element types; `Array.CreateInstance(Type, int)` in the debuggee for other structs (`DateTime[]`), as `ICorDebugEval` cannot allocate those. |
 | `isinst`, `castclass` | `Type.GetType(assemblyQualifiedName)` + `Type.IsInstanceOfType(value)` evaluated in the debuggee. |
 | `box`, `unbox`, `unbox.any` | Boxes are allocated with `NewParameterizedObjectNoConstructor` and filled byte-wise; unboxing checks the exact class (the object of a boxed primitive is a VALUETYPE of `System.Int32` and friends). `unbox.any Nullable<T>` builds the nullable: an empty one for null, one holding the boxed `T` otherwise. |
-| `ldfld/ldflda/stfld`, `ldsfld/ldsflda/stsfld` | `GetFieldValue`, `GetStaticFieldValueAsync` (runs the static constructor on demand). |
-| `newobj` | `NewParameterizedObject` with the constructor's declaring-type arguments. |
+| `ldfld/ldflda/stfld`, `ldsfld/ldsflda/stsfld` | `GetFieldValue`, `GetStaticFieldValueAsync` (runs the static constructor on demand); the fields of a type the expression assembly declares are host locations (a host object's, or `EvaluationState`'s statics after the type's `.cctor`). |
+| `newobj` | `NewParameterizedObject` with the constructor's declaring-type arguments. A type of the expression assembly becomes a host object whose constructor is interpreted; a delegate over a `HostFunction` a `HostDelegate`; a multidimensional array type goes through `Array.CreateInstance`; the common `string` constructors are built on the host. |
 | `call`, `callvirt` (+ `constrained.`) | See below. |
 | `ret` | The result; `nop`/`break` are skipped. |
 
-Anything else (`throw`, exception blocks, delegates, `calli`, pointer arithmetic, `localloc`, …) is a
+Anything else (`throw`, exception blocks, `calli`, pointer arithmetic, `localloc`, …) is a
 `NotSupportedException` naming the opcode and IL offset; other failures are wrapped with the offset
 and opcode as well.
+
+**Code the expression declares** runs in the debugger. Roslyn lowers lambdas, closures and anonymous
+types into classes of the expression assembly (`<>c`, `<>c__DisplayClass0_0`, `<>f__AnonymousType0<…>`),
+which the debuggee never loads: the interpreter instantiates them as host objects (`HostObject`, the
+fields held as temporary locations; the statics and the `.cctor` of a closure class live for the
+evaluation in `EvaluationState`), `ldftn` pushes a `HostFunction`, and a delegate constructor over one
+yields a `HostDelegate` — also for a method group over a debuggee method, which has no function pointer
+on this side. The interpreter invokes such a delegate itself, on `Invoke` or per element inside a
+System.Linq operator. A host value cannot leave the debugger: a lambda handed to a debuggee method
+(`wrapper.Map(v => v + 1)`) or an anonymous object as the result is reported as an error, while an
+anonymous object's members evaluate (`new { Name = "x" }.Name`). Inside a method of a host object the
+`!0`/`!!0` parameters mean the object's own instantiation, and the resolver's token caches are bypassed.
+
+**System.Linq with a lambda** (`LinqEmulator`). An `Enumerable` operator handed a host delegate, or
+whose source is a sequence the debugger computed, runs on the host: the source is enumerated (an array's
+elements directly, anything else through a func eval of `Enumerable.ToArray<T>`), the lambda is
+interpreted per element, and a sequence result is a `HostSequence` that later operators consume and
+that becomes a debuggee array of its element type once it reaches the debuggee or the result —
+`words.Where(w => w.Length > 4)` shows as a `string[]`, `ToList()` builds a `List<T>` through its
+`IEnumerable<T>` constructor. Supported: `Where`, `Select` (with and without the index), `SelectMany`,
+`Any`, `All`, `Count`, `LongCount`, `First`/`Last`/`Single` and their `OrDefault` forms, `ElementAt(OrDefault)`,
+`Sum`, `Min`, `Max`, `Average` (int, long, float and double), `Aggregate`, `OrderBy(Descending)`,
+`ThenBy(Descending)`, `Skip`, `Take`, `SkipWhile`, `TakeWhile`, `Distinct`, `Reverse`, `Contains`, `Concat`,
+`ToList`, `ToArray`. Ordering and equality follow `Comparer<T>.Default`: strings by the current culture,
+numbers by value, references by identity. An empty `First()` reports `InvalidOperationException` the way
+the debuggee would. An operator without a lambda over a debuggee source keeps running in the debuggee.
+
+**Array initializers, multidimensional arrays, string constructors.** `new[] { 1, 2, 3 }` is `ldtoken`
+of a data field of the expression assembly followed by `RuntimeHelpers.InitializeArray`: the field's
+bytes (`GetEvaluationFieldData`) are copied into the elements. `new int[2, 3]` is a `newobj` on the array
+type's own constructor, served through the debuggee's `Array.CreateInstance(Type, int[])` because
+`ICorDebugEval` allocates single-dimensional arrays only. `new string(char, int)` and the `char[]`
+constructors are built on the host, the runtime refusing them in a func eval.
 
 **Syntax the evaluator does not support** (`Handlers/EvaluationSyntaxTests.UnsupportedSyntaxIsReportedTest`
 keeps the list, each form is reported as an error):
 
-- lambdas (`numbers.Any(n => n > 2)`, `((Func<int, int>)(x => x + 1))(2)`): a delegate over code
-  that only exists in the expression assembly (the compiler's `<>c` closure class); a delegate the
-  debuggee already holds is invoked fine;
-- anonymous types (`new { Name = "x" }`): a type of the expression assembly;
-- array initializers of constants (`new[] { 1, 2, 3 }`): `RuntimeHelpers.InitializeArray` over a data
-  field of the expression assembly (`ldtoken` of a `<PrivateImplementationDetails>` field);
-- multidimensional array creation (`new int[2, 3]`): a `newobj` on the array type's own constructor;
+- a lambda handed to a debuggee method (`wrapper.Map(v => v + 1)`, `person.Convert(p => p.Name)`): the
+  delegate only exists in the debugger. Interpreting the debuggee method's own IL would lift this;
+- an anonymous object as the result or as a debuggee argument (`new { Name = "x" }`, its `ToString()`):
+  the type only exists in the debugger;
 - variables declared by patterns (`boxed is int n ? n + 1 : 0`, `count is var any`): Roslyn's
   expression compiler turns declared locals into pseudo-variables (`CreateVariable`/`GetVariableAddress`)
   by rewriting `BoundLocal` references, which a pattern's declaration is not — its code generator then
-  fails on the undeclared local. `out var` works;
-- string constructors (`new string('x', 3)`): the runtime refuses them in a func eval.
+  fails on the undeclared local. `out var` works.
 
 Assignments to a slot of a reference type take the source reference whatever the slot holds
 (`boxed = "text"` on an `object` local holding a boxed `int`), values copy their bytes into the
@@ -120,8 +157,15 @@ expression compiler have it.
 - a *debugger intrinsic* — `CreateVariable`/`GetVariableAddress`/`GetObjectByAlias` implement the
   synthetic variables a declaration expression creates (stored in debuggee-allocated arrays),
   `GetException` the `$exception` alias;
-- a method of the expression assembly itself (a lambda or local function), interpreted recursively
-  with temporary locals;
+- a method of the expression assembly itself (a lambda body, a local function, a closure's or anonymous
+  type's member), interpreted with temporary locals — an instance method of a host object under the
+  object's generic instantiation (`EvaluationMetadataResolver.EnterGenericContext`); a type's static
+  constructor runs before its statics are first touched (`EvaluationState`);
+- `Invoke` on a delegate the expression created (`HostDelegate`): the lambda is interpreted, a method
+  group's debuggee method func-evaled;
+- `System.Object..ctor` on a host object (nothing to do) and `RuntimeHelpers.InitializeArray` over a data
+  field of the expression assembly (the bytes are copied into the array's elements);
+- a `System.Linq.Enumerable` operator handed a host delegate or a host sequence, run by `LinqEmulator`;
 - `System.Type.GetTypeFromHandle`, answered with the `System.Type` of the token (`typeof`);
 - the `DefaultInterpolatedStringHandler` calls interpolated strings are lowered to, emulated with a
   host `StringBuilder` — debuggee values are formatted by calling `Object.ToString()` on them in the

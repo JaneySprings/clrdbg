@@ -24,6 +24,10 @@ internal class CilValue {
     public static CilValue FromPrimitive(object value) {
         return new CilValue(value, null);
     }
+    // A value that only exists in the debugger: a host object, delegate or sequence
+    public static CilValue FromHostValue(object value) {
+        return new CilValue(value, null);
+    }
     public static CilValue FromTypeToken(ResolvedCilType type, ICorDebugValue value) {
         return new CilValue(type, value);
     }
@@ -111,6 +115,8 @@ internal class CilValue {
         if (CorValue is ICorDebugReferenceValue reference)
             return !reference.IsNull();
         if (CorValue != null)
+            return true;
+        if (Value is HostObject or HostDelegate or HostSequence or HostFunction)
             return true;
         switch (Value) {
             case null: return false;

@@ -42,8 +42,11 @@ internal class FuncEvalRunner {
             it => it.GetResult());
     }
     public Task<ICorDebugValue?> NewArrayAsync(ICorDebugEval eval, ICorDebugType elementType, uint length, bool throwOnException = false) {
+        return NewArrayAsync(eval, elementType, [length], throwOnException);
+    }
+    public Task<ICorDebugValue?> NewArrayAsync(ICorDebugEval eval, ICorDebugType elementType, uint[] dimensions, bool throwOnException = false) {
         return RunAsync(eval, throwOnException,
-            () => eval.NewParameterizedArray(elementType, [length], [0]),
+            () => eval.NewParameterizedArray(elementType, dimensions, new uint[dimensions.Length]),
             it => it.GetResult());
     }
     public async Task<ICorDebugValue> NewStringAsync(ICorDebugEval eval, string text, bool throwOnException = false) {

@@ -344,7 +344,67 @@ public class EvaluationSyntaxTests : BaseDebugTestFixture {
             ("square(3)", "9"),
             ("square.Invoke(4)", "16"),
             ("square.Method.Name", "\"<<Main>$>b__0_0\""),
-            ("square.Target != null", "true"));
+            ("square.Target != null", "true"),
+            // A lambda the expression declares is interpreted by the debugger, with the locals it captures
+            ("((Func<int, int>)(x => x + 1))(2)", "3"),
+            ("new Func<int>(() => 5)()", "5"),
+            ("((Func<int, int>)(x => x + count))(1)", "43"),
+            ("((Func<string, string>)(s => s + title))(\"a\")", "\"ahello\""),
+            ("((Func<int, int, int>)((a, b) => a * b))(6, 7)", "42"),
+            // A method group over a debuggee method
+            ("((Func<int, int>)Extensions.Doubled)(21)", "42"),
+            ("((Func<int, int>)Extensions.Doubled).Invoke(4)", "8"));
+    }
+
+    // System.Linq operators handed a lambda run in the debugger: the source is enumerated by the debuggee, the
+    // lambda interpreted per element, and a sequence result is shown as an array
+    [Test]
+    public void LinqTest() {
+        var threadId = LaunchToMarker();
+        AssertEvaluations(threadId,
+            ("numbers.Any(n => n > 2)", "true"),
+            ("numbers.All(n => n > 2)", "false"),
+            ("numbers.Count(n => n > 1)", "2"),
+            ("numbers.Where(n => n > 1).Count()", "2"),
+            ("numbers.Where(n => n > 1).Sum()", "5"),
+            ("numbers.Select(n => n * 10).Sum()", "60"),
+            ("numbers.Sum(n => n * 2)", "12"),
+            ("numbers.Max(n => -n)", "-1"),
+            ("numbers.Min(n => n * 1.5)", "1.5"),
+            ("numbers.Average(n => n)", "2"),
+            ("numbers.Aggregate((a, b) => a + b)", "6"),
+            ("numbers.Aggregate(10, (a, b) => a + b)", "16"),
+            ("numbers.First(n => n < 3)", "1"),
+            ("numbers.FirstOrDefault(n => n > 10)", "0"),
+            ("numbers.Last(n => n < 3)", "2"),
+            ("numbers.Single(n => n == 2)", "2"),
+            ("numbers.OrderBy(n => n).First()", "1"),
+            ("numbers.OrderByDescending(n => n).ToArray()[0]", "3"),
+            ("numbers.OrderBy(n => n).ThenBy(n => -n).Last()", "3"),
+            ("numbers.Where(n => n != 1).Contains(3)", "true"),
+            ("numbers.Select(n => n + 1).ToList().Count", "3"),
+            ("numbers.Select((n, i) => n * i).Sum()", "5"),
+            ("numbers.Where(n => n > 1).Skip(1).First()", "2"),
+            ("numbers.TakeWhile(n => n > 1).Count()", "1"),
+            ("numbers.Where(n => n > 0).Reverse().First()", "2"),
+            ("numbers.Select(n => n % 2).Distinct().Count()", "2"),
+            ("words.Select(w => w.ToUpper()).First()", "\"ALPHA\""),
+            ("words.Where(w => w.Length > 4).Count()", "2"),
+            ("words.Select(w => w.Length).Max()", "5"),
+            ("words.OrderByDescending(w => w).First()", "\"gamma\""),
+            ("words.First(w => w.StartsWith(\"g\"))", "\"gamma\""),
+            ("words.Any(w => w == title)", "false"),
+            ("string.Join(\",\", words.Select(w => w[0]))", "\"a,b,g\""),
+            ("string.Join(\"-\", words.Where(w => w != \"beta\"))", "\"alpha-gamma\""),
+            ("map.Where(p => p.Value > 1).Select(p => p.Key).First()", "\"two\""),
+            ("person.Tags.Select(t => t + \"!\").Last()", "\"b!\""),
+            ("bytes.Select(b => (int)b).Sum()", "10"),
+            ("numbers.Select(n => new { Value = n, Twice = n * 2 }).First(v => v.Value == 2).Twice", "4"),
+            // Errors the operators throw, reported the way a debuggee exception is (the harness adds its own 'error: ')
+            ("numbers.First(n => n > 10)", "error: error: Evaluation threw System.InvalidOperationException"),
+            ("numbers.Single(n => n > 1)", "error: error: Evaluation threw System.InvalidOperationException"),
+            // A lambda cannot leave the debugger: the debuggee has no code for it
+            ("wrapper.Map(v => v + 1)", "error: error: A lambda can be invoked or handed to a System.Linq operator, the debuggee has no code for it"));
     }
 
     [Test]
@@ -413,7 +473,27 @@ public class EvaluationSyntaxTests : BaseDebugTestFixture {
             ("new List<int>(numbers).Count", "3"),
             ("new HashSet<int> { 1, 1, 2 }.Count", "2"),
             ("new KeyValuePair<string, int>(\"k\", 7).Value", "7"),
-            ("new Exception(\"boom\").Message", "\"boom\""));
+            ("new Exception(\"boom\").Message", "\"boom\""),
+            // An array initializer of constants: the data the expression assembly carries is copied into the array
+            ("new[] { 1, 2, 3 }.Length", "3"),
+            ("new int[] { 1, 2, 3 }[1]", "2"),
+            ("new[] { 1.5, 2.5, 3.5 }[2]", "3.5"),
+            ("new long[] { 1, 2, 3, 4 }[3]", "4"),
+            ("new[] { 'a', 'b', 'c' }[1]", "98 'b'"),
+            ("new[] { 1, 2, 3, count }[3]", "42"),
+            // A multidimensional array is allocated by the debuggee's Array.CreateInstance
+            ("new int[2, 3].Length", "6"),
+            ("new int[2, 3].GetLength(1)", "3"),
+            ("(new int[2, 3])[1, 2]", "0"),
+            // String constructors are built in the debugger, the runtime refuses to run them in a func eval
+            ("new string('x', 3)", "\"xxx\""),
+            ("new string(new[] { 'a', 'b', 'c' })", "\"abc\""),
+            ("new string('-', 2) + title", "\"--hello\""),
+            // An anonymous object lives in the debugger, its members are read there
+            ("new { Name = \"x\", Value = 1 }.Value", "1"),
+            ("new { Name = \"x\", Value = 1 }.Name", "\"x\""),
+            ("new { count, title }.title.Length", "5"),
+            ("new { Person = person }.Person.Age", "30"));
     }
 
     // The syntax the evaluator does not support yet, each form reported as an error rather than a wrong value or a
@@ -423,27 +503,17 @@ public class EvaluationSyntaxTests : BaseDebugTestFixture {
         var threadId = LaunchToMarker();
         Assert.Multiple(() => {
             foreach (var expression in new[] {
-                // A lambda needs a delegate over code that only exists in the expression assembly (the compiler's '<>c' closure class)
-                "numbers.Any(n => n > 2)",
-                "words.Select(w => w.ToUpper()).First()",
-                "numbers.Aggregate((a, b) => a + b)",
+                // A lambda only exists in the debugger, a debuggee method cannot be handed one
                 "wrapper.Map(v => v + 1)",
-                "((Func<int, int>)(x => x + 1))(2)",
-                "new Func<int>(() => 5)()",
-                // An anonymous type is a type of the expression assembly
-                "new { Name = \"x\", Value = 1 }.Value",
-                // An array initializer of constants is 'RuntimeHelpers.InitializeArray' over a data field of the expression assembly
-                "new[] { 1, 2, 3 }.Length",
-                "new int[] { 1, 2, 3 }[1]",
-                // A multidimensional array is created through the array type's own constructor
-                "new int[2, 3].Length",
+                "person.Convert(p => p.Name)",
+                // An anonymous object only exists in the debugger, it cannot be the result or reach the debuggee
+                "new { Name = \"x\", Value = 1 }",
+                "new { Name = \"x\" }.ToString()",
                 // A variable declared by a pattern is left undeclared by Roslyn's expression compiler (its code generator fails on it)
                 "boxed is int n ? n + 1 : 0",
                 "shape is Circle c ? c.Radius : 0",
                 "numbers is [3, .. var rest] ? rest.Length : -1",
                 "count is var any ? any : 0",
-                // The runtime refuses to run a string constructor through a func eval
-                "new string('x', 3)",
             }) {
                 Assert.That(EvaluateOrError(expression, threadId), Does.StartWith("error"), expression);
             }

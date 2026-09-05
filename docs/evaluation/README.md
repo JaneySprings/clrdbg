@@ -53,10 +53,11 @@ The project file is where all the adaptation happens:
   compiler's Dkm entry points (`ExpressionCompiler`, `CSharpExpressionCompiler`, `CSharpMetadataContext`),
   `DkmUtilities`, `ExpressionEvaluatorFatalError` (reports Dkm exceptions), and the frame and
   instruction decoders (Visual Studio's stack frame names — the engine formats its own). Nothing else
-  in the sources depends on Dkm beyond what `Shims/` provides. Two things the entry points did are not
+  in the sources depends on Dkm beyond what `Shims/` provides. One thing the entry points did is not
   reproduced: retrying a compilation whose only errors are duplicate-type ambiguities with the frame's
-  direct references only, and retrying with more metadata when an assembly is missing — the engine
-  passes every loaded module up front.
+  direct references only. Their other retry, with more metadata when an assembly is missing, is the
+  engine's: `ExpressionCompileResult.MissingAssemblies` names what the errors blame and the engine
+  loads it into the debuggee before compiling again.
 - **Constants.** `EXPRESSIONCOMPILER` is defined as in Roslyn's project. `DEBUG` is stripped in every
   configuration: the nuget Roslyn assemblies are Release builds and the members they expose only under
   `DEBUG` (extra parameters of `LocalSymbol.WithSynthesizedLocalKindAndSyntax`, `MethodSymbolAdapter`, …)

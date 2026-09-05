@@ -41,8 +41,8 @@ internal class CilInterpreter {
         // root value's module for DebuggerDisplay), so runtime resolution binds to the same assembly instance Roslyn did
         var preferredModule = context.RootValue != null ? context.RootValue.GetExactType().GetClass().GetModule() : frame!.GetFunction().GetModule();
         var resolver = new EvaluationMetadataResolver(debugger, compiled, context.Thread.GetAppDomain(), typeGenericArguments, methodGenericArguments, debugger.GetModule(preferredModule));
-        var syntheticVariables = new Dictionary<string, ICilLocation>(StringComparer.Ordinal);
-        var result = await InterpretAsync(compiled, decoded, arguments, locals, resolver, context, handles, syntheticVariables);
+        var state = new EvaluationState();
+        var result = await InterpretAsync(compiled, decoded, arguments, locals, resolver, context, handles, state);
         var value = await MaterializeAsync(result, context, handles, resolver.ResolveMethodReturnType(compiled.EntryMethod), resolver);
         return EvaluationResult.FromValue(value, handles.Detach(value));
     }
@@ -126,7 +126,7 @@ internal class CilInterpreter {
         EvaluationMetadataResolver resolver,
         EvaluationContext context,
         EvaluationHandleScope handles,
-        Dictionary<string, ICilLocation> syntheticVariables) {
+        EvaluationState state) {
         var instructions = decoded.Instructions;
         var stack = new Stack<CilValue>();
         var index = 0;
@@ -153,7 +153,19 @@ internal class CilInterpreter {
                     continue;
                 }
                 if (op == OpCodes.Ldtoken) {
-                    stack.Push(CilValue.FromPrimitive(resolver.ResolveTypeToken((int)instruction.Operand!)));
+                    var tokenHandle = MetadataTokens.EntityHandle((int)instruction.Operand!);
+                    // A field token is an array initializer's data, handed on to RuntimeHelpers.InitializeArray
+                    if (tokenHandle.Kind == HandleKind.FieldDefinition)
+                        stack.Push(CilValue.FromHostValue((FieldDefinitionHandle)tokenHandle));
+                    else
+                        stack.Push(CilValue.FromPrimitive(resolver.ResolveTypeToken((int)instruction.Operand!)));
+                    continue;
+                }
+                if (op == OpCodes.Ldftn || op == OpCodes.Ldvirtftn) {
+                    // The delegate constructor that follows gets its own copy of the receiver
+                    if (op == OpCodes.Ldvirtftn)
+                        stack.Pop();
+                    stack.Push(CilValue.FromHostValue(ResolveFunction((int)instruction.Operand!, resolver)));
                     continue;
                 }
 
@@ -166,7 +178,7 @@ internal class CilInterpreter {
                     continue;
                 }
                 if (op == OpCodes.Starg || op == OpCodes.Starg_S) {
-                    arguments[(int)instruction.Operand!].Write(await MaterializeForStoreAsync(stack.Pop(), context, handles));
+                    arguments[(int)instruction.Operand!].Write(await MaterializeForStoreAsync(stack.Pop(), resolver, context, handles));
                     continue;
                 }
                 if (TryGetSlotIndex(op, instruction.Operand, OpCodes.Ldloc_0, OpCodes.Ldloc, OpCodes.Ldloc_S, out var localIndex)) {
@@ -178,7 +190,7 @@ internal class CilInterpreter {
                     continue;
                 }
                 if (TryGetSlotIndex(op, instruction.Operand, OpCodes.Stloc_0, OpCodes.Stloc, OpCodes.Stloc_S, out localIndex)) {
-                    locals[localIndex].Write(await MaterializeForStoreAsync(stack.Pop(), context, handles));
+                    locals[localIndex].Write(await MaterializeForStoreAsync(stack.Pop(), resolver, context, handles));
                     continue;
                 }
 
@@ -248,13 +260,13 @@ internal class CilInterpreter {
                 if (op == OpCodes.Stobj || IsPrefixed(op, "stind.")) {
                     var value = stack.Pop();
                     var address = stack.Pop().Location ?? throw new InvalidOperationException("stind requires a managed location");
-                    address.Write(await MaterializeForStoreAsync(value, context, handles));
+                    address.Write(await MaterializeForStoreAsync(value, resolver, context, handles));
                     continue;
                 }
                 if (op == OpCodes.Cpobj) {
                     var source = stack.Pop().Dereference();
                     var destination = stack.Pop().Location ?? throw new InvalidOperationException("cpobj requires a managed location");
-                    destination.Write(await MaterializeForStoreAsync(source, context, handles));
+                    destination.Write(await MaterializeForStoreAsync(source, resolver, context, handles));
                     continue;
                 }
                 if (op == OpCodes.Initobj) {
@@ -291,7 +303,7 @@ internal class CilInterpreter {
                     var element = stack.Pop();
                     var elementIndex = stack.Pop().AsInt32();
                     var array = GetArrayValue(stack.Pop());
-                    new CorDebugLocation(array.GetElementAtPosition(elementIndex)).Write(await MaterializeForStoreAsync(element, context, handles));
+                    new CorDebugLocation(array.GetElementAtPosition(elementIndex)).Write(await MaterializeForStoreAsync(element, resolver, context, handles));
                     continue;
                 }
 
@@ -343,6 +355,30 @@ internal class CilInterpreter {
                     continue;
                 }
 
+                if ((op == OpCodes.Ldfld || op == OpCodes.Ldflda || op == OpCodes.Stfld) && resolver.TryResolveEvaluationField((int)instruction.Operand!, out var hostField, out _)) {
+                    // A field of a host object: a captured variable, an anonymous type's member
+                    var stored = op == OpCodes.Stfld ? stack.Pop() : null;
+                    var location = GetHostObject(stack.Pop()).GetField(hostField);
+                    if (op == OpCodes.Ldfld)
+                        stack.Push(location.Read());
+                    else if (op == OpCodes.Ldflda)
+                        stack.Push(CilValue.FromLocation(location));
+                    else
+                        location.Write(await MaterializeForStoreAsync(stored!, resolver, context, handles));
+                    continue;
+                }
+                if ((op == OpCodes.Ldsfld || op == OpCodes.Ldsflda || op == OpCodes.Stsfld) && resolver.TryResolveEvaluationField((int)instruction.Operand!, out var hostStaticField, out var hostStaticType)) {
+                    // A static of one of the expression assembly's types: a closure class's cached instance and delegates
+                    await EnsureTypeInitializedAsync(hostStaticType, compiled, resolver, context, handles, state);
+                    var location = state.GetStaticField(hostStaticField);
+                    if (op == OpCodes.Ldsfld)
+                        stack.Push(location.Read());
+                    else if (op == OpCodes.Ldsflda)
+                        stack.Push(CilValue.FromLocation(location));
+                    else
+                        location.Write(await MaterializeForStoreAsync(stack.Pop(), resolver, context, handles));
+                    continue;
+                }
                 if (op == OpCodes.Ldfld) {
                     var field = resolver.ResolveField((int)instruction.Operand!);
                     var receiver = GetFieldReceiver(stack.Pop());
@@ -359,7 +395,7 @@ internal class CilInterpreter {
                     var value = stack.Pop();
                     var field = resolver.ResolveField((int)instruction.Operand!);
                     var receiver = GetFieldReceiver(stack.Pop());
-                    new CorDebugLocation(receiver.GetFieldValue(field.DeclaringType.Class, field.Token)).Write(await MaterializeForStoreAsync(value, context, handles));
+                    new CorDebugLocation(receiver.GetFieldValue(field.DeclaringType.Class, field.Token)).Write(await MaterializeForStoreAsync(value, resolver, context, handles));
                     continue;
                 }
                 if (op == OpCodes.Ldsfld) {
@@ -374,12 +410,12 @@ internal class CilInterpreter {
                 }
                 if (op == OpCodes.Stsfld) {
                     var field = resolver.ResolveField((int)instruction.Operand!);
-                    new CorDebugLocation(await GetStaticFieldValueAsync(field, resolver, context)).Write(await MaterializeForStoreAsync(stack.Pop(), context, handles));
+                    new CorDebugLocation(await GetStaticFieldValueAsync(field, resolver, context)).Write(await MaterializeForStoreAsync(stack.Pop(), resolver, context, handles));
                     continue;
                 }
 
                 if (op == OpCodes.Newobj) {
-                    stack.Push(await NewObjectAsync((int)instruction.Operand!, stack, resolver, context, handles));
+                    stack.Push(await NewObjectAsync((int)instruction.Operand!, stack, compiled, resolver, context, handles, state));
                     continue;
                 }
                 if (op == OpCodes.Call || op == OpCodes.Callvirt) {
@@ -387,28 +423,21 @@ internal class CilInterpreter {
                     constrainedType = null;
                     var token = (int)instruction.Operand!;
                     if (resolver.TryResolveDebuggerIntrinsic(token, out var intrinsicName)) {
-                        await ExecuteDebuggerIntrinsicAsync(intrinsicName, stack, syntheticVariables, resolver, context, handles);
+                        await ExecuteDebuggerIntrinsicAsync(intrinsicName, stack, state, resolver, context, handles);
                         continue;
                     }
                     if (resolver.TryResolveArrayMethod(token, out var arrayMethodName, out var arrayIndexCount)) {
-                        await ExecuteArrayMethodAsync(arrayMethodName, arrayIndexCount, stack, context, handles);
+                        await ExecuteArrayMethodAsync(arrayMethodName, arrayIndexCount, stack, resolver, context, handles);
                         continue;
                     }
                     if (resolver.TryResolveEvaluationMethod(token, out var evaluationMethod)) {
-                        var methodArguments = PopArguments(stack, evaluationMethod.Signature.ParameterTypes.Length + (evaluationMethod.IsStatic ? 0 : 1));
-                        var methodResult = await InterpretAsync(
-                            compiled,
-                            compiled.GetDecodedMethod(evaluationMethod.Handle),
-                            methodArguments.Select(it => (ICilLocation)new TemporaryLocation(it)).ToArray(),
-                            CreateTemporaryLocals(resolver, resolver.GetEvaluationMethodBody(evaluationMethod.Handle).LocalSignature),
-                            resolver,
-                            context,
-                            handles,
-                            syntheticVariables);
-                        if (evaluationMethod.Signature.ReturnType != PrimitiveTypeCode.Void.ToString())
+                        var methodResult = await InvokeEvaluationMethodAsync(compiled, evaluationMethod, PopArguments(stack, evaluationMethod.ArgumentCount), resolver, context, handles, state);
+                        if (!evaluationMethod.ReturnsVoid)
                             stack.Push(methodResult);
                         continue;
                     }
+                    if (await TryCallHostAsync(token, stack, compiled, resolver, context, handles, state))
+                        continue;
                     await CallMethodAsync(token, callConstrainedType, stack, resolver, context, handles);
                     continue;
                 }
@@ -425,7 +454,7 @@ internal class CilInterpreter {
 
     // The pseudo methods of an array type access an element by its index in every dimension, the
     // multidimensional counterpart of ldelem/stelem/ldelema
-    private async Task ExecuteArrayMethodAsync(string methodName, int indexCount, Stack<CilValue> stack, EvaluationContext context, EvaluationHandleScope handles) {
+    private async Task ExecuteArrayMethodAsync(string methodName, int indexCount, Stack<CilValue> stack, EvaluationMetadataResolver resolver, EvaluationContext context, EvaluationHandleScope handles) {
         var element = methodName == "Set" ? stack.Pop() : null;
         var indices = new uint[indexCount];
         for (var i = indexCount - 1; i >= 0; i--)
@@ -433,17 +462,37 @@ internal class CilInterpreter {
         var array = GetArrayValue(stack.Pop());
 
         if (methodName == "Set") {
-            new CorDebugLocation(array.GetElement(indices)).Write(await MaterializeForStoreAsync(element!, context, handles));
+            new CorDebugLocation(array.GetElement(indices)).Write(await MaterializeForStoreAsync(element!, resolver, context, handles));
             return;
         }
         var location = new CorDebugLocation(array.GetElement(indices));
         stack.Push(methodName == "Address" ? CilValue.FromLocation(location) : handles.Root(location.Read()));
     }
-    private async Task<CilValue> NewObjectAsync(int token, Stack<CilValue> stack, EvaluationMetadataResolver resolver, EvaluationContext context, EvaluationHandleScope handles) {
+    private async Task<CilValue> NewObjectAsync(int token, Stack<CilValue> stack, CompiledExpression compiled, EvaluationMetadataResolver resolver, EvaluationContext context, EvaluationHandleScope handles, EvaluationState state) {
+        // A type the expression assembly declares (a closure, a display class, an anonymous type) is instantiated on the host
+        if (resolver.TryResolveEvaluationMethod(token, out var hostConstructor)) {
+            var hostArguments = PopArguments(stack, hostConstructor.Signature.ParameterTypes.Length);
+            var instance = CilValue.FromHostValue(new HostObject(hostConstructor.DeclaringType, hostConstructor.TypeArguments));
+            await InvokeEvaluationMethodAsync(compiled, hostConstructor, [instance, .. hostArguments], resolver, context, handles, state);
+            return instance;
+        }
+        if (resolver.TryResolveArrayConstructor(token, out var arrayType))
+            return await CreateMultidimensionalArrayAsync(arrayType, stack, resolver, context, handles);
+
         var constructor = resolver.ResolveMethod(token);
         var constructorArguments = PopArguments(stack, constructor.Signature.ParameterTypes.Length);
+        // A delegate over a function the expression named cannot exist in the debuggee (a lambda has no code there, a
+        // method group no function pointer here): the interpreter invokes it itself
+        if (constructorArguments.Length == 2 && Dereference(constructorArguments[1]).Value is HostFunction function) {
+            var target = Dereference(constructorArguments[0]);
+            return CilValue.FromHostValue(new HostDelegate(target.IsNull ? null : target, function));
+        }
+        // The runtime refuses to run a string constructor in a func eval, the common ones are built on the host
+        if (resolver.GetRuntimeTypeName(constructor.DeclaringType) == "System.String")
+            return CreateString(constructor, constructorArguments);
+
         var byRefArguments = new List<ByRefArgument>();
-        var argumentValues = await MaterializeArgumentsAsync(constructor, constructorArguments, receiverOffset: 0, context, handles, byRefArguments);
+        var argumentValues = await MaterializeArgumentsAsync(constructor, constructorArguments, receiverOffset: 0, resolver, context, handles, byRefArguments);
 
         var typeArguments = constructor.DeclaringType.TypeArguments.IsDefaultOrEmpty
             ? []
@@ -459,7 +508,20 @@ internal class CilInterpreter {
         return newValue == null ? CilValue.Null() : CilValue.FromCorValue(newValue);
     }
     private async Task CallMethodAsync(int token, ResolvedCilType? constrainedType, Stack<CilValue> stack, EvaluationMetadataResolver resolver, EvaluationContext context, EvaluationHandleScope handles) {
-        var method = resolver.ResolveMethod(token);
+        await CallRuntimeMethodAsync(resolver.ResolveMethod(token), constrainedType, stack, resolver, context, handles);
+    }
+    // Calls a debuggee method with a receiver and arguments of the interpreter's own, the way the IL would; the result
+    // is a null value for a void method
+    private async Task<CilValue> CallRuntimeMethodAsync(ResolvedRuntimeMethod method, CilValue? receiver, CilValue[] arguments, EvaluationMetadataResolver resolver, EvaluationContext context, EvaluationHandleScope handles) {
+        var callStack = new Stack<CilValue>();
+        if (receiver != null)
+            callStack.Push(receiver);
+        foreach (var argument in arguments)
+            callStack.Push(argument);
+        await CallRuntimeMethodAsync(method, null, callStack, resolver, context, handles);
+        return callStack.Count == 0 ? CilValue.Null() : callStack.Pop();
+    }
+    private async Task CallRuntimeMethodAsync(ResolvedRuntimeMethod method, ResolvedCilType? constrainedType, Stack<CilValue> stack, EvaluationMetadataResolver resolver, EvaluationContext context, EvaluationHandleScope handles) {
         var argumentValues = PopArguments(stack, method.Signature.ParameterTypes.Length);
         var receiverValue = method.IsStatic ? null : stack.Pop();
 
@@ -475,7 +537,7 @@ internal class CilInterpreter {
             throw new InvalidOperationException($"Unhandled interpolated-string call '{resolver.GetRuntimeTypeName(method.DeclaringType)}.{method.Name}'");
 
         var byRefArguments = new List<ByRefArgument>();
-        var callArguments = await MaterializeArgumentsAsync(method, argumentValues, method.IsStatic ? 0 : 1, context, handles, byRefArguments);
+        var callArguments = await MaterializeArgumentsAsync(method, argumentValues, method.IsStatic ? 0 : 1, resolver, context, handles, byRefArguments);
         if (receiverValue != null) {
             var receiver = receiverValue.Location != null ? receiverValue.Dereference() : receiverValue;
             if (receiver.IsNull)
@@ -528,26 +590,26 @@ internal class CilInterpreter {
         }
         return null;
     }
-    private async Task ExecuteDebuggerIntrinsicAsync(string name, Stack<CilValue> stack, Dictionary<string, ICilLocation> syntheticVariables, EvaluationMetadataResolver resolver, EvaluationContext context, EvaluationHandleScope handles) {
+    private async Task ExecuteDebuggerIntrinsicAsync(string name, Stack<CilValue> stack, EvaluationState state, EvaluationMetadataResolver resolver, EvaluationContext context, EvaluationHandleScope handles) {
         switch (name) {
             case "CreateVariable": {
                 stack.Pop(); // custom type payload
                 stack.Pop(); // custom type payload id
                 var variableName = stack.Pop().Value as string ?? throw new InvalidOperationException("The synthetic variable name is unavailable");
                 var variableType = stack.Pop().Value as ResolvedCilType ?? throw new InvalidOperationException("The synthetic variable type is unavailable");
-                syntheticVariables[variableName] = await CreateSyntheticVariableAsync(variableType, resolver, context, handles);
+                state.SyntheticVariables[variableName] = await CreateSyntheticVariableAsync(variableType, resolver, context, handles);
                 return;
             }
             case "GetVariableAddress": {
                 var variableName = stack.Pop().Value as string ?? throw new InvalidOperationException("The synthetic variable name is unavailable");
-                if (!syntheticVariables.TryGetValue(variableName, out var location))
+                if (!state.SyntheticVariables.TryGetValue(variableName, out var location))
                     throw new InvalidOperationException($"The synthetic variable '{variableName}' is unavailable");
                 stack.Push(CilValue.FromLocation(location));
                 return;
             }
             case "GetObjectByAlias": {
                 var variableName = stack.Pop().Value as string ?? throw new InvalidOperationException("The synthetic variable name is unavailable");
-                if (!syntheticVariables.TryGetValue(variableName, out var location))
+                if (!state.SyntheticVariables.TryGetValue(variableName, out var location))
                     throw new InvalidOperationException($"The synthetic variable '{variableName}' is unavailable");
                 stack.Push(handles.Root(location.Read()));
                 return;
@@ -567,6 +629,11 @@ internal class CilInterpreter {
         var expectedPrimitive = expectedType?.Primitive;
         if (value.CorValue != null && (expectedPrimitive == null || expectedPrimitive == PrimitiveTypeCode.String || expectedPrimitive == PrimitiveTypeCode.Object))
             return value.CorValue;
+        // A sequence a System.Linq operator computed here becomes an array, the other host values have no debuggee form
+        if (value.Value is HostSequence sequence && resolver != null)
+            return (await MaterializeSequenceAsync(sequence, resolver, context, handles)).CorValue!;
+        if (IsHostValue(value))
+            throw HostValueCannotLeave(value);
 
         var eval = context.Thread.CreateEval();
         var expectedElementType = GetPrimitiveElementType(expectedPrimitive);
@@ -603,20 +670,26 @@ internal class CilInterpreter {
         result.SetValueFromBytes(CilValueEncoding.GetBytes(value.Value, elementType, result.GetSize()));
         return result;
     }
-    private async Task<ICorDebugValue> MaterializeForCallAsync(CilValue value, EvaluationContext context, EvaluationHandleScope handles) {
+    private async Task<ICorDebugValue> MaterializeForCallAsync(CilValue value, EvaluationMetadataResolver resolver, EvaluationContext context, EvaluationHandleScope handles) {
         if (value.Location != null)
             value = value.Dereference();
         if (value.CorValue != null)
             return value.CorValue;
+        if (value.Value is HostSequence sequence)
+            return (await MaterializeSequenceAsync(sequence, resolver, context, handles)).CorValue!;
+        if (IsHostValue(value))
+            throw HostValueCannotLeave(value);
         return await MaterializeAsync(value, context, handles);
     }
     // Host values without a debuggee representation yet (e.g. strings produced by ldstr) are created in the
     // debuggee first, as a debuggee location can only hold values backed by an ICorDebugValue
-    private async Task<CilValue> MaterializeForStoreAsync(CilValue value, EvaluationContext context, EvaluationHandleScope handles) {
+    private async Task<CilValue> MaterializeForStoreAsync(CilValue value, EvaluationMetadataResolver resolver, EvaluationContext context, EvaluationHandleScope handles) {
         if (value.Location != null)
             value = value.Dereference();
         if (value.CorValue != null || value.IsNull)
             return value;
+        if (value.Value is HostSequence sequence)
+            return await MaterializeSequenceAsync(sequence, resolver, context, handles);
         if (value.Value is string text) {
             var eval = context.Thread.CreateEval();
             var materialized = handles.Track(await debugger.FuncEval.NewStringAsync(eval, text, throwOnException: true));
@@ -625,16 +698,16 @@ internal class CilInterpreter {
         return value;
     }
     // Materializes the call arguments after 'receiverOffset' reserved slots, honouring by-reference parameters
-    private async Task<ICorDebugValue[]> MaterializeArgumentsAsync(ResolvedRuntimeMethod method, CilValue[] arguments, int receiverOffset, EvaluationContext context, EvaluationHandleScope handles, List<ByRefArgument> byRefArguments) {
+    private async Task<ICorDebugValue[]> MaterializeArgumentsAsync(ResolvedRuntimeMethod method, CilValue[] arguments, int receiverOffset, EvaluationMetadataResolver resolver, EvaluationContext context, EvaluationHandleScope handles, List<ByRefArgument> byRefArguments) {
         var result = new ICorDebugValue[arguments.Length + receiverOffset];
         for (var i = 0; i < arguments.Length; i++) {
             result[i + receiverOffset] = method.Signature.ParameterTypes[i].EndsWith('&')
-                ? await MaterializeByRefArgumentAsync(arguments[i], context, handles, byRefArguments)
-                : await MaterializeForCallAsync(arguments[i], context, handles);
+                ? await MaterializeByRefArgumentAsync(arguments[i], resolver, context, handles, byRefArguments)
+                : await MaterializeForCallAsync(arguments[i], resolver, context, handles);
         }
         return result;
     }
-    private async Task<ICorDebugValue> MaterializeByRefArgumentAsync(CilValue value, EvaluationContext context, EvaluationHandleScope handles, List<ByRefArgument> byRefArguments) {
+    private async Task<ICorDebugValue> MaterializeByRefArgumentAsync(CilValue value, EvaluationMetadataResolver resolver, EvaluationContext context, EvaluationHandleScope handles, List<ByRefArgument> byRefArguments) {
         if (value.Location is CorDebugLocation location)
             return location.Value;
         if (value.Location is SyntheticVariableLocation synthetic)
@@ -643,7 +716,7 @@ internal class CilInterpreter {
             throw new InvalidOperationException("A by-reference argument requires a managed location");
 
         // A host temporary is passed as a debuggee copy and written back after the call
-        var materialized = await MaterializeForCallAsync(value.Location.Read(), context, handles);
+        var materialized = await MaterializeForCallAsync(value.Location.Read(), resolver, context, handles);
         byRefArguments.Add(new ByRefArgument(value.Location, materialized));
         return materialized;
     }
@@ -661,19 +734,22 @@ internal class CilInterpreter {
         if (value.CorValue != null)
             return value.CorValue;
         if (value.Value == null)
-            return await MaterializeForCallAsync(value, context, handles);
+            return await MaterializeForCallAsync(value, resolver, context, handles);
         // A host constant called through 'constrained.' (an enum member's ToString) is that type's value, not its underlying integer's
         if (constrainedType != null && constrainedType.RuntimeType != null)
             return await BoxHostValueAsync(value.Value, resolver.GetCorDebugType(constrainedType), context, handles);
 
         var elementType = GetPrimitiveElementType(value.Value);
         if (!primitiveTypes.TryGetClass(elementType, out var boxedClass))
-            return await MaterializeForCallAsync(value, context, handles);
+            return await MaterializeForCallAsync(value, resolver, context, handles);
         return await BoxBytesAsync(boxedClass, [], CilValueEncoding.GetBytes(value.Value, elementType), context, handles);
     }
     private async Task<CilValue> BoxAsync(CilValue value, ICorDebugType targetType, EvaluationContext context, EvaluationHandleScope handles) {
         if (value.Location != null)
             value = value.Dereference();
+        // A host object is a reference already
+        if (IsHostValue(value))
+            return value;
 
         if (value.CorValue?.UnwrapDebugValue() is ICorDebugGenericValue sourceGeneric)
             return CilValue.FromCorValue(await BoxBytesAsync(targetType.GetClass(), targetType.GetTypeParameters(), sourceGeneric.GetValueAsBytes(), context, handles));
@@ -837,6 +913,222 @@ internal class CilInterpreter {
         return result?.UnwrapDebugValue() is ICorDebugStringValue stringValue ? stringValue.GetString() : string.Empty;
     }
 
+    // A method of the expression assembly (a lambda body, a local function, a closure's or anonymous type's member)
+    // runs in the interpreter with temporary slots; an instance method of a host object binds the assembly's own
+    // generic parameters to the object's instantiation
+    private async Task<CilValue> InvokeEvaluationMethodAsync(CompiledExpression compiled, ResolvedEvaluationMethod method, CilValue[] arguments, EvaluationMetadataResolver resolver, EvaluationContext context, EvaluationHandleScope handles, EvaluationState state) {
+        var typeArguments = method.TypeArguments;
+        if (!method.IsStatic && Dereference(arguments[0]).Value is HostObject receiver && !receiver.TypeArguments.IsDefault)
+            typeArguments = receiver.TypeArguments;
+        using (resolver.EnterGenericContext(typeArguments, method.MethodTypeArguments)) {
+            var locals = CreateTemporaryLocals(resolver, resolver.GetEvaluationMethodBody(method.Handle).LocalSignature);
+            var slots = arguments.Select(it => (ICilLocation)new TemporaryLocation(it)).ToArray();
+            return await InterpretAsync(compiled, compiled.GetDecodedMethod(method.Handle), slots, locals, resolver, context, handles, state);
+        }
+    }
+    // Runs the static constructor of a type the expression assembly declares before its statics are first touched
+    private async Task EnsureTypeInitializedAsync(TypeDefinitionHandle type, CompiledExpression compiled, EvaluationMetadataResolver resolver, EvaluationContext context, EvaluationHandleScope handles, EvaluationState state) {
+        if (!state.InitializedTypes.Add(type))
+            return;
+        var initializer = resolver.FindTypeInitializer(type);
+        if (initializer != null)
+            await InvokeEvaluationMethodAsync(compiled, initializer, [], resolver, context, handles, state);
+    }
+    // The calls the interpreter serves itself rather than the debuggee: the Invoke of a delegate the expression
+    // created, the base constructor call of a host object, the data copy of an array initializer, and the System.Linq
+    // operators handed a lambda or a sequence computed here
+    private async Task<bool> TryCallHostAsync(int token, Stack<CilValue> stack, CompiledExpression compiled, EvaluationMetadataResolver resolver, EvaluationContext context, EvaluationHandleScope handles, EvaluationState state) {
+        var method = resolver.ResolveMethod(token);
+        var argumentCount = method.Signature.ParameterTypes.Length + (method.IsStatic ? 0 : 1);
+        if (stack.Count < argumentCount)
+            return false;
+        // Peeked, receiver first; popped once the call turns out to be ours
+        var arguments = stack.Take(argumentCount).Reverse().Select(Dereference).ToArray();
+        var typeName = resolver.GetRuntimeTypeName(method.DeclaringType);
+        var returnsVoid = method.Signature.ReturnType == PrimitiveTypeCode.Void.ToString();
+
+        if (!method.IsStatic && method.Name == "Invoke" && arguments[0].Value is HostDelegate) {
+            PopArguments(stack, argumentCount);
+            var result = await InvokeDelegateAsync(arguments[0], arguments.Skip(1).ToArray(), compiled, resolver, context, handles, state);
+            if (!returnsVoid)
+                stack.Push(result);
+            return true;
+        }
+        if (!method.IsStatic && arguments[0].Value is HostObject) {
+            PopArguments(stack, argumentCount);
+            // The base constructor a host object's constructor calls has nothing to do
+            if (method.Name == ".ctor" && typeName == "System.Object")
+                return true;
+            throw new NotSupportedException($"'{typeName}.{method.Name}' cannot be called on an object of a type the expression declares");
+        }
+        if (typeName == "System.Runtime.CompilerServices.RuntimeHelpers" && method.Name == "InitializeArray" && arguments[1].Value is FieldDefinitionHandle dataField) {
+            PopArguments(stack, argumentCount);
+            InitializeArray(arguments[0], dataField, resolver);
+            return true;
+        }
+        if (typeName == "System.Linq.Enumerable" && arguments.Any(IsHostValue)) {
+            PopArguments(stack, argumentCount);
+            var emulator = new LinqEmulator(
+                (function, functionArguments) => InvokeDelegateAsync(function, functionArguments, compiled, resolver, context, handles, state),
+                (source, elementType) => EnumerateAsync(source, elementType, resolver, context, handles),
+                type => CreateDefaultValueAsync(type, resolver, context, handles),
+                sequence => MaterializeSequenceAsync(sequence, resolver, context, handles),
+                sequence => CreateListAsync(sequence, resolver, context, handles));
+            stack.Push(await emulator.ExecuteAsync(method, arguments));
+            return true;
+        }
+        return false;
+    }
+    // Invokes a delegate for the interpreter's own purposes (an Invoke call, a System.Linq operator's lambda): one
+    // the expression created runs here, one the debuggee holds runs there
+    private async Task<CilValue> InvokeDelegateAsync(CilValue delegateValue, CilValue[] arguments, CompiledExpression compiled, EvaluationMetadataResolver resolver, EvaluationContext context, EvaluationHandleScope handles, EvaluationState state) {
+        delegateValue = Dereference(delegateValue);
+        if (delegateValue.Value is HostDelegate hostDelegate) {
+            var target = hostDelegate.Target ?? CilValue.Null();
+            var evaluationMethod = hostDelegate.Function.EvaluationMethod;
+            if (evaluationMethod != null) {
+                var methodArguments = evaluationMethod.IsStatic ? arguments : [target, .. arguments];
+                var result = await InvokeEvaluationMethodAsync(compiled, evaluationMethod, methodArguments, resolver, context, handles, state);
+                return evaluationMethod.ReturnsVoid ? CilValue.Null() : result;
+            }
+            var runtimeMethod = hostDelegate.Function.RuntimeMethod!;
+            return await CallRuntimeMethodAsync(runtimeMethod, runtimeMethod.IsStatic ? null : target, arguments, resolver, context, handles);
+        }
+        if (delegateValue.IsNull)
+            throw new NullReferenceException();
+        var invoke = resolver.ResolveDelegateInvoke(delegateValue.CorValue!.GetExactType());
+        return await CallRuntimeMethodAsync(invoke, delegateValue, arguments, resolver, context, handles);
+    }
+    // Copies an array initializer's data (a field of the expression assembly) into the array's elements
+    private static void InitializeArray(CilValue arrayValue, FieldDefinitionHandle dataField, EvaluationMetadataResolver resolver) {
+        var array = GetArrayValue(arrayValue);
+        var count = array.GetCount();
+        if (count == 0)
+            return;
+        var elementSize = ((ICorDebugGenericValue)array.GetElementAtPosition(0).UnwrapDebugValue()).GetSize();
+        var data = resolver.GetEvaluationFieldData(dataField, count * elementSize);
+        for (var i = 0; i < count; i++)
+            ((ICorDebugGenericValue)array.GetElementAtPosition(i).UnwrapDebugValue()).SetValueFromBytes(data.AsSpan(i * elementSize, elementSize).ToArray());
+    }
+    // 'new int[2, 3]': the runtime's debugger API allocates single-dimensional arrays only, the others go through Array.CreateInstance
+    private async Task<CilValue> CreateMultidimensionalArrayAsync(ResolvedCilType arrayType, Stack<CilValue> stack, EvaluationMetadataResolver resolver, EvaluationContext context, EvaluationHandleScope handles) {
+        var lengths = PopArguments(stack, arrayType.ArrayRank).Select(it => checked((uint)it.AsInt32())).ToArray();
+        var elementType = arrayType.ElementType!;
+        ICorDebugValue? array;
+        if (lengths.Length == 1) {
+            array = await CreateArrayAsync(elementType, resolver.GetCorDebugType(elementType), lengths[0], resolver, context, handles);
+        }
+        else {
+            var typeValue = await GetSystemTypeAsync(elementType, resolver, context, handles) ?? throw new InvalidOperationException("Failed to resolve the element type for the array allocation");
+            var lengthsArray = await CreateArrayAsync(ResolvedCilType.FromPrimitive(PrimitiveTypeCode.Int32), resolver.GetCorDebugType(ResolvedCilType.FromPrimitive(PrimitiveTypeCode.Int32)), (uint)lengths.Length, resolver, context, handles)
+                ?? throw new InvalidOperationException("Failed to allocate the array lengths");
+            var lengthsValue = (ICorDebugArrayValue)lengthsArray.UnwrapDebugValue();
+            for (var i = 0; i < lengths.Length; i++)
+                new CorDebugLocation(lengthsValue.GetElementAtPosition(i)).Write(CilValue.FromPrimitive((int)lengths[i]));
+            var createInstance = resolver.ResolveRuntimeMethod("System", "Array", "CreateInstance", "System.Type", "Int32[]");
+            var eval = context.Thread.CreateEval();
+            array = handles.Track(await debugger.FuncEval.CallFunctionAsync(eval, createInstance.Function, [], [typeValue, lengthsArray], throwOnException: true));
+        }
+        return array == null ? CilValue.Null() : CilValue.FromCorValue(array);
+    }
+    // The string constructors over a character and a count or a character array, built on the host
+    private static CilValue CreateString(ResolvedRuntimeMethod constructor, CilValue[] arguments) {
+        var parameters = constructor.Signature.ParameterTypes;
+        if (parameters.SequenceEqual(["Char", "Int32"]))
+            return CilValue.FromPrimitive(new string((char)Dereference(arguments[0]).AsInt32(), Dereference(arguments[1]).AsInt32()));
+        if (parameters.SequenceEqual(["Char[]"]))
+            return CilValue.FromPrimitive(new string(ReadCharacters(arguments[0])));
+        if (parameters.SequenceEqual(["Char[]", "Int32", "Int32"]))
+            return CilValue.FromPrimitive(new string(ReadCharacters(arguments[0]), Dereference(arguments[1]).AsInt32(), Dereference(arguments[2]).AsInt32()));
+        throw new NotSupportedException($"The string constructor ({string.Join(", ", parameters)}) is not supported in the debugger");
+    }
+    private static char[] ReadCharacters(CilValue arrayValue) {
+        var array = GetArrayValue(Dereference(arrayValue));
+        var characters = new char[array.GetCount()];
+        for (var i = 0; i < characters.Length; i++)
+            characters[i] = (char)CilValue.FromCorValue(array.GetElementAtPosition(i)).AsInt32();
+        return characters;
+    }
+    // The elements of a sequence as interpreter values: a host sequence's own, an array's, anything else enumerated
+    // by the debuggee into an array
+    private async Task<List<CilValue>> EnumerateAsync(CilValue source, ResolvedCilType elementType, EvaluationMetadataResolver resolver, EvaluationContext context, EvaluationHandleScope handles) {
+        source = Dereference(source);
+        if (source.Value is HostSequence sequence)
+            return new List<CilValue>(sequence.Items);
+        if (source.IsNull)
+            throw new EvaluationThrewException("System.ArgumentNullException");
+        if (source.CorValue?.UnwrapDebugValue() is not ICorDebugArrayValue array) {
+            var toArray = resolver.ResolveRuntimeMethod("System.Linq", "Enumerable", "ToArray", "System.Collections.Generic.IEnumerable`1<!!0>");
+            var eval = context.Thread.CreateEval();
+            var enumerated = handles.Track(await debugger.FuncEval.CallFunctionAsync(eval, toArray.Function, [resolver.GetCorDebugType(elementType)], [source.CorValue!], throwOnException: true));
+            array = enumerated?.UnwrapDebugValue() as ICorDebugArrayValue ?? throw new InvalidOperationException("The enumeration did not produce an array");
+        }
+        var count = array.GetCount();
+        var items = new List<CilValue>(count);
+        for (var i = 0; i < count; i++)
+            items.Add(handles.Root(CilValue.FromCorValue(array.GetElementAtPosition(i))));
+        return items;
+    }
+    // A host sequence as a debuggee array of its element type. The items are materialized first: the func evals that
+    // takes would neuter the array's element values
+    private async Task<CilValue> MaterializeSequenceAsync(HostSequence sequence, EvaluationMetadataResolver resolver, EvaluationContext context, EvaluationHandleScope handles) {
+        var elementType = sequence.ElementType;
+        var isReferenceSlot = IsReferenceType(elementType);
+        var items = new List<CilValue>(sequence.Items.Count);
+        foreach (var item in sequence.Items)
+            items.Add(isReferenceSlot ? await MaterializeForReferenceSlotAsync(item, resolver, context, handles) : await MaterializeForStoreAsync(item, resolver, context, handles));
+
+        var array = await CreateArrayAsync(elementType, resolver.GetCorDebugType(elementType), (uint)items.Count, resolver, context, handles)
+            ?? throw new InvalidOperationException("Failed to allocate the sequence's array");
+        var arrayValue = (ICorDebugArrayValue)array.UnwrapDebugValue();
+        for (var i = 0; i < items.Count; i++) {
+            if (!items[i].IsNull)
+                new CorDebugLocation(arrayValue.GetElementAtPosition(i)).Write(items[i]);
+        }
+        return handles.Root(CilValue.FromCorValue(array));
+    }
+    // A value going into a reference slot (an object[] element): a host primitive or a debuggee value type is boxed
+    private async Task<CilValue> MaterializeForReferenceSlotAsync(CilValue value, EvaluationMetadataResolver resolver, EvaluationContext context, EvaluationHandleScope handles) {
+        value = Dereference(value);
+        if (value.Value != null && value.Value is not string && value.Value is not ResolvedCilType && !IsHostValue(value)) {
+            var elementType = GetPrimitiveElementType(value.Value);
+            if (primitiveTypes.TryGetClass(elementType, out var boxedClass))
+                return CilValue.FromDebuggeeValue(await BoxBytesAsync(boxedClass, [], CilValueEncoding.GetBytes(value.Value, elementType), context, handles));
+        }
+        if (value.CorValue != null && value.CorValue is not ICorDebugReferenceValue && value.CorValue.UnwrapDebugValue() is ICorDebugGenericValue)
+            return await BoxAsync(value, value.CorValue.GetExactType(), context, handles);
+        return await MaterializeForStoreAsync(value, resolver, context, handles);
+    }
+    private async Task<CilValue> CreateListAsync(HostSequence sequence, EvaluationMetadataResolver resolver, EvaluationContext context, EvaluationHandleScope handles) {
+        var array = await MaterializeSequenceAsync(sequence, resolver, context, handles);
+        var constructor = resolver.ResolveRuntimeMethod("System.Collections.Generic", "List`1", ".ctor", "System.Collections.Generic.IEnumerable`1<!0>");
+        var eval = context.Thread.CreateEval();
+        var list = handles.Track(await debugger.FuncEval.NewObjectAsync(eval, constructor.Function, [resolver.GetCorDebugType(sequence.ElementType)], [array.CorValue!], throwOnException: true));
+        return list == null ? CilValue.Null() : CilValue.FromCorValue(list);
+    }
+    private static HostFunction ResolveFunction(int token, EvaluationMetadataResolver resolver) {
+        if (resolver.TryResolveEvaluationMethod(token, out var evaluationMethod))
+            return new HostFunction(evaluationMethod);
+        return new HostFunction(resolver.ResolveMethod(token));
+    }
+    private static HostObject GetHostObject(CilValue receiver) {
+        receiver = Dereference(receiver);
+        if (receiver.IsNull)
+            throw new NullReferenceException();
+        return receiver.Value as HostObject ?? throw new InvalidOperationException("The field belongs to a type the expression declares, the receiver is not an object of it");
+    }
+    private static CilValue Dereference(CilValue value) {
+        return value.Location != null ? value.Dereference() : value;
+    }
+    private static bool IsHostValue(CilValue value) {
+        return value.Value is HostObject or HostDelegate or HostSequence or HostFunction;
+    }
+    private static NotSupportedException HostValueCannotLeave(CilValue value) {
+        if (value.Value is HostDelegate or HostFunction)
+            return new NotSupportedException("A lambda can be invoked or handed to a System.Linq operator, the debuggee has no code for it");
+        return new NotSupportedException("An object of a type the expression declares (an anonymous type, a closure) cannot be handed to the debuggee or shown as a result");
+    }
+
     private static CilValue[] PopArguments(Stack<CilValue> stack, int count) {
         var arguments = new CilValue[count];
         for (var i = count - 1; i >= 0; i--)
@@ -884,7 +1176,7 @@ internal class CilInterpreter {
         return boxedClass.GetToken() == targetClass.GetToken() && boxedClass.GetModule() == targetClass.GetModule();
     }
     private static bool IsReferenceType(ResolvedCilType type) {
-        if (type.Primitive is PrimitiveTypeCode.String or PrimitiveTypeCode.Object || type.ElementType != null)
+        if (type.Primitive is PrimitiveTypeCode.String or PrimitiveTypeCode.Object || type.ElementType != null || type.HostType != null)
             return true;
         return type.RuntimeType != null && !EvaluationMetadataResolver.IsValueType(type.RuntimeType);
     }
@@ -972,7 +1264,7 @@ internal class CilInterpreter {
             && op != OpCodes.Brtrue && op != OpCodes.Brtrue_S && op != OpCodes.Brfalse && op != OpCodes.Brfalse_S && op != OpCodes.Switch;
     }
 
-    private static CilValue EvaluateBinary(OpCode op, CilValue left, CilValue right) {
+    internal static CilValue EvaluateBinary(OpCode op, CilValue left, CilValue right) {
         if (left.Value is float or double || right.Value is float or double) {
             var a = left.AsFloat();
             var b = right.AsFloat();
@@ -1087,7 +1379,7 @@ internal class CilInterpreter {
             return CilValue.FromPrimitive(-value.AsInt64());
         return CilValue.FromPrimitive(-value.AsInt32());
     }
-    private static bool Compare(OpCode op, CilValue left, CilValue right) {
+    internal static bool Compare(OpCode op, CilValue left, CilValue right) {
         if (op == OpCodes.Ceq) {
             if (left.IsNull || right.IsNull)
                 return left.IsNull == right.IsNull;

@@ -58,8 +58,12 @@ internal class ExpressionCompiler {
             ? CreateMethodContext(metadata, frame!, preferredModule)
             : CreateTypeContext(metadata, context.RootValue, preferredModule);
         var result = expressionContext.Compile(expression, hasException);
-        if (result.Assembly == null)
-            throw new EvaluationException(string.Join("; ", result.Errors));
+        if (result.Assembly == null) {
+            var message = string.Join("; ", result.Errors);
+            if (result.MissingAssemblies.Count > 0)
+                throw new MissingAssembliesException(message, result.MissingAssemblies);
+            throw new EvaluationException(message);
+        }
         var compiled = new CompiledExpression(result.Assembly, result.TypeName!, result.MethodName!);
         return AddToCache(cacheKey, compiled, expressionContext.ReuseConstraints);
     }

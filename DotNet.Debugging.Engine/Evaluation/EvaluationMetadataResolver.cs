@@ -60,15 +60,39 @@ internal class ResolvedRuntimeMethod {
 }
 
 // A method defined in the evaluation assembly itself (a lambda or local function of the expression)
+// A method of the expression assembly itself, run by the interpreter rather than the debuggee
 internal class ResolvedEvaluationMethod {
     public MethodDefinitionHandle Handle { get; }
+    public TypeDefinitionHandle DeclaringType { get; }
+    public string Name { get; }
     public MethodSignature<string> Signature { get; }
     public bool IsStatic { get; }
+    // The instantiation the method was referenced through (an anonymous type's), the generic context of its body
+    public ImmutableArray<ResolvedCilType> TypeArguments { get; }
+    public ImmutableArray<ResolvedCilType> MethodTypeArguments { get; }
+    public int ArgumentCount => Signature.ParameterTypes.Length + (IsStatic ? 0 : 1);
+    public bool ReturnsVoid => Signature.ReturnType == PrimitiveTypeCode.Void.ToString();
 
-    public ResolvedEvaluationMethod(MethodDefinitionHandle handle, MethodSignature<string> signature, bool isStatic) {
+    public ResolvedEvaluationMethod(MethodDefinitionHandle handle, TypeDefinitionHandle declaringType, string name, MethodSignature<string> signature, bool isStatic, ImmutableArray<ResolvedCilType> typeArguments, ImmutableArray<ResolvedCilType> methodTypeArguments) {
         Handle = handle;
+        DeclaringType = declaringType;
+        Name = name;
         Signature = signature;
         IsStatic = isStatic;
+        TypeArguments = typeArguments;
+        MethodTypeArguments = methodTypeArguments;
+    }
+}
+
+// A type the expression assembly declares (a closure, a display class, an anonymous type): it has no counterpart
+// in the debuggee, its instances are host objects
+internal class ResolvedHostType {
+    public TypeDefinitionHandle Handle { get; }
+    public ImmutableArray<ResolvedCilType> TypeArguments { get; }
+
+    public ResolvedHostType(TypeDefinitionHandle handle, ImmutableArray<ResolvedCilType> typeArguments) {
+        Handle = handle;
+        TypeArguments = typeArguments;
     }
 }
 
@@ -76,11 +100,13 @@ internal class ResolvedEvaluationMethod {
 internal class ResolvedCilType {
     public PrimitiveTypeCode? Primitive { get; }
     public ResolvedRuntimeType? RuntimeType { get; }
+    public ResolvedHostType? HostType { get; }
     public ResolvedCilType? ElementType { get; }
     public int ArrayRank { get; }
     public bool IsSzArray { get; }
 
-    public ResolvedCilType(PrimitiveTypeCode? primitive, ResolvedRuntimeType? runtimeType, ResolvedCilType? elementType = null, int arrayRank = 0, bool isSzArray = false) {
+    public ResolvedCilType(PrimitiveTypeCode? primitive, ResolvedRuntimeType? runtimeType, ResolvedCilType? elementType = null, int arrayRank = 0, bool isSzArray = false, ResolvedHostType? hostType = null) {
+        HostType = hostType;
         Primitive = primitive;
         RuntimeType = runtimeType;
         ElementType = elementType;
@@ -90,6 +116,9 @@ internal class ResolvedCilType {
 
     public static ResolvedCilType FromPrimitive(PrimitiveTypeCode primitive) {
         return new ResolvedCilType(primitive, null);
+    }
+    public static ResolvedCilType FromHostType(ResolvedHostType hostType) {
+        return new ResolvedCilType(null, null, hostType: hostType);
     }
     public static ResolvedCilType FromRuntimeType(ResolvedRuntimeType runtimeType) {
         return new ResolvedCilType(null, runtimeType);
@@ -115,6 +144,12 @@ internal class EvaluationMetadataResolver {
     private readonly Dictionary<int, ResolvedCilType> typeTokenCache = new Dictionary<int, ResolvedCilType>();
     private readonly Dictionary<string, ResolvedRuntimeMethod> runtimeMethodCache = new Dictionary<string, ResolvedRuntimeMethod>();
     private readonly Dictionary<string, ResolvedRuntimeType> runtimeTypeCache = new Dictionary<string, ResolvedRuntimeType>();
+    // The instantiation of the expression assembly's own generic type (an anonymous type) or method whose body is
+    // being interpreted; while one is set the '!i'/'!!i' parameters mean its arguments and the token caches are bypassed
+    private ImmutableArray<ResolvedCilType> contextTypeArguments;
+    private ImmutableArray<ResolvedCilType> contextMethodArguments;
+
+    private bool UseCache => contextTypeArguments.IsDefault && contextMethodArguments.IsDefault;
 
     public EvaluationMetadataResolver(ManagedDebugger debugger, CompiledExpression compiled, ICorDebugAppDomain appDomain, ICorDebugType[] typeGenericArguments, ICorDebugType[] methodGenericArguments, ModuleInfo? preferredModule) {
         this.debugger = debugger;
@@ -133,24 +168,41 @@ internal class EvaluationMetadataResolver {
         return evaluationReader.GetMethodDefinition(handle).DecodeSignature(new RuntimeTypeSignatureProvider(this), genericContext: null).ReturnType;
     }
     public ResolvedCilType ResolveTypeToken(int token) {
-        if (typeTokenCache.TryGetValue(token, out var cached))
+        if (UseCache && typeTokenCache.TryGetValue(token, out var cached))
             return cached;
 
         var handle = MetadataTokens.EntityHandle(token);
-        var result = handle.Kind == HandleKind.TypeSpecification
-            ? evaluationReader.GetTypeSpecification((TypeSpecificationHandle)handle).DecodeSignature(new RuntimeTypeSignatureProvider(this), genericContext: null)
-            : ResolvedCilType.FromRuntimeType(ResolveType(handle));
-        typeTokenCache[token] = result;
+        ResolvedCilType result;
+        if (handle.Kind == HandleKind.TypeSpecification)
+            result = evaluationReader.GetTypeSpecification((TypeSpecificationHandle)handle).DecodeSignature(new RuntimeTypeSignatureProvider(this), genericContext: null);
+        else if (handle.Kind == HandleKind.TypeDefinition)
+            result = ResolvedCilType.FromHostType(new ResolvedHostType((TypeDefinitionHandle)handle, default));
+        else
+            result = ResolvedCilType.FromRuntimeType(ResolveType(handle));
+        if (UseCache)
+            typeTokenCache[token] = result;
         return result;
     }
     public ResolvedCilType ResolveGenericTypeParameter(int index) {
+        if (!contextTypeArguments.IsDefault)
+            return ResolveContextParameter(index, contextTypeArguments, "!");
         return ResolveGenericParameter(index, typeGenericArguments, "!");
     }
     public ResolvedCilType ResolveGenericMethodParameter(int index) {
+        if (!contextMethodArguments.IsDefault)
+            return ResolveContextParameter(index, contextMethodArguments, "!!");
         return ResolveGenericParameter(index, methodGenericArguments, "!!");
     }
+    // Binds the generic parameters to an instantiation of the expression assembly's own type or method for the
+    // duration of its body; disposing restores the enclosing context
+    public GenericContextScope EnterGenericContext(ImmutableArray<ResolvedCilType> typeArguments, ImmutableArray<ResolvedCilType> methodArguments) {
+        var scope = new GenericContextScope(this, contextTypeArguments, contextMethodArguments);
+        contextTypeArguments = typeArguments;
+        contextMethodArguments = methodArguments;
+        return scope;
+    }
     public ResolvedRuntimeField ResolveField(int token) {
-        if (fieldCache.TryGetValue(token, out var cached))
+        if (UseCache && fieldCache.TryGetValue(token, out var cached))
             return cached;
 
         var handle = MetadataTokens.EntityHandle(token);
@@ -166,13 +218,14 @@ internal class EvaluationMetadataResolver {
             if (reader.GetString(field.Name) != name)
                 continue;
             var result = new ResolvedRuntimeField(declaringType, fieldHandle, (field.Attributes & FieldAttributes.Static) != 0);
-            fieldCache[token] = result;
+            if (UseCache)
+                fieldCache[token] = result;
             return result;
         }
         throw new MissingFieldException(GetTypeName(declaringType), name);
     }
     public ResolvedRuntimeMethod ResolveMethod(int token) {
-        if (methodCache.TryGetValue(token, out var cached))
+        if (UseCache && methodCache.TryGetValue(token, out var cached))
             return cached;
 
         var handle = MetadataTokens.EntityHandle(token);
@@ -198,23 +251,112 @@ internal class EvaluationMetadataResolver {
             if (!SignaturesEqual(expectedSignature, signature))
                 continue;
             var result = new ResolvedRuntimeMethod(declaringType, methodHandle, name, signature, (method.Attributes & MethodAttributes.Static) != 0, methodTypeArguments);
-            methodCache[token] = result;
+            if (UseCache)
+                methodCache[token] = result;
             return result;
         }
         throw new MissingMethodException(GetTypeName(declaringType), name);
     }
+    // A method of the expression assembly itself (a lambda body, a local function, a closure's or anonymous type's
+    // member): a definition, or a reference through an instantiation of one of the assembly's generic types
     public bool TryResolveEvaluationMethod(int token, out ResolvedEvaluationMethod result) {
+        result = null!;
         var handle = MetadataTokens.EntityHandle(token);
-        if (handle.Kind == HandleKind.MethodSpecification)
-            handle = evaluationReader.GetMethodSpecification((MethodSpecificationHandle)handle).Method;
-        if (handle.Kind != HandleKind.MethodDefinition) {
-            result = null!;
+        MethodSpecification? specification = null;
+        if (handle.Kind == HandleKind.MethodSpecification) {
+            specification = evaluationReader.GetMethodSpecification((MethodSpecificationHandle)handle);
+            handle = specification.Value.Method;
+        }
+
+        MethodDefinitionHandle methodHandle;
+        var typeArguments = default(ImmutableArray<ResolvedCilType>);
+        if (handle.Kind == HandleKind.MethodDefinition) {
+            methodHandle = (MethodDefinitionHandle)handle;
+        }
+        else if (handle.Kind == HandleKind.MemberReference) {
+            var member = evaluationReader.GetMemberReference((MemberReferenceHandle)handle);
+            if (!TryGetEvaluationType(member.Parent, out var typeHandle, out typeArguments))
+                return false;
+            var name = evaluationReader.GetString(member.Name);
+            methodHandle = FindEvaluationMethod(typeHandle, name, member.DecodeMethodSignature(SignatureNameProvider.Instance, genericContext: null));
+        }
+        else {
             return false;
         }
 
-        var methodHandle = (MethodDefinitionHandle)handle;
+        var methodTypeArguments = specification == null ? default : specification.Value.DecodeSignature(new RuntimeTypeSignatureProvider(this), genericContext: null);
         var method = evaluationReader.GetMethodDefinition(methodHandle);
-        result = new ResolvedEvaluationMethod(methodHandle, method.DecodeSignature(SignatureNameProvider.Instance, genericContext: null), (method.Attributes & MethodAttributes.Static) != 0);
+        result = new ResolvedEvaluationMethod(
+            methodHandle,
+            method.GetDeclaringType(),
+            evaluationReader.GetString(method.Name),
+            method.DecodeSignature(SignatureNameProvider.Instance, genericContext: null),
+            (method.Attributes & MethodAttributes.Static) != 0,
+            typeArguments,
+            methodTypeArguments);
+        return true;
+    }
+    // A field of a type the expression assembly declares: the captured variables of a closure, the members of an
+    // anonymous type, the cached instance and delegates of a lambda's closure class
+    public bool TryResolveEvaluationField(int token, out FieldDefinitionHandle field, out TypeDefinitionHandle declaringType) {
+        field = default;
+        declaringType = default;
+        var handle = MetadataTokens.EntityHandle(token);
+        if (handle.Kind == HandleKind.FieldDefinition) {
+            field = (FieldDefinitionHandle)handle;
+            declaringType = evaluationReader.GetFieldDefinition(field).GetDeclaringType();
+            return true;
+        }
+        if (handle.Kind != HandleKind.MemberReference)
+            return false;
+
+        var member = evaluationReader.GetMemberReference((MemberReferenceHandle)handle);
+        if (!TryGetEvaluationType(member.Parent, out declaringType, out _))
+            return false;
+        var name = evaluationReader.GetString(member.Name);
+        foreach (var fieldHandle in evaluationReader.GetTypeDefinition(declaringType).GetFields()) {
+            if (evaluationReader.GetString(evaluationReader.GetFieldDefinition(fieldHandle).Name) != name)
+                continue;
+            field = fieldHandle;
+            return true;
+        }
+        throw new MissingFieldException(GetEvaluationTypeName(declaringType), name);
+    }
+    // The static constructor of a type the expression assembly declares, null when it has none
+    public ResolvedEvaluationMethod? FindTypeInitializer(TypeDefinitionHandle type) {
+        foreach (var methodHandle in evaluationReader.GetTypeDefinition(type).GetMethods()) {
+            var method = evaluationReader.GetMethodDefinition(methodHandle);
+            if (evaluationReader.GetString(method.Name) != ".cctor")
+                continue;
+            return new ResolvedEvaluationMethod(methodHandle, type, ".cctor", method.DecodeSignature(SignatureNameProvider.Instance, genericContext: null), true, default, default);
+        }
+        return null;
+    }
+    // The bytes behind a field with a data address: the initial elements of an array initializer, which the
+    // expression assembly hands to RuntimeHelpers.InitializeArray
+    public byte[] GetEvaluationFieldData(FieldDefinitionHandle field, int size) {
+        var address = evaluationReader.GetFieldDefinition(field).GetRelativeVirtualAddress();
+        if (address == 0)
+            throw new InvalidOperationException("The array initializer field has no data");
+        return evaluationPeReader.GetSectionData(address).GetContent(0, size).ToArray();
+    }
+    public string GetEvaluationTypeName(TypeDefinitionHandle type) {
+        return evaluationReader.GetString(evaluationReader.GetTypeDefinition(type).Name);
+    }
+    // The constructor of a multidimensional array type ('new int[2, 3]' is a 'newobj' on 'int[,]::.ctor')
+    public bool TryResolveArrayConstructor(int token, out ResolvedCilType arrayType) {
+        arrayType = null!;
+        var handle = MetadataTokens.EntityHandle(token);
+        if (handle.Kind != HandleKind.MemberReference)
+            return false;
+
+        var member = evaluationReader.GetMemberReference((MemberReferenceHandle)handle);
+        if (member.Parent.Kind != HandleKind.TypeSpecification || evaluationReader.GetString(member.Name) != ".ctor")
+            return false;
+        var parent = evaluationReader.GetTypeSpecification((TypeSpecificationHandle)member.Parent).DecodeSignature(new RuntimeTypeSignatureProvider(this), genericContext: null);
+        if (parent.ElementType == null)
+            return false;
+        arrayType = parent;
         return true;
     }
     // The 'Get'/'Set'/'Address' pseudo methods of an array type ('data[1, 1]' compiles to a call of
@@ -277,6 +419,8 @@ internal class EvaluationMetadataResolver {
         return ((ICorDebugClass2)type.Class).GetParameterizedType(elementType, typeArguments);
     }
     public ICorDebugType GetCorDebugType(ResolvedCilType type) {
+        if (type.HostType != null)
+            throw new NotSupportedException($"'{GetEvaluationTypeName(type.HostType.Handle)}' is a type the expression declares, it has no counterpart in the debuggee");
         if (type.ElementType != null) {
             var arrayKind = type.IsSzArray ? CorElementType.SZARRAY : CorElementType.ARRAY;
             return ((ICorDebugAppDomain2)appDomain).GetArrayOrPointerType(arrayKind, type.ArrayRank, GetCorDebugType(type.ElementType));
@@ -321,6 +465,19 @@ internal class EvaluationMetadataResolver {
         throw new MissingMethodException($"{@namespace}.{typeName}", methodName);
     }
 
+    // The Invoke method of a debuggee delegate's type, for a delegate the interpreter invokes itself
+    public ResolvedRuntimeMethod ResolveDelegateInvoke(ICorDebugType delegateType) {
+        var runtimeType = ResolveRuntimeType(delegateType);
+        var reader = runtimeType.Module.MetadataReader.PeMetadataReader;
+        foreach (var handle in reader.GetTypeDefinition(runtimeType.Handle).GetMethods()) {
+            var method = reader.GetMethodDefinition(handle);
+            if (reader.GetString(method.Name) != "Invoke")
+                continue;
+            return new ResolvedRuntimeMethod(runtimeType, handle, "Invoke", method.DecodeSignature(SignatureNameProvider.Instance, genericContext: null), false);
+        }
+        throw new MissingMethodException(GetTypeName(runtimeType), "Invoke");
+    }
+
     public static bool IsValueType(ResolvedRuntimeType type) {
         var reader = type.Module.MetadataReader.PeMetadataReader;
         var definition = reader.GetTypeDefinition(type.Handle);
@@ -337,6 +494,39 @@ internal class EvaluationMetadataResolver {
         }
     }
 
+    private static ResolvedCilType ResolveContextParameter(int index, ImmutableArray<ResolvedCilType> arguments, string prefix) {
+        if (index >= 0 && index < arguments.Length)
+            return arguments[index];
+        throw new NotSupportedException($"The generic parameter '{prefix}{index}' is not bound in the expression's own type");
+    }
+    // The type a member reference names, when it is one the expression assembly declares (as a definition, or an
+    // instantiation of a generic one)
+    private bool TryGetEvaluationType(EntityHandle parent, out TypeDefinitionHandle type, out ImmutableArray<ResolvedCilType> typeArguments) {
+        type = default;
+        typeArguments = default;
+        if (parent.Kind == HandleKind.TypeDefinition) {
+            type = (TypeDefinitionHandle)parent;
+            return true;
+        }
+        if (parent.Kind != HandleKind.TypeSpecification)
+            return false;
+        var specification = evaluationReader.GetTypeSpecification((TypeSpecificationHandle)parent).DecodeSignature(new RuntimeTypeSignatureProvider(this), genericContext: null);
+        if (specification.HostType == null)
+            return false;
+        type = specification.HostType.Handle;
+        typeArguments = specification.HostType.TypeArguments;
+        return true;
+    }
+    private MethodDefinitionHandle FindEvaluationMethod(TypeDefinitionHandle type, string name, MethodSignature<string> expectedSignature) {
+        foreach (var methodHandle in evaluationReader.GetTypeDefinition(type).GetMethods()) {
+            var method = evaluationReader.GetMethodDefinition(methodHandle);
+            if (evaluationReader.GetString(method.Name) != name)
+                continue;
+            if (SignaturesEqual(expectedSignature, method.DecodeSignature(SignatureNameProvider.Instance, genericContext: null)))
+                return methodHandle;
+        }
+        throw new MissingMethodException(GetEvaluationTypeName(type), name);
+    }
     private ResolvedCilType ResolveGenericParameter(int index, ICorDebugType[] arguments, string prefix) {
         if (index >= 0 && index < arguments.Length)
             return ResolveCorDebugType(arguments[index]);
@@ -642,12 +832,15 @@ internal class EvaluationMetadataResolver {
         }
 
         public ResolvedCilType GetPrimitiveType(PrimitiveTypeCode typeCode) => ResolvedCilType.FromPrimitive(typeCode);
-        public ResolvedCilType GetTypeFromDefinition(MetadataReader reader, TypeDefinitionHandle handle, byte rawTypeKind) => ResolvedCilType.FromRuntimeType(resolver.ResolveType(handle));
+        // A definition is one of the expression assembly's own types, the debuggee's are referenced
+        public ResolvedCilType GetTypeFromDefinition(MetadataReader reader, TypeDefinitionHandle handle, byte rawTypeKind) => ResolvedCilType.FromHostType(new ResolvedHostType(handle, default));
         public ResolvedCilType GetTypeFromReference(MetadataReader reader, TypeReferenceHandle handle, byte rawTypeKind) => ResolvedCilType.FromRuntimeType(resolver.ResolveType(handle));
         public ResolvedCilType GetTypeFromSpecification(MetadataReader reader, object? genericContext, TypeSpecificationHandle handle, byte rawTypeKind) {
             return reader.GetTypeSpecification(handle).DecodeSignature(this, genericContext);
         }
         public ResolvedCilType GetGenericInstantiation(ResolvedCilType genericType, ImmutableArray<ResolvedCilType> typeArguments) {
+            if (genericType.HostType != null)
+                return ResolvedCilType.FromHostType(new ResolvedHostType(genericType.HostType.Handle, typeArguments));
             if (genericType.RuntimeType == null)
                 throw new TypeLoadException("A generic instantiation must identify a runtime type");
             return ResolvedCilType.FromRuntimeType(genericType.RuntimeType.WithTypeArguments(typeArguments));
@@ -661,5 +854,22 @@ internal class EvaluationMetadataResolver {
         public ResolvedCilType GetFunctionPointerType(MethodSignature<ResolvedCilType> signature) => throw new NotSupportedException("Function pointer types are not supported");
         public ResolvedCilType GetGenericMethodParameter(object? genericContext, int index) => resolver.ResolveGenericMethodParameter(index);
         public ResolvedCilType GetGenericTypeParameter(object? genericContext, int index) => resolver.ResolveGenericTypeParameter(index);
+    }
+
+    internal class GenericContextScope : IDisposable {
+        private readonly EvaluationMetadataResolver resolver;
+        private readonly ImmutableArray<ResolvedCilType> previousTypeArguments;
+        private readonly ImmutableArray<ResolvedCilType> previousMethodArguments;
+
+        public GenericContextScope(EvaluationMetadataResolver resolver, ImmutableArray<ResolvedCilType> previousTypeArguments, ImmutableArray<ResolvedCilType> previousMethodArguments) {
+            this.resolver = resolver;
+            this.previousTypeArguments = previousTypeArguments;
+            this.previousMethodArguments = previousMethodArguments;
+        }
+
+        public void Dispose() {
+            resolver.contextTypeArguments = previousTypeArguments;
+            resolver.contextMethodArguments = previousMethodArguments;
+        }
     }
 }

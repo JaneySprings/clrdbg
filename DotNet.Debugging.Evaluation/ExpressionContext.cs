@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection.Metadata;
@@ -80,8 +81,8 @@ public class ExpressionContext {
         try {
             var result = context.CompileExpression(expression, DkmEvaluationFlags.TreatAsExpression, GetAliases(hasException), diagnostics, out _, testData: null);
             if (result == null || diagnostics.HasAnyErrors()) {
-                var errors = diagnostics.AsEnumerable().Where(it => it.Severity == DiagnosticSeverity.Error).Select(it => it.GetMessage()).ToList();
-                return new ExpressionCompileResult(errors);
+                var errors = diagnostics.AsEnumerable().Where(it => it.Severity == DiagnosticSeverity.Error).ToList();
+                return new ExpressionCompileResult(errors.Select(it => it.GetMessage()).ToList(), GetMissingAssemblies(errors));
             }
             return new ExpressionCompileResult(result.Assembly, result.TypeName, result.MethodName);
         }
@@ -90,6 +91,16 @@ public class ExpressionContext {
         }
     }
 
+    // The assemblies the first error blaming any names, the way Roslyn's own retry loop finds them: an unknown type's
+    // assembly, or System.Linq for an extension method that could be one of its
+    private IReadOnlyList<string> GetMissingAssemblies(List<Diagnostic> errors) {
+        foreach (var error in errors) {
+            var identities = context.GetMissingAssemblyIdentities(error, EvaluationContextBase.SystemLinqIdentity);
+            if (!identities.IsDefaultOrEmpty)
+                return identities.Select(it => it.Name).ToList();
+        }
+        return Array.Empty<string>();
+    }
     // A compilation referencing every block ('AllAssemblies'), the way the expression compiler builds one when it does
     // not know which module the expression will bind against, plus the intrinsics it emits calls to
     private static CSharpCompilation CreateCompilation(EvaluationMetadata metadata) {
