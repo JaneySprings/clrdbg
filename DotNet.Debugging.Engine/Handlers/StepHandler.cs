@@ -14,6 +14,11 @@ public partial class ManagedDebugger {
             ContinueProcess();
             return;
         }
+        // The step was abandoned (a stop on another thread, an exception the user kept) and the user has moved on since
+        if (!stepController.IsStepping) {
+            ContinueProcess();
+            return;
+        }
         var thread = callbackEvent.Thread;
         if (!stepController.TryCompleteStep(thread, callbackEvent.Reason, out var location)) {
             ContinueProcess();

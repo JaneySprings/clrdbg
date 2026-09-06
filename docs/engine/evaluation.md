@@ -47,9 +47,14 @@ compiles once into a small in-memory assembly (`IntrinsicMethodsReference`).
 
 Compilation errors come back as the diagnostic messages joined with `; `. When the errors blame an
 assembly the debuggee has not loaded — an unknown type's, or `System.Linq` for an extension method
-that could be one of its, found the way Roslyn's own compiler does (`GetMissingAssemblyIdentities`) —
+that could be one of its, found the way Roslyn's own compiler does (`GetMissingAssemblyIdentities`),
+plus the shim's own guess for the two errors Roslyn's retry does not cover: an unknown `Enumerable` or
+`Queryable` name means `System.Linq`, an unknown member of a `System.*` namespace (`System.Linq.Enumerable`,
+`System.Text.Json.JsonSerializer`) the assembly named like the namespace, a wrong guess failing to load
+and leaving the error standing —
 `ExpressionEvaluator` loads it into the debuggee (`Assembly.Load`, a module event follows) and compiles
-again, once per assembly; a program that never used LINQ can still evaluate `strings.Where(...)`.
+again, once per assembly; a program that never used LINQ can still evaluate `strings.Where(...)` or
+`Enumerable.Range(1, 3)`.
 Deliberate divergence: Microsoft's debugger reads the missing assembly's metadata from disk and
 interprets its IL itself. Results are cached in an
 LRU of 256 entries keyed by context kind, module, method token, whether an exception is present and
@@ -67,7 +72,7 @@ from `System.Reflection.Emit.OpCodes`, operands and branch targets resolved to i
 | `CilValue` holds | Used for |
 |---|---|
 | `Value` — a host primitive, string or `ResolvedCilType` | Constants, arithmetic results, `ldtoken`, interpolated-string builders. |
-| `Value` — a `HostObject`, `HostDelegate`, `HostFunction` or `HostSequence` (`HostValues.cs`) | What only exists in the debugger: an instance of a type the expression assembly declares (a closure, a display class, an anonymous type), a delegate the expression created, the function `ldftn` pushed, a sequence a System.Linq operator computed here. See *Code the expression declares* below. |
+| `Value` — a `HostObject`, `HostDelegate`, `HostFunction`, `HostSequence` or `HostSpan` (`HostValues.cs`) | What only exists in the debugger: an instance of a type the expression assembly declares (a closure, a display class, an anonymous type), a delegate the expression created, the function `ldftn` pushed, a sequence a System.Linq operator computed here, a span the expression built. See *Code the expression declares* and *Spans* below. |
 | `CorValue` — a debuggee `ICorDebugValue` | Everything read from the debuggee; reference values are pinned with strong handles (`EvaluationHandleScope.Root`) so they survive later func evals. |
 | `Location` — an `ICilLocation` | Addresses: a debuggee slot (`CorDebugLocation`: local, argument, field, element), a host temporary (`TemporaryLocation`), a synthetic variable (`SyntheticVariableLocation`, a one-element array allocated in the debuggee) or a slot the runtime cannot read at this instruction (`UnavailableLocation`, optimized away - reading it fails with vsdbg's message). A by-reference slot (a `ref` parameter or local, the `this` of a struct method) reads as the location it points to, which the IL then dereferences with `ldind`/`ldobj`. |
 
@@ -86,13 +91,13 @@ and the method's by the type's arity, for `!0`/`!!0` resolution.
 | `ldftn`, `ldvirtftn` | A `HostFunction` naming the method; the delegate constructor that follows turns it into a `HostDelegate`. |
 | `ldarg*`, `ldloc*`, `starg`, `stloc`, `ldarga`, `ldloca` | Read/write through the locations; `ld*` of references roots them. |
 | `add … shr.un`, `neg`, `not`, `ceq … clt.un`, `conv.*` | On the host, with int32/int64/float promotion, overflow-checked and unsigned variants, NaN-aware comparisons; enum and small struct values read as integers (an enum through its `value__` field, so the underlying type's sign holds). Host values are written back with wrapping bit reinterpretation (`CilValueEncoding`): an unsigned slot holds its signed twin on the stack, a comparison result stores into a `bool`, and a native integer takes the debuggee's pointer size. |
-| `br*`, `beq … ble.un`, `switch` | Branches by instruction index. |
+| `br*`, `beq … ble.un`, `switch` | Branches by instruction index. The ordered comparisons (`bge`, `ble`, …) never take a NaN operand, their `.un` forms always do (ECMA-335 III.3); for integers `.un` means unsigned. |
 | `ldind/stind/ldobj/stobj/cpobj/initobj` | Through locations; `initobj` creates a default value (zero, null, or a debuggee struct instance). |
 | `newarr`, `ldlen`, `ldelem*`, `stelem*`, `ldelema` | `NewParameterizedArray` for primitive and reference element types; `Array.CreateInstance(Type, int)` in the debuggee for other structs (`DateTime[]`), as `ICorDebugEval` cannot allocate those. |
 | `isinst`, `castclass` | `Type.GetType(assemblyQualifiedName)` + `Type.IsInstanceOfType(value)` evaluated in the debuggee. |
-| `box`, `unbox`, `unbox.any` | Boxes are allocated with `NewParameterizedObjectNoConstructor` and filled byte-wise; unboxing checks the exact class (the object of a boxed primitive is a VALUETYPE of `System.Int32` and friends). `unbox.any Nullable<T>` builds the nullable: an empty one for null, one holding the boxed `T` otherwise. |
+| `box`, `unbox`, `unbox.any` | Boxes are allocated with `NewParameterizedObjectNoConstructor` and filled byte-wise; unboxing checks the exact class (the object of a boxed primitive is a VALUETYPE of `System.Int32` and friends) and reads a primitive into a host value, so the arithmetic that follows sees an `int`, not a debuggee value. `unbox.any Nullable<T>` builds the nullable: an empty one for null, one holding the boxed `T` otherwise; `box Nullable<T>` boxes the value, or yields null when there is none, the way the runtime does. |
 | `ldfld/ldflda/stfld`, `ldsfld/ldsflda/stsfld` | `GetFieldValue`, `GetStaticFieldValueAsync` (runs the static constructor on demand); the fields of a type the expression assembly declares are host locations (a host object's, or `EvaluationState`'s statics after the type's `.cctor`). |
-| `newobj` | `NewParameterizedObject` with the constructor's declaring-type arguments. A type of the expression assembly becomes a host object whose constructor is interpreted; a delegate over a `HostFunction` a `HostDelegate`; a multidimensional array type goes through `Array.CreateInstance`; the common `string` constructors are built on the host. |
+| `newobj` | `NewParameterizedObject` with the constructor's declaring-type arguments. A type of the expression assembly becomes a host object whose constructor is interpreted; a delegate over a `HostFunction` a `HostDelegate`; a multidimensional array type goes through `Array.CreateInstance`; the common `string` constructors are built on the host; a `Span<T>`/`ReadOnlySpan<T>` constructor yields a `HostSpan`. |
 | `call`, `callvirt` (+ `constrained.`) | See below. |
 | `ret` | The result; `nop`/`break` are skipped. |
 
@@ -123,7 +128,10 @@ that becomes a debuggee array of its element type once it reaches the debuggee o
 `Sum`, `Min`, `Max`, `Average` (int, long, float and double), `Aggregate`, `OrderBy(Descending)`,
 `ThenBy(Descending)`, `Skip`, `Take`, `SkipWhile`, `TakeWhile`, `Distinct`, `Reverse`, `Contains`, `Concat`,
 `ToList`, `ToArray`. Ordering and equality follow `Comparer<T>.Default`: strings by the current culture,
-numbers by value, references by identity. An empty `First()` reports `InvalidOperationException` the way
+numbers by value (boxed ones unboxed first; an unsigned key compares unsigned, decided by the key's static
+type since the interpreter holds a computed `uint` as its signed twin), references by identity. `Min` and
+`Max` follow `Enumerable`'s NaN rules — the minimum is NaN as soon as one is met, the maximum ignores NaN
+unless nothing else is there. An empty `First()` reports `InvalidOperationException` the way
 the debuggee would. An operator without a lambda over a debuggee source keeps running in the debuggee.
 
 **Array initializers, multidimensional arrays, string constructors.** `new[] { 1, 2, 3 }` is `ldtoken`
@@ -132,6 +140,21 @@ bytes (`GetEvaluationFieldData`) are copied into the elements. `new int[2, 3]` i
 type's own constructor, served through the debuggee's `Array.CreateInstance(Type, int[])` because
 `ICorDebugEval` allocates single-dimensional arrays only. `new string(char, int)` and the `char[]`
 constructors are built on the host, the runtime refusing them in a func eval.
+
+**Spans** (`SpanEmulator`). A `Span<T>`/`ReadOnlySpan<T>` is a byref-like struct no func eval can take or
+return, and the compiler lowers more to it than the user writes: `text + letter` becomes
+`String.op_Implicit(string)`, `new ReadOnlySpan<char>(in letter)` and `String.Concat(ReadOnlySpan<char>, …)`;
+an array literal handed to a span API (`new[] { 3, 1, 2 }.Contains(1)`, which C# 14's first-class spans
+bind to `MemoryExtensions`) is `ldtoken` of a data field followed by `RuntimeHelpers.CreateSpan<T>`. The
+spans the expression builds are `HostSpan`s — over a string, over a debuggee array (kept by its source
+reference and sliced by index; the elements are read and written through the array's own slots, so
+`numbers.AsSpan()[0] = 5` reaches the debuggee), or over the values or variables the span was created
+over — and the span members (`Length`, `IsEmpty`, the indexer as a location, `Slice`, `ToString`,
+`ToArray`, `op_Implicit`, `Empty`), the string concatenations and the `MemoryExtensions` operators
+(`AsSpan`, `Contains`, `IndexOf`, `LastIndexOf`, `SequenceEqual`, `StartsWith`, `EndsWith`) run on the
+host; `span.ToString()` arrives as a `constrained.` call to `Object.ToString` and is routed the same way.
+A span of the debuggee (a frame local) answers `Length` from its `_length` field only, its elements sit
+behind a managed pointer the debugger does not follow; a host span cannot be handed to a debuggee method.
 
 **Syntax the evaluator does not support** (`Handlers/EvaluationSyntaxTests.UnsupportedSyntaxIsReportedTest`
 keeps the list, each form is reported as an error):
@@ -143,11 +166,14 @@ keeps the list, each form is reported as an error):
 - variables declared by patterns (`boxed is int n ? n + 1 : 0`, `count is var any`): Roslyn's
   expression compiler turns declared locals into pseudo-variables (`CreateVariable`/`GetVariableAddress`)
   by rewriting `BoundLocal` references, which a pattern's declaration is not — its code generator then
-  fails on the undeclared local. `out var` works.
+  fails on the undeclared local (a `KeyNotFoundException`, which `ExpressionEvaluator` reports as
+  "Variables declared by a pattern … are not supported in the debugger"). `out var` works.
 
-Assignments to a slot of a reference type take the source reference whatever the slot holds
-(`boxed = "text"` on an `object` local holding a boxed `int`), values copy their bytes into the
-unwrapped destination (an enum or struct the evaluation produced is a box). A constant called through
+Assignments to a slot of a reference type (`CorDebugLocation.IsReferenceSlot`: an `object`, class, string
+or array local, field or element) take the source reference, or null, whatever the slot holds
+(`boxed = 2.5` on an `object` local holding a boxed `int` stores a new box - writing into the old one
+would change every other reference to it); a host primitive going into such a slot is boxed first. Values
+copy their bytes into a value slot (an enum or struct the evaluation produced is a box, read through). A constant called through
 `constrained.` (`Options.C.ToString()`) is boxed as the constrained type, not as its underlying
 integer. Constants fold unchecked (`(sbyte)200` is `-56`), the way the compiler options of the
 expression compiler have it.
@@ -166,6 +192,8 @@ expression compiler have it.
 - `System.Object..ctor` on a host object (nothing to do) and `RuntimeHelpers.InitializeArray` over a data
   field of the expression assembly (the bytes are copied into the array's elements);
 - a `System.Linq.Enumerable` operator handed a host delegate or a host sequence, run by `LinqEmulator`;
+- a span member, a `String` concatenation of spans, a `MemoryExtensions` operator or `RuntimeHelpers.CreateSpan`,
+  run by `SpanEmulator` (see *Spans*);
 - `System.Type.GetTypeFromHandle`, answered with the `System.Type` of the token (`typeof`);
 - the `DefaultInterpolatedStringHandler` calls interpolated strings are lowered to, emulated with a
   host `StringBuilder` — debuggee values are formatted by calling `Object.ToString()` on them in the

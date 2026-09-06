@@ -62,7 +62,8 @@ behind them are gone once the debuggee runs (`ClearReferences`), and tolerates
   which is why evaluation is available at every stop.
 - `BreakpointManager.BindPending(module)` binds what the new module resolves and `OnBreakpointChanged`
   reports the newly verified breakpoints; a pending `stopAtEntry` places its one-shot breakpoint on
-  the entry point's first sequence point.
+  the entry point's first sequence point (`ModuleMetadataReader.ResolveEntryPoint`: behind the compiler's
+  `<Main>` bridge of an async `Main`, in the state machine's `MoveNext`).
 
 ## 4. Breakpoints
 
@@ -88,7 +89,7 @@ When a breakpoint callback arrives (`BreakpointHandler.HandleBreakpointAsync`) t
 made in this order: continue if an evaluation is running; continue if a step in progress is already
 complete (its `StepComplete` callback is queued right behind and reports the stop); give the
 `AsyncStepper` its breakpoints; handle the entry breakpoint; then for a user breakpoint count the
-hit and check the hit condition (`BreakpointManager.CheckHitCondition`: `3`, `==3`, `>=3`, `<3`,
+hit and check the hit condition (`BreakpointExtensions.MatchesHitCount`: `3`, `==3`, `>=3`, `<3`,
 `%3`) — a hit that does not stop leaves a step in flight alone; only past that point is the step
 cancelled, before the condition is evaluated, a logpoint printed (`OnLogPoint`, `{expression}`
 placeholders evaluated in the top frame) and continued, or every step disabled and `OnStopped`
@@ -150,8 +151,10 @@ process stopped right after a continue issued inside a callback.
 ## 7. Inspecting state
 
 - `GetThreads` names threads from the managed `Thread._name` field (read directly, no evaluation)
-  or, except for the main thread, the OS thread name (`NativeThreadNames`), and marks the first
-  thread as main so the host can label it.
+  or, except for the main thread, the OS thread name (`NativeThreadNames`, for a process on this
+  machine: a launched or locally attached one, or a Mac Catalyst app behind the remote transport —
+  a device's thread ids would name unrelated local threads), and marks the first thread as main so
+  the host can label it.
 - `GetStackFrames` walks the managed chains of the thread; each `StackFrameInfo` carries the
   `Namespace.Type.Method(params)` signature read from metadata, the module, the `SourceLocation`
   (with checksum and Source Link) and the native instruction pointer; internal and native frames

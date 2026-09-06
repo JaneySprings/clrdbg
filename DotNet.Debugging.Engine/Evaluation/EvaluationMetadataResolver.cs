@@ -3,9 +3,10 @@ using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
-using System.Security.Cryptography;
 using DotNet.Debugging.CorApi;
 using DotNet.Debugging.CorApi.Extensions;
+using DotNet.Debugging.Engine.Extensions;
+using DotNet.Debugging.Engine.Metadata;
 using DotNet.Debugging.Engine.Models;
 
 namespace DotNet.Debugging.Engine.Evaluation;
@@ -15,6 +16,9 @@ internal class ResolvedRuntimeType {
     public TypeDefinitionHandle Handle { get; }
     public ImmutableArray<ResolvedCilType> TypeArguments { get; }
     public ICorDebugClass Class => Module.Module.GetClassFromToken((TypeDefToken)MetadataTokens.GetToken(Handle));
+    public bool IsValueType => Module.MetadataReader.PeMetadataReader.IsValueType(Handle);
+    // 'Namespace.Outer+Nested', the reflection name of the type
+    public string FullName => Module.MetadataReader.PeMetadataReader.GetFullName(Handle);
 
     public ResolvedRuntimeType(ModuleInfo module, TypeDefinitionHandle handle, ImmutableArray<ResolvedCilType> typeArguments = default) {
         Module = module;
@@ -104,6 +108,21 @@ internal class ResolvedCilType {
     public ResolvedCilType? ElementType { get; }
     public int ArrayRank { get; }
     public bool IsSzArray { get; }
+    public bool IsValueType {
+        get {
+            if (Primitive != null)
+                return Primitive != PrimitiveTypeCode.String && Primitive != PrimitiveTypeCode.Object;
+            return RuntimeType != null && RuntimeType.IsValueType;
+        }
+    }
+    // A host type (a closure, an anonymous type) and an array are reference types, an unresolved type is neither
+    public bool IsReferenceType {
+        get {
+            if (Primitive is PrimitiveTypeCode.String or PrimitiveTypeCode.Object || ElementType != null || HostType != null)
+                return true;
+            return RuntimeType != null && !RuntimeType.IsValueType;
+        }
+    }
 
     public ResolvedCilType(PrimitiveTypeCode? primitive, ResolvedRuntimeType? runtimeType, ResolvedCilType? elementType = null, int arrayRank = 0, bool isSzArray = false, ResolvedHostType? hostType = null) {
         HostType = hostType;
@@ -222,7 +241,7 @@ internal class EvaluationMetadataResolver {
                 fieldCache[token] = result;
             return result;
         }
-        throw new MissingFieldException(GetTypeName(declaringType), name);
+        throw new MissingFieldException(declaringType.FullName, name);
     }
     public ResolvedRuntimeMethod ResolveMethod(int token) {
         if (UseCache && methodCache.TryGetValue(token, out var cached))
@@ -248,14 +267,14 @@ internal class EvaluationMetadataResolver {
             if (reader.GetString(method.Name) != name)
                 continue;
             var signature = method.DecodeSignature(SignatureNameProvider.Instance, genericContext: null);
-            if (!SignaturesEqual(expectedSignature, signature))
+            if (!expectedSignature.SignatureEquals(signature))
                 continue;
             var result = new ResolvedRuntimeMethod(declaringType, methodHandle, name, signature, (method.Attributes & MethodAttributes.Static) != 0, methodTypeArguments);
             if (UseCache)
                 methodCache[token] = result;
             return result;
         }
-        throw new MissingMethodException(GetTypeName(declaringType), name);
+        throw new MissingMethodException(declaringType.FullName, name);
     }
     // A method of the expression assembly itself (a lambda body, a local function, a closure's or anonymous type's
     // member): a definition, or a reference through an instantiation of one of the assembly's generic types
@@ -334,6 +353,19 @@ internal class EvaluationMetadataResolver {
     }
     // The bytes behind a field with a data address: the initial elements of an array initializer, which the
     // expression assembly hands to RuntimeHelpers.InitializeArray
+    // The whole data of a constant array's field, sized by the field's type: a '__StaticArrayInitTypeSize=N' struct,
+    // or a primitive for the smallest arrays
+    public byte[] GetEvaluationFieldData(FieldDefinitionHandle field) {
+        var signature = evaluationReader.GetBlobReader(evaluationReader.GetFieldDefinition(field).Signature);
+        signature.ReadSignatureHeader();
+        var typeCode = signature.ReadSignatureTypeCode();
+        int size;
+        if (typeCode == SignatureTypeCode.TypeHandle)
+            size = evaluationReader.GetTypeDefinition((TypeDefinitionHandle)signature.ReadTypeHandle()).GetLayout().Size;
+        else
+            size = CilValueEncoding.GetSize((CorElementType)typeCode);
+        return GetEvaluationFieldData(field, size);
+    }
     public byte[] GetEvaluationFieldData(FieldDefinitionHandle field, int size) {
         var address = evaluationReader.GetFieldDefinition(field).GetRelativeVirtualAddress();
         if (address == 0)
@@ -414,7 +446,7 @@ internal class EvaluationMetadataResolver {
     }
 
     public ICorDebugType GetCorDebugType(ResolvedRuntimeType type) {
-        var elementType = IsValueType(type) ? CorElementType.VALUETYPE : CorElementType.CLASS;
+        var elementType = type.IsValueType ? CorElementType.VALUETYPE : CorElementType.CLASS;
         var typeArguments = type.TypeArguments.IsDefaultOrEmpty ? [] : type.TypeArguments.Select(GetCorDebugType).ToArray();
         return ((ICorDebugClass2)type.Class).GetParameterizedType(elementType, typeArguments);
     }
@@ -430,13 +462,10 @@ internal class EvaluationMetadataResolver {
         if (type.Primitive == null)
             throw new NotSupportedException("The CIL type cannot be materialized");
 
-        var typeName = GetPrimitiveTypeName(type.Primitive.Value);
+        var typeName = TypeNameSignatureProvider.Instance.GetPrimitiveType(type.Primitive.Value);
         var isClass = type.Primitive == PrimitiveTypeCode.String || type.Primitive == PrimitiveTypeCode.Object;
         var runtimeType = FindRuntimeType("System", typeName.Substring("System.".Length));
         return ((ICorDebugClass2)runtimeType.Class).GetParameterizedType(isClass ? CorElementType.CLASS : CorElementType.VALUETYPE, []);
-    }
-    public string GetRuntimeTypeName(ResolvedRuntimeType type) {
-        return GetTypeName(type);
     }
     public int GetRuntimeTypeGenericArity(ResolvedRuntimeType type) {
         return type.Module.MetadataReader.PeMetadataReader.GetTypeDefinition(type.Handle).GetGenericParameters().Count;
@@ -475,23 +504,7 @@ internal class EvaluationMetadataResolver {
                 continue;
             return new ResolvedRuntimeMethod(runtimeType, handle, "Invoke", method.DecodeSignature(SignatureNameProvider.Instance, genericContext: null), false);
         }
-        throw new MissingMethodException(GetTypeName(runtimeType), "Invoke");
-    }
-
-    public static bool IsValueType(ResolvedRuntimeType type) {
-        var reader = type.Module.MetadataReader.PeMetadataReader;
-        var definition = reader.GetTypeDefinition(type.Handle);
-        switch (definition.BaseType.Kind) {
-            // The core library defines System.ValueType / System.Enum itself, so its base types are definitions rather than references
-            case HandleKind.TypeDefinition:
-                var baseDefinition = reader.GetTypeDefinition((TypeDefinitionHandle)definition.BaseType);
-                return IsSystemValueType(reader, baseDefinition.Namespace, baseDefinition.Name);
-            case HandleKind.TypeReference:
-                var baseReference = reader.GetTypeReference((TypeReferenceHandle)definition.BaseType);
-                return IsSystemValueType(reader, baseReference.Namespace, baseReference.Name);
-            default:
-                return false;
-        }
+        throw new MissingMethodException(runtimeType.FullName, "Invoke");
     }
 
     private static ResolvedCilType ResolveContextParameter(int index, ImmutableArray<ResolvedCilType> arguments, string prefix) {
@@ -522,7 +535,7 @@ internal class EvaluationMetadataResolver {
             var method = evaluationReader.GetMethodDefinition(methodHandle);
             if (evaluationReader.GetString(method.Name) != name)
                 continue;
-            if (SignaturesEqual(expectedSignature, method.DecodeSignature(SignatureNameProvider.Instance, genericContext: null)))
+            if (expectedSignature.SignatureEquals(method.DecodeSignature(SignatureNameProvider.Instance, genericContext: null)))
                 return methodHandle;
         }
         throw new MissingMethodException(GetEvaluationTypeName(type), name);
@@ -543,7 +556,7 @@ internal class EvaluationMetadataResolver {
             case CorElementType.ARRAY:
                 return ResolvedCilType.FromArray(ResolveCorDebugType(type.GetFirstTypeParameter()), type.GetRank(), false);
         }
-        var primitive = GetPrimitiveTypeCode(elementType);
+        var primitive = elementType.ToPrimitiveTypeCode();
         if (primitive == null)
             throw new NotSupportedException($"Cannot resolve a CIL type from CorElementType '{elementType}'");
         return ResolvedCilType.FromPrimitive(primitive.Value);
@@ -583,14 +596,14 @@ internal class EvaluationMetadataResolver {
                 if (reader.GetString(reader.GetTypeDefinition(nestedHandle).Name) == name)
                     return new ResolvedRuntimeType(containing.Module, nestedHandle);
             }
-            throw new TypeLoadException($"Nested type '{name}' was not found in '{GetTypeName(containing)}'");
+            throw new TypeLoadException($"Nested type '{name}' was not found in '{containing.FullName}'");
         }
 
         var @namespace = evaluationReader.GetString(reference.Namespace);
         if (reference.ResolutionScope.Kind == HandleKind.AssemblyReference) {
             var assemblyReference = (AssemblyReferenceHandle)reference.ResolutionScope;
             foreach (var module in FindModules(assemblyReference)) {
-                if (TryFindType(module, @namespace, name, out var typeHandle))
+                if (module.MetadataReader.PeMetadataReader.TryFindTypeDefinition(@namespace, name, out var typeHandle))
                     return new ResolvedRuntimeType(module, typeHandle);
             }
             var assemblyName = evaluationReader.GetString(evaluationReader.GetAssemblyReference(assemblyReference).Name);
@@ -598,22 +611,10 @@ internal class EvaluationMetadataResolver {
         }
 
         foreach (var module in FindModules(assemblyName: null)) {
-            if (TryFindType(module, @namespace, name, out var typeHandle))
+            if (module.MetadataReader.PeMetadataReader.TryFindTypeDefinition(@namespace, name, out var typeHandle))
                 return new ResolvedRuntimeType(module, typeHandle);
         }
         throw new TypeLoadException($"Type '{@namespace}.{name}' is not loaded");
-    }
-    private static bool TryFindType(ModuleInfo module, string @namespace, string name, out TypeDefinitionHandle handle) {
-        var reader = module.MetadataReader.PeMetadataReader;
-        foreach (var typeHandle in reader.TypeDefinitions) {
-            var type = reader.GetTypeDefinition(typeHandle);
-            if (reader.GetString(type.Name) == name && reader.GetString(type.Namespace) == @namespace) {
-                handle = typeHandle;
-                return true;
-            }
-        }
-        handle = default;
-        return false;
     }
 
     // Resolves an assembly reference of the evaluation assembly to the loaded modules, preferring the module the
@@ -632,7 +633,7 @@ internal class EvaluationMetadataResolver {
             if (!reader.IsAssembly)
                 continue;
             var assembly = reader.GetAssemblyDefinition();
-            if (reader.GetString(assembly.Name) != name || !MatchesIdentity(reader, assembly, reference.Version, culture, publicKeyOrToken))
+            if (reader.GetString(assembly.Name) != name || !reader.MatchesAssemblyIdentity(assembly, reference.Version, culture, publicKeyOrToken))
                 continue;
             if (module == preferredModule)
                 matches.Insert(0, module);
@@ -655,33 +656,13 @@ internal class EvaluationMetadataResolver {
         }
         return matches;
     }
-    private static bool MatchesIdentity(MetadataReader reader, AssemblyDefinition assembly, Version? version, string culture, byte[]? publicKeyOrToken) {
-        if (version != null && assembly.Version != null && version != assembly.Version)
-            return false;
-        if (!string.Equals(culture, reader.GetString(assembly.Culture), StringComparison.OrdinalIgnoreCase))
-            return false;
-        return PublicKeysMatch(publicKeyOrToken, assembly.PublicKey.IsNil ? null : reader.GetBlobBytes(assembly.PublicKey));
-    }
-    private static bool PublicKeysMatch(byte[]? referencedToken, byte[]? definitionKey) {
-        if (referencedToken == null || referencedToken.Length == 0 || definitionKey == null || definitionKey.Length == 0)
-            return true;
-        if (referencedToken.Length == 8 && definitionKey.Length > 8) {
-            // The assembly reference carries the public key token: the last 8 bytes of the SHA1 of the full public key, reversed
-#pragma warning disable CA5350 // The token format is defined by the runtime
-            var hash = SHA1.HashData(definitionKey);
-#pragma warning restore CA5350
-            Array.Reverse(hash);
-            return referencedToken.AsSpan().SequenceEqual(hash.AsSpan(0, 8));
-        }
-        return referencedToken.AsSpan().SequenceEqual(definitionKey);
-    }
     private ResolvedRuntimeType FindRuntimeType(string @namespace, string name) {
         var cacheKey = $"{@namespace}.{name}";
         if (runtimeTypeCache.TryGetValue(cacheKey, out var cached))
             return cached;
 
         foreach (var module in FindModules(assemblyName: null)) {
-            if (!TryFindType(module, @namespace, name, out var handle))
+            if (!module.MetadataReader.PeMetadataReader.TryFindTypeDefinition(@namespace, name, out var handle))
                 continue;
             var result = new ResolvedRuntimeType(module, handle);
             runtimeTypeCache[cacheKey] = result;
@@ -690,26 +671,26 @@ internal class EvaluationMetadataResolver {
         throw new TypeLoadException($"Type '{@namespace}.{name}' is not loaded");
     }
 
-    private static bool IsSystemValueType(MetadataReader reader, StringHandle @namespace, StringHandle name) {
-        return reader.GetString(@namespace) == "System" && reader.GetString(name) is "ValueType" or "Enum";
+    // The element type of an enum's underlying integer, from its 'value__' field; null for any other type
+    public static CorElementType? GetEnumUnderlyingElementType(ResolvedRuntimeType type) {
+        var reader = type.Module.MetadataReader.PeMetadataReader;
+        foreach (var handle in reader.GetTypeDefinition(type.Handle).GetFields()) {
+            var field = reader.GetFieldDefinition(handle);
+            if (reader.GetString(field.Name) != "value__")
+                continue;
+            var signature = reader.GetBlobReader(field.Signature);
+            signature.ReadSignatureHeader();
+            return (CorElementType)signature.ReadSignatureTypeCode();
+        }
+        return null;
     }
     // The type argument of a 'Nullable<T>' type, the one 'unbox.any' produces a nullable of
     public bool TryGetNullableUnderlyingType(ResolvedCilType type, out ResolvedCilType underlyingType) {
         underlyingType = null!;
-        if (type.RuntimeType == null || type.RuntimeType.TypeArguments.IsDefault || type.RuntimeType.TypeArguments.Length != 1 || GetTypeName(type.RuntimeType) != "System.Nullable`1")
+        if (type.RuntimeType == null || type.RuntimeType.TypeArguments.IsDefault || type.RuntimeType.TypeArguments.Length != 1 || type.RuntimeType.FullName != "System.Nullable`1")
             return false;
         underlyingType = type.RuntimeType.TypeArguments[0];
         return true;
-    }
-    private static string GetTypeName(ResolvedRuntimeType type) {
-        var reader = type.Module.MetadataReader.PeMetadataReader;
-        var definition = reader.GetTypeDefinition(type.Handle);
-        var name = reader.GetString(definition.Name);
-        var declaringType = definition.GetDeclaringType();
-        if (!declaringType.IsNil)
-            return $"{GetTypeName(new ResolvedRuntimeType(type.Module, declaringType))}+{name}";
-        var @namespace = reader.GetString(definition.Namespace);
-        return string.IsNullOrEmpty(@namespace) ? name : $"{@namespace}.{name}";
     }
     private string GetReflectionTypeName(ResolvedCilType type) {
         if (type.ElementType != null) {
@@ -717,10 +698,10 @@ internal class EvaluationMetadataResolver {
             return GetReflectionTypeName(type.ElementType) + suffix;
         }
         if (type.Primitive != null)
-            return GetPrimitiveTypeName(type.Primitive.Value);
+            return TypeNameSignatureProvider.Instance.GetPrimitiveType(type.Primitive.Value);
 
         var runtimeType = type.RuntimeType ?? throw new TypeLoadException("The CIL type is unresolved");
-        var name = GetTypeName(runtimeType);
+        var name = runtimeType.FullName;
         if (!runtimeType.TypeArguments.IsDefaultOrEmpty)
             name += $"[[{string.Join("],[", runtimeType.TypeArguments.Select(GetAssemblyQualifiedTypeName))}]]";
         return name;
@@ -734,53 +715,6 @@ internal class EvaluationMetadataResolver {
         var runtimeType = type.RuntimeType ?? throw new TypeLoadException("The CIL type is unresolved");
         var reader = runtimeType.Module.MetadataReader.PeMetadataReader;
         return reader.IsAssembly ? reader.GetString(reader.GetAssemblyDefinition().Name) : Path.GetFileNameWithoutExtension(runtimeType.Module.Name);
-    }
-    private static string GetPrimitiveTypeName(PrimitiveTypeCode primitive) {
-        return primitive switch {
-            PrimitiveTypeCode.Boolean => "System.Boolean",
-            PrimitiveTypeCode.Byte => "System.Byte",
-            PrimitiveTypeCode.SByte => "System.SByte",
-            PrimitiveTypeCode.Char => "System.Char",
-            PrimitiveTypeCode.Int16 => "System.Int16",
-            PrimitiveTypeCode.UInt16 => "System.UInt16",
-            PrimitiveTypeCode.Int32 => "System.Int32",
-            PrimitiveTypeCode.UInt32 => "System.UInt32",
-            PrimitiveTypeCode.Int64 => "System.Int64",
-            PrimitiveTypeCode.UInt64 => "System.UInt64",
-            PrimitiveTypeCode.Single => "System.Single",
-            PrimitiveTypeCode.Double => "System.Double",
-            PrimitiveTypeCode.String => "System.String",
-            PrimitiveTypeCode.Object => "System.Object",
-            PrimitiveTypeCode.IntPtr => "System.IntPtr",
-            PrimitiveTypeCode.UIntPtr => "System.UIntPtr",
-            _ => throw new NotSupportedException($"Primitive type '{primitive}' is not supported")
-        };
-    }
-    private static PrimitiveTypeCode? GetPrimitiveTypeCode(CorElementType elementType) {
-        return elementType switch {
-            CorElementType.BOOLEAN => PrimitiveTypeCode.Boolean,
-            CorElementType.CHAR => PrimitiveTypeCode.Char,
-            CorElementType.I1 => PrimitiveTypeCode.SByte,
-            CorElementType.U1 => PrimitiveTypeCode.Byte,
-            CorElementType.I2 => PrimitiveTypeCode.Int16,
-            CorElementType.U2 => PrimitiveTypeCode.UInt16,
-            CorElementType.I4 => PrimitiveTypeCode.Int32,
-            CorElementType.U4 => PrimitiveTypeCode.UInt32,
-            CorElementType.I8 => PrimitiveTypeCode.Int64,
-            CorElementType.U8 => PrimitiveTypeCode.UInt64,
-            CorElementType.R4 => PrimitiveTypeCode.Single,
-            CorElementType.R8 => PrimitiveTypeCode.Double,
-            CorElementType.I => PrimitiveTypeCode.IntPtr,
-            CorElementType.U => PrimitiveTypeCode.UIntPtr,
-            CorElementType.STRING => PrimitiveTypeCode.String,
-            CorElementType.OBJECT => PrimitiveTypeCode.Object,
-            _ => null
-        };
-    }
-    private static bool SignaturesEqual(MethodSignature<string> left, MethodSignature<string> right) {
-        return left.GenericParameterCount == right.GenericParameterCount
-            && left.ParameterTypes.SequenceEqual(right.ParameterTypes)
-            && left.ReturnType == right.ReturnType;
     }
 
     // Formats signature types as full metadata names, for comparing a referenced signature with the definitions
@@ -798,29 +732,10 @@ internal class EvaluationMetadataResolver {
         public string GetPointerType(string elementType) => elementType + "*";
         public string GetSZArrayType(string elementType) => elementType + "[]";
         public string GetPrimitiveType(PrimitiveTypeCode typeCode) => typeCode.ToString();
-        public string GetTypeFromDefinition(MetadataReader reader, TypeDefinitionHandle handle, byte rawTypeKind) => GetFullName(reader, handle);
-        public string GetTypeFromReference(MetadataReader reader, TypeReferenceHandle handle, byte rawTypeKind) => GetFullName(reader, handle);
+        public string GetTypeFromDefinition(MetadataReader reader, TypeDefinitionHandle handle, byte rawTypeKind) => reader.GetFullName(handle);
+        public string GetTypeFromReference(MetadataReader reader, TypeReferenceHandle handle, byte rawTypeKind) => reader.GetFullName(handle);
         public string GetTypeFromSpecification(MetadataReader reader, object? genericContext, TypeSpecificationHandle handle, byte rawTypeKind) {
             return reader.GetTypeSpecification(handle).DecodeSignature(this, genericContext);
-        }
-
-        // A nested type is qualified by its enclosing types, the form a reference to it from another module takes
-        private static string GetFullName(MetadataReader reader, TypeDefinitionHandle handle) {
-            var type = reader.GetTypeDefinition(handle);
-            var name = reader.GetString(type.Name);
-            var declaringType = type.GetDeclaringType();
-            if (!declaringType.IsNil)
-                return $"{GetFullName(reader, declaringType)}+{name}";
-            var @namespace = reader.GetString(type.Namespace);
-            return string.IsNullOrEmpty(@namespace) ? name : $"{@namespace}.{name}";
-        }
-        private static string GetFullName(MetadataReader reader, TypeReferenceHandle handle) {
-            var type = reader.GetTypeReference(handle);
-            var name = reader.GetString(type.Name);
-            if (type.ResolutionScope.Kind == HandleKind.TypeReference)
-                return $"{GetFullName(reader, (TypeReferenceHandle)type.ResolutionScope)}+{name}";
-            var @namespace = reader.GetString(type.Namespace);
-            return string.IsNullOrEmpty(@namespace) ? name : $"{@namespace}.{name}";
         }
     }
 

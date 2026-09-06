@@ -45,7 +45,10 @@ internal class ExpressionEvaluator {
             DebuggerLoggingService.LogError($"Evaluation of '{expression}' failed", ex);
             // A Roslyn wrapper of 'Reflection/' that found a member missing fails in its type initializer, the cause is the message worth showing
             var cause = ex is TypeInitializationException { InnerException: { } initializationFailure } ? initializationFailure : ex;
-            return EvaluationResult.FromError($"error: {cause.Message}", ex is EvaluationTimeoutException);
+            // Roslyn's expression compiler generates no code for a variable a pattern declares ('x is int n') and fails
+            // looking the local up; the failure is reported as what it is rather than as a missing dictionary key
+            var message = cause is KeyNotFoundException ? $"Variables declared by a pattern ('x is int n') are not supported in the debugger ({cause.Message})" : cause.Message;
+            return EvaluationResult.FromError($"error: {message}", ex is EvaluationTimeoutException);
         }
     }
 

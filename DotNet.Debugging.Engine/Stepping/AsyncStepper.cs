@@ -87,7 +87,7 @@ internal class AsyncStepper {
         var function = frame.GetFunction();
         var corModule = function.GetModule();
         var methodToken = function.GetToken();
-        var step = new AsyncStep(thread.GetId(), kind, asyncInfo.Awaits);
+        var step = new AsyncStep(thread.GetId(), kind, asyncInfo.Awaits, GetFrameDepth(thread));
         foreach (var awaitInfo in asyncInfo.Awaits) {
             var yieldBreakpoint = function.GetILCode().CreateBreakpoint((int)awaitInfo.YieldOffset);
             yieldBreakpoint.Activate(true);
@@ -104,14 +104,15 @@ internal class AsyncStepper {
         if (currentStep == null)
             return AsyncBreakpointResult.NotHandled;
 
-        // Any other breakpoint cancels the async step
-        if (thread.GetActiveFrame() is not ICorDebugILFrame frame || currentStep.FindBreakpoint(breakpoint, thread, frame) is not AsyncBreakpoint hitBreakpoint) {
-            ClearActiveStep();
+        // Any other breakpoint is the handler's: one that stops disables the step with everything else, one that does
+        // not (an unmet hit count, a false condition, a logpoint) leaves the carry armed - the step goes on past it
+        if (thread.GetActiveFrame() is not ICorDebugILFrame frame || currentStep.FindBreakpoint(breakpoint, thread, frame) is not AsyncBreakpoint hitBreakpoint)
             return AsyncBreakpointResult.NotHandled;
-        }
 
         if (currentStep.Status == AsyncStepStatus.YieldBreakpoint) {
-            if (currentStep.ThreadId != thread.GetId())
+            // The yield of another activation of the same method - a recursive call running synchronously up to its
+            // first await, deeper on the same thread - is not the stepping one's
+            if (currentStep.ThreadId != thread.GetId() || currentStep.FrameDepth != GetFrameDepth(thread))
                 return AsyncBreakpointResult.NotHandled;
             await HandleYieldBreakpointAsync(frame, hitBreakpoint);
             return AsyncBreakpointResult.Continue;
@@ -133,7 +134,7 @@ internal class AsyncStepper {
     // Stepping out of an async method means waiting for its task: the builder is asked to notify the debugger when the
     // awaiting code resumes, which calls Task.NotifyDebuggerOfWaitCompletion where a breakpoint catches it
     private async Task<bool> TrySetupStepOutAsync(ICorDebugThread thread, ICorDebugILFrame frame) {
-        var builder = GetAsyncBuilder(frame);
+        var builder = frame.GetAsyncMethodBuilder();
         if (builder == null)
             return false;
         // An async void method has no task to wait for, a plain step out works there
@@ -154,7 +155,7 @@ internal class AsyncStepper {
 
             // The ValueTask builders have no notification method of their own; their 'm_task' (the state
             // machine box, present once the method has yielded) takes the call on its Task base instead
-            var task = GetBuilderTask(objectValue, corClass, metadataImport);
+            var task = GetBuilderTask(objectValue);
             return task != null && await SetNotificationOnTaskAsync(task, thread);
         }
         catch {
@@ -180,16 +181,13 @@ internal class AsyncStepper {
     }
     private async Task<bool> CallNotificationAsync(ICorDebugValue receiver, ICorDebugClass corClass, MethodDefToken methodDef, ICorDebugType[] typeArguments, ICorDebugThread thread) {
         var eval = thread.CreateEval();
-        var enabled = CreateBooleanValue(eval, true);
+        var enabled = eval.CreateBooleanValue(true);
         var function = corClass.GetModule().GetFunctionFromToken(methodDef);
         var result = await debugger.FuncEval.CallFunctionAsync(eval, function, typeArguments, [receiver, enabled]);
         return result == null;
     }
-    private static ICorDebugValue? GetBuilderTask(ICorDebugObjectValue objectValue, ICorDebugClass corClass, IMetaDataImport metadataImport) {
-        var taskField = metadataImport.EnumFieldsWithName(corClass.GetToken(), "m_task").SingleOrDefault();
-        if (taskField.IsNil)
-            return null;
-        var task = objectValue.GetFieldValue(corClass, taskField);
+    private static ICorDebugValue? GetBuilderTask(ICorDebugObjectValue builder) {
+        var task = builder.FindFieldValue("m_task");
         if (task is ICorDebugReferenceValue reference && reference.IsNull())
             return null;
         return task;
@@ -267,6 +265,9 @@ internal class AsyncStepper {
             stepController.CreateStepper(thread, kind);
         DebuggerLoggingService.LogMessage($"Async step: resumed, {(stepController.IsStepping ? "plain stepper created" : "carried by breakpoints")}");
     }
+    private static int GetFrameDepth(ICorDebugThread thread) {
+        return thread.GetManagedFrames().Count();
+    }
     private static string DescribeId(ICorDebugHandleValue? id) {
         if (id == null)
             return "unavailable";
@@ -284,7 +285,7 @@ internal class AsyncStepper {
     // past the shared resume breakpoint then loses the step. The property is only asked at a first yield, where the
     // task does not exist yet and the property creates it (the box the method keeps from then on)
     private async Task<ICorDebugHandleValue?> GetAsyncIdAsync(ICorDebugILFrame frame) {
-        var builder = GetAsyncBuilder(frame);
+        var builder = frame.GetAsyncMethodBuilder();
         if (builder == null)
             return null;
         var task = ReadBuilderTask(builder);
@@ -298,48 +299,16 @@ internal class AsyncStepper {
     private static ICorDebugHandleValue? ReadBuilderTask(ICorDebugValue builder) {
         try {
             var objectValue = builder.UnwrapDebugValueToObject();
-            var corClass = objectValue.GetClass();
-            var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
-            var innerBuilder = metadataImport.EnumFieldsWithName(corClass.GetToken(), "_builder").SingleOrDefault();
-            if (!innerBuilder.IsNil)
-                return ReadBuilderTask(objectValue.GetFieldValue(corClass, innerBuilder).UnwrapDebugValue());
-            if (GetBuilderTask(objectValue, corClass, metadataImport) is not ICorDebugReferenceValue reference || reference.Dereference() is not ICorDebugHeapValue2 heapValue)
+            var innerBuilder = objectValue.FindFieldValue("_builder");
+            if (innerBuilder != null)
+                return ReadBuilderTask(innerBuilder.UnwrapDebugValue());
+            if (GetBuilderTask(objectValue) is not ICorDebugReferenceValue reference || reference.Dereference() is not ICorDebugHeapValue2 heapValue)
                 return null;
             return heapValue.CreateHandle(CorDebugHandleType.HANDLE_STRONG);
         }
         catch {
             return null;
         }
-    }
-    // The '<>t__builder' field of the state machine 'this'
-    private static ICorDebugValue? GetAsyncBuilder(ICorDebugILFrame frame) {
-        try {
-            var function = frame.GetFunction();
-            var metadataImport = function.GetModule().GetMetaDataInterface<IMetaDataImport>();
-            if (metadataImport.GetMethodProps(function.GetToken()).pdwAttr.IsMdStatic())
-                return null;
-
-            var arguments = frame.GetArguments();
-            if (arguments.Length == 0 || arguments[0] is not ICorDebugReferenceValue thisReference || thisReference.IsNull())
-                return null;
-            if (thisReference.Dereference() is not ICorDebugObjectValue thisObject)
-                return null;
-
-            var thisClass = thisObject.GetClass();
-            var fieldDef = metadataImport.EnumFieldsWithName(thisClass.GetToken(), "<>t__builder").SingleOrDefault();
-            if (fieldDef.IsNil)
-                return null;
-            return thisObject.GetFieldValue(thisClass, fieldDef).UnwrapDebugValue();
-        }
-        catch {
-            return null;
-        }
-    }
-    private static ICorDebugValue CreateBooleanValue(ICorDebugEval eval, bool value) {
-        var corValue = eval.CreateValue(CorElementType.BOOLEAN, null);
-        if (value && corValue is ICorDebugGenericValue genericValue)
-            genericValue.SetValueFromBytes([1]);
-        return corValue;
     }
 
     private enum AsyncStepStatus {
@@ -378,16 +347,19 @@ internal class AsyncStepper {
         public StepKind Kind { get; }
         // The awaits of the method; the yield breakpoint that is hit decides which one carries the step
         public IReadOnlyList<AwaitInfo> Awaits { get; }
+        // The depth of the stepping frame, which tells its yield from a deeper activation's
+        public int FrameDepth { get; }
         // The yield breakpoints of every await, replaced by the single resume breakpoint once the method yielded
         public List<AsyncBreakpoint> Breakpoints { get; }
         public AsyncStepStatus Status { get; set; }
         // A strong handle to the builder's ObjectIdForDebugger
         public ICorDebugHandleValue? AsyncIdHandle { get; set; }
 
-        public AsyncStep(int threadId, StepKind kind, IReadOnlyList<AwaitInfo> awaits) {
+        public AsyncStep(int threadId, StepKind kind, IReadOnlyList<AwaitInfo> awaits, int frameDepth) {
             ThreadId = threadId;
             Kind = kind;
             Awaits = awaits;
+            FrameDepth = frameDepth;
             Breakpoints = new List<AsyncBreakpoint>();
             Status = AsyncStepStatus.YieldBreakpoint;
         }

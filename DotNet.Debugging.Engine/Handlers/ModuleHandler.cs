@@ -1,6 +1,7 @@
 using DotNet.Debugging.CorApi;
 using DotNet.Debugging.CorApi.Extensions;
 using DotNet.Debugging.Engine.Evaluation;
+using DotNet.Debugging.Engine.Extensions;
 using DotNet.Debugging.Engine.Logging;
 using DotNet.Debugging.Engine.Metadata;
 using DotNet.Debugging.Engine.Models;
@@ -45,7 +46,7 @@ public partial class ManagedDebugger {
             // user code: the runtime then raises no user-first-chance dispatch there, the way Microsoft's
             // debugger has it
             foreach (var methodToken in metadataReader.GetMethodsWithoutSequencePoints())
-                TrySetMethodNotUserCode(corModule, methodToken);
+                corModule.TrySetMethodNotUserCode(methodToken);
         }
         return new ModuleInfo(++nextModuleId, corModule, modulePath, metadataReader, isUserCode);
     }
@@ -98,20 +99,10 @@ public partial class ManagedDebugger {
             DebuggerLoggingService.LogMessage($"  The PDB at {request.SymbolFilePath} does not match {Path.GetFileName(modulePath)}");
     }
 
-    private static void TrySetMethodNotUserCode(ICorDebugModule corModule, int methodToken) {
-        try {
-            if (corModule.GetFunctionFromToken(new MethodDefToken((uint)methodToken)) is ICorDebugFunction2 function)
-                function.TrySetJMCStatus(false);
-        }
-        catch {
-            // A method without a body cannot be resolved - nothing to mark
-        }
-    }
-
     private ModuleMetadataReader? LoadModuleMetadata(ICorDebugModule corModule, string modulePath) {
         try {
             if (corModule.IsDynamic())
-                return LoadDynamicModuleMetadata(corModule);
+                return corModule.TryLoadDynamicMetadata();
             if (!corModule.IsInMemory())
                 return ModuleMetadataReader.TryLoad(modulePath);
             ArgumentNullException.ThrowIfNull(process);
@@ -123,18 +114,6 @@ public partial class ManagedDebugger {
             return null;
         }
     }
-    // A dynamic module has no image to read, its metadata is taken from the runtime's own importer. The importer
-    // is rebuilt whenever a type gets defined in the module, so the metadata is copied rather than referenced
-    private static ModuleMetadataReader? LoadDynamicModuleMetadata(ICorDebugModule corModule) {
-        // A module the debuggee has only just created has nothing for the runtime to hand out yet
-        if (corModule.TryGetMetaDataInterface<IMetaDataTables2>(out var tables) < 0 || tables == null)
-            return null;
-        var (pointer, size) = tables.GetMetaDataStorage();
-        var metadataReader = ModuleMetadataReader.TryLoad(pointer, size);
-        // The storage belongs to the importer, which must not be released before the copy is taken
-        GC.KeepAlive(tables);
-        return metadataReader;
-    }
     // A 'stopAtEntry' launch places a one-shot breakpoint on the entry point of the first assembly that has one
     private void TrySetEntryPointBreakpoint(ModuleInfo module) {
         if (!stopAtEntryPending)
@@ -144,13 +123,16 @@ public partial class ManagedDebugger {
             return;
 
         try {
-            var ilOffset = module.MetadataReader.ResolveMethodEntry(entryPointToken.Value)?.ILOffset ?? 0;
-            var function = module.Module.GetFunctionFromToken(entryPointToken.Value);
+            // An async Main is entered through the compiler's bridge, the stop goes to the first statement behind it
+            var resolved = module.MetadataReader.ResolveEntryPoint(entryPointToken.Value);
+            var methodToken = resolved?.MethodToken ?? entryPointToken.Value;
+            var ilOffset = resolved?.ILOffset ?? 0;
+            var function = module.Module.GetFunctionFromToken(methodToken);
             var breakpoint = function.GetILCode().CreateBreakpoint(ilOffset);
             breakpoint.Activate(true);
             entryPointBreakpoint = breakpoint;
             stopAtEntryPending = false;
-            DebuggerLoggingService.LogMessage($"Entry point breakpoint set in {module.Name} at method 0x{entryPointToken.Value:X}, IL offset {ilOffset}");
+            DebuggerLoggingService.LogMessage($"Entry point breakpoint set in {module.Name} at method 0x{methodToken:X}, IL offset {ilOffset}");
         }
         catch (Exception ex) {
             DebuggerLoggingService.LogError("Failed to set the entry point breakpoint", ex);

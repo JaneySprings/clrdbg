@@ -15,6 +15,13 @@ public class BreakpointCornerTests : BaseDebugTestFixture {
         foreach (var value in doubled) {
             total += value; // marker:loop
         }
+        Func<int, int> increment = x => {
+            var a = x;
+
+            var b = a + 1; // marker:afterBlank
+            return b;
+        };
+        total += increment(total);
         Console.WriteLine(total); // marker:end
         """;
     }
@@ -47,6 +54,23 @@ public class BreakpointCornerTests : BaseDebugTestFixture {
         }
         var endStopped = WaitForStopped(StoppedEvent.ReasonValue.Breakpoint);
         Assert.That(GetTopStackFrame(endStopped.ThreadId!.Value).Line, Is.EqualTo(GetMarkerLine("marker:end")));
+    }
+
+    // The delegate assignment's sequence point spans the whole lambda text and is the only one covering a blank line
+    // inside the body: the breakpoint binds to the lambda's next statement, not up to the assignment's start
+    [Test]
+    public void BreakpointOnBlankLineInsideLambdaBindsToTheNextStatementTest() {
+        Launch();
+        SetBreakpoints(GetMarkerLine("marker:afterBlank") - 1);
+        ConfigurationDone();
+
+        var bound = WaitForEvent<BreakpointEvent>(it => it.Breakpoint.Verified);
+        Assert.That(bound.Breakpoint.Line, Is.EqualTo(GetMarkerLine("marker:afterBlank")));
+
+        var stopped = WaitForStopped(StoppedEvent.ReasonValue.Breakpoint);
+        var frame = GetTopStackFrame(stopped.ThreadId!.Value);
+        Assert.That(frame.Line, Is.EqualTo(GetMarkerLine("marker:afterBlank")));
+        Assert.That(Evaluate("a", stopped.ThreadId!.Value).Result, Is.EqualTo("12"), "The stop is inside the lambda");
     }
 
     [Test]

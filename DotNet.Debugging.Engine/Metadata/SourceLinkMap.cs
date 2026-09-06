@@ -1,4 +1,5 @@
 using System.Text.Json;
+using DotNet.Debugging.Engine.Extensions;
 
 namespace DotNet.Debugging.Engine.Metadata;
 
@@ -30,7 +31,7 @@ internal class SourceLinkMap {
     }
 
     public string? GetUrl(string documentPath) {
-        var normalizedPath = NormalizePath(documentPath);
+        var normalizedPath = documentPath.NormalizePathSeparators();
         SourceLinkEntry? bestEntry = null;
         foreach (var entry in entries) {
             if (!entry.Matches(normalizedPath))
@@ -40,10 +41,6 @@ internal class SourceLinkMap {
                 bestEntry = entry;
         }
         return bestEntry?.GetUrl(normalizedPath);
-    }
-
-    private static string NormalizePath(string path) {
-        return path.Replace('\\', '/');
     }
 
     private class SourceLinkEntry {
@@ -56,7 +53,7 @@ internal class SourceLinkMap {
         public SourceLinkEntry(string pathPattern, string urlPattern) {
             var pathWildcard = pathPattern.IndexOf('*');
             IsWildcard = pathWildcard >= 0;
-            PathPrefix = NormalizePath(IsWildcard ? pathPattern.Substring(0, pathWildcard) : pathPattern);
+            PathPrefix = (IsWildcard ? pathPattern.Substring(0, pathWildcard) : pathPattern).NormalizePathSeparators();
 
             var urlWildcard = urlPattern.IndexOf('*');
             urlPrefix = urlWildcard >= 0 ? urlPattern.Substring(0, urlWildcard) : urlPattern;

@@ -1,3 +1,5 @@
+using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol;
+using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
 using NUnit.Framework;
 
 namespace DotNet.Debugging.Tests;
@@ -18,7 +20,12 @@ public class ValueFormattingTests : BaseDebugTestFixture {
         var anonymous = new { Id = 7, Name = "seven" };
         var wrapped = new Wrapped(3);
         var holder = new Holder();
-        Console.WriteLine($"{color}{access}{unnamed}{maybe}{nothing}{price}{letter}{boxed}{anonymous}{wrapped}{holder}"); // marker:stop
+        Guid? identifier = Guid.Empty;
+        Point? point = new Point(1, 2);
+        int[][] jagged = new int[3][];
+        var numbers = new NumberList { 1, 2, 3 };
+        var tagged = new Tagged { Value = 5 };
+        Console.WriteLine($"{color}{access}{unnamed}{maybe}{nothing}{price}{letter}{boxed}{anonymous}{wrapped}{holder}{identifier}{point}{jagged.Length}{numbers.Count}{tagged}"); // marker:stop
 
         public enum Color { Red, Green, Blue }
         [Flags]
@@ -37,7 +44,23 @@ public class ValueFormattingTests : BaseDebugTestFixture {
 
         public class Holder {
             public static int Counter = 42;
+            public const int Limit = 10;
         }
+        public struct Point {
+            public int X;
+            public int Y;
+
+            public Point(int x, int y) {
+                X = x;
+                Y = y;
+            }
+        }
+        public class NumberList : List<int> { }
+        [System.Diagnostics.DebuggerDisplay("Tagged {Value}")]
+        public class TaggedBase {
+            public int Value;
+        }
+        public class Tagged : TaggedBase { }
         """;
     }
 
@@ -98,5 +121,54 @@ public class ValueFormattingTests : BaseDebugTestFixture {
         var staticGroup = GetVariables(holder.VariablesReference).First(it => it.Name == "Static members");
         var counter = GetVariables(staticGroup.VariablesReference).First(it => it.Name == "Counter [int]");
         Assert.That(counter.Value, Is.EqualTo("0"));
+    }
+
+    // A constant has no storage, the metadata literal is shown; writing it is refused rather than misreported as done
+    [Test]
+    public void ConstantFieldCannotBeAssignedTest() {
+        var threadId = LaunchToMarker();
+        var holder = GetLocalVariables(threadId).First(it => it.Name == "holder [Holder]");
+        var staticGroup = GetVariables(holder.VariablesReference).First(it => it.Name == "Static members");
+        Assert.That(GetVariables(staticGroup.VariablesReference).First(it => it.Name == "Limit [int]").Value, Is.EqualTo("10"));
+
+        var error = Assert.Throws<ProtocolException>(() => Host.SendRequestSync(new SetVariableRequest() {
+            VariablesReference = staticGroup.VariablesReference,
+            Name = "Limit [int]",
+            Value = "11",
+        }));
+        Assert.That(error!.Message, Does.Contain("constant"));
+    }
+
+    // A nullable's display comes from its underlying value: the ToString of a Guid, the fields of a struct
+    [Test]
+    public void NullableStructDisplayTest() {
+        var threadId = LaunchToMarker();
+        var locals = GetLocalVariables(threadId);
+
+        Assert.That(locals.First(it => it.Name == "identifier [Guid?]").Value, Is.EqualTo("{00000000-0000-0000-0000-000000000000}"), "The underlying value's ToString is shown, not the template");
+        var point = locals.First(it => it.Name == "point [Point?]");
+        var members = GetVariables(point.VariablesReference).Select(it => it.Name).ToList();
+        Assert.That(members, Does.Contain("X [int]").And.Contain("Y [int]"), "A nullable struct expands to the struct's own members");
+        Assert.That(members, Does.Not.Contain("HasValue [bool]"));
+    }
+
+    [Test]
+    public void JaggedArrayFormatTest() {
+        var threadId = LaunchToMarker();
+        var jagged = GetLocalVariables(threadId).First(it => it.Name == "jagged [int[][]]");
+        Assert.That(jagged.Value, Is.EqualTo("{int[3][]}"), "The length goes into the array's own brackets");
+    }
+
+    // DebuggerDisplay and DebuggerTypeProxy are inherited: a List<int> subclass shows List<int>'s count and items
+    [Test]
+    public void InheritedDisplayAttributesTest() {
+        var threadId = LaunchToMarker();
+        var locals = GetLocalVariables(threadId);
+
+        Assert.That(locals.First(it => it.Name == "tagged [Tagged]").Value, Is.EqualTo("Tagged 5"), "The base class's DebuggerDisplay applies");
+        var numbers = locals.First(it => it.Name == "numbers [NumberList]");
+        Assert.That(numbers.Value, Is.EqualTo("Count = 3"));
+        var members = GetVariables(numbers.VariablesReference).Select(it => it.Name).ToList();
+        Assert.That(members, Does.Contain("[0] [int]"), "The base class's proxy lists the items");
     }
 }

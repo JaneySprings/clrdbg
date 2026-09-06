@@ -122,7 +122,7 @@ public partial class ManagedDebugger {
     private string? GetExceptionModuleName(ICorDebugThread thread) {
         try {
             string? fallback = null;
-            foreach (var frame in EnumerateFrames(thread)) {
+            foreach (var frame in thread.GetManagedFrames()) {
                 if (frame is not ICorDebugILFrame ilFrame)
                     continue;
                 var function = ilFrame.GetFunction();
@@ -178,8 +178,8 @@ public partial class ManagedDebugger {
         }
         var reader = module.MetadataReader.PeMetadataReader;
         var method = reader.GetMethodDefinition(MetadataTokens.MethodDefinitionHandle(methodDef));
-        var typeName = TypeNameSignatureProvider.GetTypeName(reader, method.GetDeclaringType());
-        var parameters = GetParameterList(reader, methodDef, StackTraceSignatureProvider.Instance);
+        var typeName = reader.GetTypeName(method.GetDeclaringType());
+        var parameters = reader.GetParameterList(methodDef, StackTraceSignatureProvider.Instance);
         var line = $"   at {typeName}.{reader.GetString(method.Name)}({parameters})";
         if (location != null)
             line += $" in {location.FilePath}:line {location.Line}";
@@ -192,16 +192,9 @@ public partial class ManagedDebugger {
             if (module == null || !module.HasSymbols)
                 return null;
             var nativeCode = frame.pModule!.GetFunctionFromToken(frame.methodDef).GetNativeCode();
-            var nativeOffset = frame.ip.Value - nativeCode.GetAddress().Value;
-            foreach (var entry in nativeCode.GetILToNativeMapping()) {
-                if (nativeOffset < entry.nativeStartOffset || nativeOffset >= entry.nativeEndOffset)
-                    continue;
-                // The special offsets of a prolog or epilog (-2, -3) have no source mapped to them
-                if ((int)entry.ilOffset < 0)
-                    return null;
-                return module.MetadataReader.GetSourceLocation(frame.methodDef, (int)entry.ilOffset);
-            }
-            return null;
+            if (!nativeCode.TryGetILOffset(frame.ip.Value - nativeCode.GetAddress().Value, out var ilOffset))
+                return null;
+            return module.MetadataReader.GetSourceLocation(frame.methodDef, ilOffset);
         }
         catch {
             // Not jitted in this code version, or no native view - the frame is listed without a source

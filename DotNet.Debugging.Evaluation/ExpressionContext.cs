@@ -98,8 +98,30 @@ public class ExpressionContext {
             var identities = context.GetMissingAssemblyIdentities(error, EvaluationContextBase.SystemLinqIdentity);
             if (!identities.IsDefaultOrEmpty)
                 return identities.Select(it => it.Name).ToList();
+            var guess = GuessMissingAssembly(error);
+            if (guess != null)
+                return [guess];
         }
         return Array.Empty<string>();
+    }
+    // Roslyn's retry knows an unknown extension method may be System.Linq's but not an unknown type or namespace: the
+    // static classes of an assembly the debuggee has not loaded ('Enumerable.Range', 'System.Text.Json.JsonSerializer')
+    // are guessed the way the framework names its assemblies after their namespaces; a wrong guess fails to load and
+    // leaves the compiler's error standing
+    private static string? GuessMissingAssembly(Diagnostic error) {
+        var arguments = error.Arguments;
+        switch ((ErrorCode)error.Code) {
+            case ErrorCode.ERR_NameNotInContext:
+                if (arguments.Count > 0 && arguments[0] is string name && (name == "Enumerable" || name == "Queryable"))
+                    return EvaluationContextBase.SystemLinqIdentity.Name;
+                return null;
+            case ErrorCode.ERR_DottedTypeNameNotFoundInNS:
+                if (arguments.Count == 2 && arguments[0] is string member && arguments[1] != null)
+                    return $"{arguments[1]}.{member}";
+                return null;
+            default:
+                return null;
+        }
     }
     // A compilation referencing every block ('AllAssemblies'), the way the expression compiler builds one when it does
     // not know which module the expression will bind against, plus the intrinsics it emits calls to

@@ -4,6 +4,8 @@ namespace DotNet.Debugging.Engine.Breakpoints;
 
 // A parsed function breakpoint name: 'Method', 'Type.Method', 'Namespace.Type<T>.Method<U>(int, string)'
 internal class FunctionBreakpointPattern {
+    private static readonly string[] ParameterModifiers = ["ref", "out", "in", "params"];
+
     // Metadata form ('Namespace.Outer.Inner`1'), null when only the method name was given
     public string? TypeName { get; }
     public string MethodName { get; }
@@ -79,8 +81,19 @@ internal class FunctionBreakpointPattern {
         var arguments = SplitTopLevel(value.Substring(genericStart + 1, value.Length - genericStart - 2), ',');
         return (value.Substring(0, genericStart).Trim(), arguments.Count);
     }
+    // 'int?' is 'System.Nullable`1<System.Int32>', 'ref int' is 'System.Int32&', 'string[]' 'System.String[]' and
+    // 'int*' 'System.Int32*' - the forms the metadata signature names them by
     private static string NormalizeType(string value) {
+        value = value.Trim();
+        foreach (var modifier in ParameterModifiers) {
+            if (value.StartsWith(modifier, StringComparison.Ordinal) && value.Length > modifier.Length && char.IsWhiteSpace(value[modifier.Length]))
+                return NormalizeType(value.Substring(modifier.Length)) + (modifier == "params" ? string.Empty : "&");
+        }
         value = string.Concat(value.Where(it => !char.IsWhiteSpace(it)));
+        if (value.EndsWith('*'))
+            return NormalizeType(value.Substring(0, value.Length - 1)) + "*";
+        if (value.EndsWith(']') && value.LastIndexOf('[') > 0)
+            return NormalizeType(value.Substring(0, value.LastIndexOf('['))) + value.Substring(value.LastIndexOf('['));
         if (value.EndsWith('?'))
             return $"System.Nullable`1<{NormalizeType(value.Substring(0, value.Length - 1))}>";
 

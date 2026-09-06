@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Reflection.Metadata;
+using DotNet.Debugging.Engine.Extensions;
 
 namespace DotNet.Debugging.Engine.Metadata;
 
@@ -18,8 +19,8 @@ internal sealed class DisplayNameSignatureProvider : ISignatureTypeProvider<stri
     public string GetPinnedType(string elementType) => elementType;
     public string GetPointerType(string elementType) => elementType + "*";
     public string GetSZArrayType(string elementType) => elementType + "[]";
-    public string GetTypeFromDefinition(MetadataReader reader, TypeDefinitionHandle handle, byte rawTypeKind) => TypeNameSignatureProvider.GetTypeName(reader, handle);
-    public string GetTypeFromReference(MetadataReader reader, TypeReferenceHandle handle, byte rawTypeKind) => TypeNameSignatureProvider.GetTypeName(reader, handle);
+    public string GetTypeFromDefinition(MetadataReader reader, TypeDefinitionHandle handle, byte rawTypeKind) => reader.GetTypeName(handle);
+    public string GetTypeFromReference(MetadataReader reader, TypeReferenceHandle handle, byte rawTypeKind) => reader.GetTypeName(handle);
     public string GetTypeFromSpecification(MetadataReader reader, object? genericContext, TypeSpecificationHandle handle, byte rawTypeKind) {
         return reader.GetTypeSpecification(handle).DecodeSignature(this, genericContext);
     }

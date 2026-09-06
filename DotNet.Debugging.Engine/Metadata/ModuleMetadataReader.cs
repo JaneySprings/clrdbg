@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using DotNet.Debugging.Engine.Extensions;
 using DotNet.Debugging.Engine.Models;
 
 namespace DotNet.Debugging.Engine.Metadata;
@@ -19,6 +20,8 @@ internal sealed class ModuleMetadataReader : IDisposable {
     private static readonly Guid sha1AlgorithmGuid = new Guid("ff1816ec-aa5e-4d10-87f7-6f4963833460");
     private static readonly Guid sha256AlgorithmGuid = new Guid("8829d00f-11b8-4213-878b-770e8597ac16");
     private const ushort PortableCodeViewVersionMagic = 0x504d;
+    // Two documents differing in case only are distinct files on Linux, the same file elsewhere
+    private static readonly StringComparison ExactPathComparison = OperatingSystem.IsLinux() ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
 
     private readonly PEReader? peReader;
     // The metadata of a dynamic module. Allocated on the pinned heap, where the GC never moves it, so the reader
@@ -171,8 +174,11 @@ internal sealed class ModuleMetadataReader : IDisposable {
             return null;
 
         var debugInformation = reader.GetMethodDebugInformation(MetadataTokens.MethodDefinitionHandle(methodToken));
-        if (debugInformation.SequencePointsBlob.IsNil)
-            return null;
+        if (debugInformation.SequencePointsBlob.IsNil) {
+            // An async or iterator method has no code of its own, its source is in the state machine's MoveNext
+            var moveNextToken = GetStateMachineMoveNextToken(methodToken);
+            return moveNextToken == null ? null : ResolveMethodEntry(moveNextToken.Value);
+        }
         // The first sequence point with source; a method that has none (only hidden ones) offers no entry to stop at
         foreach (var point in debugInformation.GetSequencePoints()) {
             if (point.IsHidden)
@@ -181,6 +187,38 @@ internal sealed class ModuleMetadataReader : IDisposable {
             if (document.IsNil)
                 return null;
             return new ResolvedBreakpoint(methodToken, point.Offset, CreateLocation(reader, document, point), isExactMatch: true);
+        }
+        return null;
+    }
+
+    // The entry to stop at for 'stopAtEntry': the entry point's first statement, or that of the method behind the
+    // compiler's '<Main>' bridge over an async Main (the bridge has no source of its own)
+    public ResolvedBreakpoint? ResolveEntryPoint(int entryPointToken) {
+        var resolved = ResolveMethodEntry(entryPointToken);
+        if (resolved != null)
+            return resolved;
+
+        var reader = PeMetadataReader;
+        var bridge = reader.GetMethodDefinition(MetadataTokens.MethodDefinitionHandle(entryPointToken));
+        if (reader.GetString(bridge.Name) != "<Main>")
+            return null;
+        foreach (var handle in reader.GetTypeDefinition(bridge.GetDeclaringType()).GetMethods()) {
+            var name = reader.GetString(reader.GetMethodDefinition(handle).Name);
+            if (name == "Main" || name == "<Main>$")
+                return ResolveMethodEntry(MetadataTokens.GetToken(handle));
+        }
+        return null;
+    }
+    // The 'MoveNext' of the state machine an async or iterator method compiles to, null for any other method
+    public int? GetStateMachineMoveNextToken(int kickoffMethodToken) {
+        var reader = PdbMetadataReader;
+        if (reader == null)
+            return null;
+
+        var kickoffHandle = MetadataTokens.MethodDefinitionHandle(kickoffMethodToken);
+        foreach (var handle in reader.MethodDebugInformation) {
+            if (reader.GetMethodDebugInformation(handle).GetStateMachineKickoffMethod() == kickoffHandle)
+                return MetadataTokens.GetToken(handle.ToDefinitionHandle());
         }
         return null;
     }
@@ -330,6 +368,13 @@ internal sealed class ModuleMetadataReader : IDisposable {
             hasUserCode = true;
         }
         return hasUserCode ? result : null;
+    }
+    // Whether an await's yield point still lies ahead in the hidden code between 'ilOffset' and the next statement
+    public bool HasAwaitAhead(int methodToken, int ilOffset, int? nextStatementOffset) {
+        var asyncInfo = GetAsyncMethodInfo(methodToken);
+        if (asyncInfo == null)
+            return false;
+        return asyncInfo.Awaits.Any(it => it.YieldOffset >= ilOffset && (nextStatementOffset == null || it.YieldOffset < nextStatementOffset));
     }
     public string? GetSourceLink(string documentPath) {
         if (!sourceLinkMapLoaded) {
@@ -487,14 +532,14 @@ internal sealed class ModuleMetadataReader : IDisposable {
     private static DocumentHandle FindDocument(MetadataReader reader, string filePath, bool requireExactSource, out bool exactMatch, out bool sourceMismatch) {
         exactMatch = false;
         sourceMismatch = false;
-        var normalizedPath = NormalizePath(filePath);
+        var normalizedPath = filePath.NormalizePathSeparators();
         var fileName = Path.GetFileName(normalizedPath);
         var fileNameMatch = default(DocumentHandle);
         var fileNameMatchVerified = false;
         var mismatchFound = false;
         foreach (var handle in reader.Documents) {
-            var documentPath = NormalizePath(reader.GetString(reader.GetDocument(handle).Name));
-            if (string.Equals(documentPath, normalizedPath, StringComparison.OrdinalIgnoreCase)) {
+            var documentPath = reader.GetString(reader.GetDocument(handle).Name).NormalizePathSeparators();
+            if (string.Equals(documentPath, normalizedPath, ExactPathComparison)) {
                 exactMatch = true;
                 return handle;
             }
@@ -538,8 +583,5 @@ internal sealed class ModuleMetadataReader : IDisposable {
         catch {
             return false;
         }
-    }
-    private static string NormalizePath(string path) {
-        return path.Replace('\\', '/');
     }
 }

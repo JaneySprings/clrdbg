@@ -68,8 +68,8 @@ internal class StepController {
             return true;
 
         var function = frame.GetFunction();
-        var module = debugger.GetModule(function.GetModule());
-        if (!module.HasSymbols) {
+        var module = debugger.FindModule(function.GetModule());
+        if (module == null || !module.HasSymbols) {
             // A step into a method without symbols (Just My Code off) leaves it right away, like a
             // filtered one - vsdbg does not stop where no source can be shown either
             if (reason == CorDebugStepReason.STEP_CALL) {
@@ -126,7 +126,7 @@ internal class StepController {
         // code past its await's resume point is different: that is where a step out of an async method
         // ends, the mapping reports the awaiting statement there, and such a stop stands
         if (module.MetadataReader.IsInHiddenRegion(methodToken, ip.pnOffset)
-            && (wasCrossingHiddenFinally || module.MetadataReader.IsInFinallyHandler(methodToken, ip.pnOffset) || HasAwaitAhead(module, methodToken, ip.pnOffset, nextStatementOffset))) {
+            && (wasCrossingHiddenFinally || module.MetadataReader.IsInFinallyHandler(methodToken, ip.pnOffset) || module.MetadataReader.HasAwaitAhead(methodToken, ip.pnOffset, nextStatementOffset))) {
             location = null;
             isCrossingHiddenFinally = true;
             ResumeStep(thread, userStepKind == StepKind.Out ? StepKind.Over : userStepKind);
@@ -187,13 +187,6 @@ internal class StepController {
     private void ResumeStep(ICorDebugThread thread, StepKind kind) {
         asyncStepper.ArmAwaitCarry(thread, kind);
         CreateStepper(thread, kind);
-    }
-    // Whether an await's yield point still lies ahead in the hidden code between 'ilOffset' and the next statement
-    private static bool HasAwaitAhead(ModuleInfo module, int methodToken, int ilOffset, int? nextStatementOffset) {
-        var asyncInfo = module.MetadataReader.GetAsyncMethodInfo(methodToken);
-        if (asyncInfo == null)
-            return false;
-        return asyncInfo.Awaits.Any(it => it.YieldOffset >= ilOffset && (nextStatementOffset == null || it.YieldOffset < nextStatementOffset));
     }
     // Abandons every step in progress, on a pause or an exception
     public void Disable() {

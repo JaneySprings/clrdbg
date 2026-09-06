@@ -1,7 +1,5 @@
 using System.Reflection.Emit;
 using System.Reflection.Metadata;
-using DotNet.Debugging.CorApi;
-using DotNet.Debugging.CorApi.Extensions;
 using DotNet.Debugging.Engine.Extensions;
 
 namespace DotNet.Debugging.Engine.Evaluation;
@@ -87,18 +85,18 @@ internal class LinqEmulator {
             case "OrderBy":
             case "OrderByDescending": {
                 var sequence = new HostSequence(elementType, items);
-                sequence.Orderings.Add(new HostOrdering(await MapAsync(items, arguments[1], arity), method.Name == "OrderByDescending"));
-                Sort(sequence);
+                sequence.Orderings.Add(new HostOrdering(await MapAsync(items, arguments[1], arity), method.Name == "OrderByDescending", IsUnsigned(method.MethodTypeArguments[1])));
+                sequence.Sort();
                 return CilValue.FromHostValue(sequence);
             }
             case "ThenBy":
             case "ThenByDescending": {
-                if (Dereference(source).Value is not HostSequence ordered)
+                if (source.DereferenceLocation().Value is not HostSequence ordered)
                     throw new NotSupportedException("'ThenBy' continues an ordering the debuggee computed, which the debugger cannot");
                 var sequence = new HostSequence(elementType, items);
                 sequence.Orderings.AddRange(ordered.Orderings);
-                sequence.Orderings.Add(new HostOrdering(await MapAsync(items, arguments[1], arity), method.Name == "ThenByDescending"));
-                Sort(sequence);
+                sequence.Orderings.Add(new HostOrdering(await MapAsync(items, arguments[1], arity), method.Name == "ThenByDescending", IsUnsigned(method.MethodTypeArguments[1])));
+                sequence.Sort();
                 return CilValue.FromHostValue(sequence);
             }
             case "Skip":
@@ -115,7 +113,7 @@ internal class LinqEmulator {
             case "Distinct" when arguments.Length == 1: {
                 var distinct = new List<CilValue>();
                 foreach (var item in items) {
-                    if (!distinct.Any(it => ValuesEqual(it, item)))
+                    if (!distinct.Any(it => it.ValueEquals(item)))
                         distinct.Add(item);
                 }
                 return Sequence(elementType, distinct);
@@ -124,7 +122,7 @@ internal class LinqEmulator {
                 items.Reverse();
                 return Sequence(elementType, items);
             case "Contains" when arguments.Length == 2:
-                return Boolean(items.Any(it => ValuesEqual(it, arguments[1])));
+                return Boolean(items.Any(it => it.ValueEquals(arguments[1])));
             case "Concat":
                 items.AddRange(await enumerate(arguments[1], elementType));
                 return Sequence(elementType, items);
@@ -192,7 +190,7 @@ internal class LinqEmulator {
             var value = selector == null ? items[i] : await InvokeAsync(selector, items[i], i, arity);
             if (value.IsNull)
                 continue;
-            sum = CilInterpreter.EvaluateBinary(addition, sum, value);
+            sum = addition.EvaluateBinary(sum, value);
         }
         return sum;
     }
@@ -216,26 +214,45 @@ internal class LinqEmulator {
     }
     private async Task<CilValue> ExtremumAsync(List<CilValue> items, CilValue? selector, int arity, ResolvedRuntimeMethod method, ResolvedCilType elementType) {
         var isMax = method.Name == "Max";
+        // The key's static type decides the sign of the comparison (the interpreter holds a computed uint as its
+        // signed twin) and whether an empty sequence has an extremum. A non-generic overload ('Max(Func<T, uint>)')
+        // names the key in its parameter type
+        ResolvedCilType? keyType;
+        if (selector == null)
+            keyType = elementType;
+        else if (method.MethodTypeArguments.Length > 1)
+            keyType = method.MethodTypeArguments[1];
+        else if (Enum.TryParse<PrimitiveTypeCode>(GetLastGenericArgument(method.Signature.ParameterTypes[1]), out var primitive))
+            keyType = ResolvedCilType.FromPrimitive(primitive);
+        else
+            keyType = null;
+        var isUnsigned = keyType != null && IsUnsigned(keyType);
+        var isFloat = keyType?.Primitive is PrimitiveTypeCode.Single or PrimitiveTypeCode.Double;
+
         CilValue? best = null;
+        CilValue? nan = null;
         for (var i = 0; i < items.Count; i++) {
             var value = selector == null ? items[i] : await InvokeAsync(selector, items[i], i, arity);
             if (value.IsNull)
                 continue;
-            if (best == null || (isMax ? CompareValues(value, best) > 0 : CompareValues(value, best) < 0))
+            // Enumerable's rules: the minimum is NaN as soon as one is met, the maximum ignores them unless nothing else is there
+            if (isFloat && double.IsNaN(value.AsFloat())) {
+                if (!isMax)
+                    return value;
+                if (nan == null)
+                    nan = value;
+                continue;
+            }
+            if (best == null || (isMax ? value.CompareValue(best, isUnsigned) > 0 : value.CompareValue(best, isUnsigned) < 0))
                 best = value;
         }
         if (best != null)
             return best;
+        if (nan != null)
+            return nan;
 
         // An empty sequence of values has no extremum, one of references yields null
-        ResolvedCilType resultType;
-        if (selector == null)
-            resultType = elementType;
-        else if (method.MethodTypeArguments.Length > 1)
-            resultType = method.MethodTypeArguments[1];
-        else
-            resultType = ResolvedCilType.FromPrimitive(Enum.Parse<PrimitiveTypeCode>(GetLastGenericArgument(method.Signature.ParameterTypes[1])));
-        if (IsValueType(resultType))
+        if (keyType == null || keyType.IsValueType)
             throw new EvaluationThrewException(InvalidOperation);
         return CilValue.Null();
     }
@@ -254,57 +271,8 @@ internal class LinqEmulator {
         return arguments.Length == 4 ? await invoke(arguments[3], [accumulator]) : accumulator;
     }
 
-    // A stable sort by every ordering in turn: the index breaks the ties, so equal keys keep their order
-    private static void Sort(HostSequence sequence) {
-        var order = Enumerable.Range(0, sequence.Items.Count).ToList();
-        order.Sort((left, right) => {
-            foreach (var ordering in sequence.Orderings) {
-                var result = CompareValues(ordering.Keys[left], ordering.Keys[right]);
-                if (ordering.Descending)
-                    result = -result;
-                if (result != 0)
-                    return result;
-            }
-            return left.CompareTo(right);
-        });
-        Reorder(sequence.Items, order);
-        foreach (var ordering in sequence.Orderings)
-            Reorder(ordering.Keys, order);
-    }
-    private static void Reorder(List<CilValue> values, List<int> order) {
-        var reordered = order.Select(it => values[it]).ToList();
-        values.Clear();
-        values.AddRange(reordered);
-    }
-    // The order Comparer<T>.Default gives: null first, strings by the current culture, numbers by value
-    private static int CompareValues(CilValue left, CilValue right) {
-        if (left.IsNull || right.IsNull)
-            return left.IsNull ? (right.IsNull ? 0 : -1) : 1;
-        var leftText = left.GetStringText();
-        var rightText = right.GetStringText();
-        if (leftText != null && rightText != null)
-            return string.Compare(leftText, rightText, StringComparison.CurrentCulture);
-        if (CilInterpreter.Compare(OpCodes.Clt, left, right))
-            return -1;
-        return CilInterpreter.Compare(OpCodes.Cgt, left, right) ? 1 : 0;
-    }
-    // The equality EqualityComparer<T>.Default gives: strings by text, values by content, references by identity
-    private static bool ValuesEqual(CilValue left, CilValue right) {
-        if (left.IsNull || right.IsNull)
-            return left.IsNull && right.IsNull;
-        var leftText = left.GetStringText();
-        var rightText = right.GetStringText();
-        if (leftText != null || rightText != null)
-            return leftText == rightText;
-        if (left.Value == null && right.Value == null
-                && left.CorValue!.UnwrapDebugValue() is ICorDebugGenericValue leftGeneric && left.CorValue is not ICorDebugReferenceValue
-                && right.CorValue!.UnwrapDebugValue() is ICorDebugGenericValue rightGeneric && right.CorValue is not ICorDebugReferenceValue)
-            return leftGeneric.GetValueAsBytes().AsSpan().SequenceEqual(rightGeneric.GetValueAsBytes());
-        return CilInterpreter.Compare(OpCodes.Ceq, left, right);
-    }
-
     private static ResolvedCilType GetElementType(ResolvedRuntimeMethod method, CilValue source) {
-        if (Dereference(source).Value is HostSequence sequence)
+        if (source.DereferenceLocation().Value is HostSequence sequence)
             return sequence.ElementType;
         if (!method.MethodTypeArguments.IsDefaultOrEmpty)
             return method.MethodTypeArguments[0];
@@ -334,18 +302,13 @@ internal class LinqEmulator {
         var start = Math.Max(type.LastIndexOf(',', end), type.IndexOf('<'));
         return type.Substring(start + 1, end - start - 1);
     }
-    private static bool IsValueType(ResolvedCilType type) {
-        if (type.Primitive != null)
-            return type.Primitive != PrimitiveTypeCode.String && type.Primitive != PrimitiveTypeCode.Object;
-        return type.RuntimeType != null && EvaluationMetadataResolver.IsValueType(type.RuntimeType);
+    private static bool IsUnsigned(ResolvedCilType type) {
+        return type.Primitive is PrimitiveTypeCode.UInt32 or PrimitiveTypeCode.UInt64 or PrimitiveTypeCode.UIntPtr;
     }
     private static CilValue Sequence(ResolvedCilType elementType, List<CilValue> items) {
         return CilValue.FromHostValue(new HostSequence(elementType, items));
     }
     private static CilValue Boolean(bool value) {
         return CilValue.FromPrimitive(value);
-    }
-    private static CilValue Dereference(CilValue value) {
-        return value.Location != null ? value.Dereference() : value;
     }
 }

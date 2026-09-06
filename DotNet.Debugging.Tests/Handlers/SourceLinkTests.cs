@@ -51,6 +51,12 @@ public class SourceLinkTests : BaseDebugTestFixture {
         File.WriteAllText(Path.Combine(projectDirectory, "sourcelink.json"), json);
     }
 
+    // NUnit reuses the fixture instance, the count of one test must not leak into the next
+    [SetUp]
+    public void ResetServedRequests() {
+        servedRequests = 0;
+    }
+
     [OneTimeSetUp]
     public void StartSourceServer() {
         listener = new HttpListener();

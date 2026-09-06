@@ -1,4 +1,4 @@
-using DotNet.Debugging.Engine.Breakpoints;
+using DotNet.Debugging.Engine.Extensions;
 using NUnit.Framework;
 
 namespace DotNet.Debugging.Tests;
@@ -21,6 +21,6 @@ public class HitConditionTests {
     [TestCase("%0", 4, false)]
     [TestCase("abc", 1, false)]
     public void CheckHitConditionTest(string condition, int hitCount, bool expected) {
-        Assert.That(BreakpointManager.CheckHitCondition(hitCount, condition), Is.EqualTo(expected));
+        Assert.That(condition.MatchesHitCount(hitCount), Is.EqualTo(expected));
     }
 }

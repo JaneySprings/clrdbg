@@ -47,18 +47,6 @@ internal static class ValueFormatter {
         }
     }
 
-    // The underlying value of a Nullable<T>, null when it has no value
-    public static ICorDebugValue? GetNullableValue(ICorDebugObjectValue objectValue) {
-        var corClass = objectValue.GetClass();
-        var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
-        var hasValueField = metadataImport.FindField(corClass.GetToken(), "hasValue", 0, 0);
-        var valueField = metadataImport.FindField(corClass.GetToken(), "value", 0, 0);
-
-        var hasValue = Format(objectValue.GetFieldValue(corClass, hasValueField), false);
-        if (hasValue.Value == "false")
-            return null;
-        return objectValue.GetFieldValue(corClass, valueField);
-    }
     public static string FormatLiteral(nint data, int length, CorElementType elementType) {
         if (data == IntPtr.Zero)
             throw new ArgumentNullException(nameof(data));
@@ -102,11 +90,21 @@ internal static class ValueFormatter {
             text = SymbolDisplay.FormatLiteral(text, quote: true);
         return new FormattedValue("string", text);
     }
+    // '{int[3]}', '{int[2, 3]}', '{int[3][]}' for a jagged array: the lengths go into the array's own brackets, the
+    // first top-level ones of the type name, the element type's brackets stay behind them
     private static FormattedValue FormatArray(ICorDebugArrayValue arrayValue) {
         var typeName = TypeNameFormatter.GetTypeName(arrayValue.GetExactType());
-        var elementTypeName = typeName.Substring(0, typeName.LastIndexOf('['));
         var dimensions = arrayValue.GetDimensions(arrayValue.GetRank());
-        return new FormattedValue(typeName, $"{{{elementTypeName}[{string.Join(", ", dimensions)}]}}");
+        var depth = 0;
+        for (var i = 0; i < typeName.Length; i++) {
+            if (typeName[i] == '<')
+                depth++;
+            else if (typeName[i] == '>')
+                depth--;
+            else if (typeName[i] == '[' && depth == 0)
+                return new FormattedValue(typeName, $"{{{typeName.Substring(0, i)}[{string.Join(", ", dimensions)}]{typeName.Substring(typeName.IndexOf(']', i) + 1)}}}");
+        }
+        return new FormattedValue(typeName, $"{{{typeName}}}");
     }
     private static FormattedValue FormatReference(ICorDebugReferenceValue referenceValue, bool escapeStrings) {
         if (referenceValue.IsNull())
@@ -126,10 +124,12 @@ internal static class ValueFormatter {
             return new FormattedValue(typeName, FormatEnum(metadataImport, classToken, numericValue));
         }
         if (typeName.EndsWith('?')) {
-            var underlyingValue = GetNullableValue(objectValue);
+            var underlyingValue = objectValue.GetNullableValue();
             if (underlyingValue == null)
                 return new FormattedValue(typeName, "null");
-            return new FormattedValue(typeName, Format(underlyingValue, escapeStrings).Value);
+            // The underlying value's display template and proxy carry over, they run against that value
+            var underlying = Format(underlyingValue, escapeStrings);
+            return new FormattedValue(typeName, underlying.Value, underlying.RequiresDebuggerDisplay, underlying.DebuggerProxyTypeName);
         }
         // A boxed primitive is shown as the primitive itself, without evaluating its ToString override
         if (TypeNameFormatter.IsPrimitiveTypeName(typeName)) {
@@ -144,10 +144,10 @@ internal static class ValueFormatter {
             return new FormattedValue(typeName, $"{{{typeName}}}");
 
         string? proxyTypeName = null;
-        if (metadataImport.TryGetCustomAttributeByName(classToken, AttributeNames.DebuggerTypeProxy, out var proxyData, out var proxySize) == Cor.S_OK)
+        if (TryGetInheritedAttribute(exactType, AttributeNames.DebuggerTypeProxy, out var proxyData, out var proxySize))
             proxyTypeName = CustomAttributeReader.ReadStringArgument(proxyData, proxySize);
 
-        if (metadataImport.TryGetCustomAttributeByName(classToken, AttributeNames.DebuggerDisplay, out var displayData, out var displaySize) == Cor.S_OK) {
+        if (TryGetInheritedAttribute(exactType, AttributeNames.DebuggerDisplay, out var displayData, out var displaySize)) {
             var display = CustomAttributeReader.ReadStringArgument(displayData, displaySize) ?? string.Empty;
             if (typeName.StartsWith("<>f__AnonymousType", StringComparison.Ordinal)) {
                 // An anonymous type's display is '\{ Id = {Id}, Name = {Name} }' - the escaped braces
@@ -165,7 +165,7 @@ internal static class ValueFormatter {
             return new FormattedValue(typeName, "{{{ToString()}}}", true, proxyTypeName);
         if (typeName == "decimal")
             return new FormattedValue(typeName, FormatDecimal(objectValue));
-        if (OverridesToString(exactType))
+        if (exactType.OverridesToString())
             return new FormattedValue(typeName, "{{{ToString()}}}", true, proxyTypeName);
 
         return new FormattedValue(typeName, $"{{{typeName}}}", false, proxyTypeName);
@@ -243,25 +243,16 @@ internal static class ValueFormatter {
         return names.Count > 0 && remaining == 0 ? string.Join(" | ", names) : numericValue;
     }
 
-    // Whether the type or any base type up to System.Object/System.ValueType declares a parameterless ToString override
-    private static bool OverridesToString(ICorDebugType type) {
-        var current = type;
-        while (current != null) {
+    // The attributes are inherited: a List<T> subclass shows List<T>'s display and proxy, the way the C# debugger does
+    private static bool TryGetInheritedAttribute(ICorDebugType type, string attributeName, out nint data, out uint size) {
+        for (var current = type; current != null; current = current.GetBaseType()) {
             var corClass = current.GetClass();
             var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
-            var typeName = metadataImport.GetTypeDefProps(corClass.GetToken()).szTypeDef;
-            if (typeName == "System.Object" || typeName == "System.ValueType")
-                return false;
-
-            foreach (var methodToken in metadataImport.EnumMethodsWithName(corClass.GetToken(), "ToString")) {
-                var methodProps = metadataImport.GetMethodProps(methodToken);
-                var attributes = methodProps.pdwAttr;
-                var parameterCount = Marshal.ReadByte(methodProps.ppvSigBlob, 1);
-                if (!attributes.IsMdStatic() && attributes.IsMdVirtual() && !attributes.IsMdNewSlot() && parameterCount == 0)
-                    return true;
-            }
-            current = current.GetBaseType();
+            if (metadataImport.TryGetCustomAttributeByName(corClass.GetToken(), attributeName, out data, out size) == Cor.S_OK)
+                return true;
         }
+        data = 0;
+        size = 0;
         return false;
     }
     private static string FormatChar(char value) {

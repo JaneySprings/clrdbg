@@ -1,5 +1,6 @@
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
+using DotNet.Debugging.Engine.Extensions;
 
 namespace DotNet.Debugging.Engine.Metadata;
 
@@ -30,6 +31,17 @@ internal static class SequencePointResolver {
             var closest = candidates.OrderBy(it => it.First, StartComparer.Instance).FirstOrDefault();
             return closest == null ? null : new SequencePointMatch(closest.MethodToken, closest.First);
         }
+        // A line inside a statement spanning several lines (a blank line in a lambda body, whose enclosing statement
+        // covers the whole lambda text) goes to the next statement within that span when another method has one -
+        // the lambda's - rather than up to the start of the spanning statement, the way Microsoft's debugger binds it
+        if (column == null && covering.All(it => it.Covering!.Value.StartLine < line)) {
+            var inner = candidates
+                .Where(it => it.First.StartLine >= line && covering.Any(spanning => it.MethodToken != spanning.MethodToken && it.First.CompareEnd(spanning.Covering!.Value) <= 0))
+                .OrderBy(it => it.First, StartComparer.Instance)
+                .FirstOrDefault();
+            if (inner != null)
+                return new SequencePointMatch(inner.MethodToken, inner.First);
+        }
         if (covering.Count == 1)
             return new SequencePointMatch(covering[0].MethodToken, covering[0].Covering!.Value);
 
@@ -38,7 +50,7 @@ internal static class SequencePointResolver {
         // method only covers the line via a large spanning sequence point (e.g. a delegate-assignment point
         // that spans the whole lambda body)
         var latestStart = covering.Select(it => it.Covering!.Value).OrderByDescending(it => it, StartComparer.Instance).First();
-        var primary = covering.Where(it => CompareStart(it.Covering!.Value, latestStart) == 0).ToList();
+        var primary = covering.Where(it => it.Covering!.Value.CompareStart(latestStart) == 0).ToList();
         if (primary.Count == 1)
             return new SequencePointMatch(primary[0].MethodToken, primary[0].Covering!.Value);
 
@@ -50,10 +62,10 @@ internal static class SequencePointResolver {
         var nested = sorted[^1];
 
         // The lambda range is fully inside the outer's first sequence point - the breakpoint is on the call-site line
-        if (CompareStart(nested.First, outer.First) > 0 && CompareEnd(nested.Last, outer.First) < 0)
+        if (nested.First.CompareStart(outer.First) > 0 && nested.Last.CompareEnd(outer.First) < 0)
             return new SequencePointMatch(outer.MethodToken, outer.Covering!.Value);
         // The outer's first sequence point ends after the nested one - the breakpoint is closer to the lambda body
-        if (CompareEnd(outer.First, nested.First) > 0)
+        if (outer.First.CompareEnd(nested.First) > 0)
             return new SequencePointMatch(nested.MethodToken, nested.Covering!.Value);
 
         return new SequencePointMatch(outer.MethodToken, outer.Covering!.Value);
@@ -75,9 +87,9 @@ internal static class SequencePointResolver {
             if (candidate == null)
                 candidate = new MethodCandidate(MetadataTokens.GetToken(handle.ToDefinitionHandle()), point);
 
-            if (CompareEnd(point, candidate.First) < 0)
+            if (point.CompareEnd(candidate.First) < 0)
                 candidate.First = point;
-            if (CompareEnd(point, candidate.Last) > 0)
+            if (point.CompareEnd(candidate.Last) > 0)
                 candidate.Last = point;
             if (CoversRequestedPosition(point, line, column) && ShouldReplaceCovering(point, candidate.Covering, column))
                 candidate.Covering = point;
@@ -88,13 +100,13 @@ internal static class SequencePointResolver {
     private static bool IsBeforeRequestedPosition(SequencePoint point, int line, int? column) {
         if (column == null)
             return point.EndLine < line;
-        return ComparePosition(point.EndLine, point.EndColumn, line, column.Value) < 0;
+        return (point.EndLine, point.EndColumn).CompareTo((line, column.Value)) < 0;
     }
     private static bool CoversRequestedPosition(SequencePoint point, int line, int? column) {
         if (column == null)
             return point.StartLine <= line;
-        return ComparePosition(point.StartLine, point.StartColumn, line, column.Value) <= 0
-            && ComparePosition(line, column.Value, point.EndLine, point.EndColumn) <= 0;
+        return (point.StartLine, point.StartColumn).CompareTo((line, column.Value)) <= 0
+            && (line, column.Value).CompareTo((point.EndLine, point.EndColumn)) <= 0;
     }
     private static bool ShouldReplaceCovering(SequencePoint point, SequencePoint? covering, int? column) {
         if (covering == null)
@@ -103,18 +115,7 @@ internal static class SequencePointResolver {
             return point.StartLine > covering.Value.StartLine
                 || (point.StartLine == covering.Value.StartLine && point.StartColumn < covering.Value.StartColumn);
         }
-        return CompareStart(point, covering.Value) > 0;
-    }
-
-    private static int CompareStart(SequencePoint left, SequencePoint right) {
-        return ComparePosition(left.StartLine, left.StartColumn, right.StartLine, right.StartColumn);
-    }
-    private static int CompareEnd(SequencePoint left, SequencePoint right) {
-        return ComparePosition(left.EndLine, left.EndColumn, right.EndLine, right.EndColumn);
-    }
-    private static int ComparePosition(int line, int column, int otherLine, int otherColumn) {
-        var result = line.CompareTo(otherLine);
-        return result != 0 ? result : column.CompareTo(otherColumn);
+        return point.CompareStart(covering.Value) > 0;
     }
 
     private class MethodCandidate {
@@ -137,7 +138,7 @@ internal static class SequencePointResolver {
         public static StartComparer Instance { get; } = new StartComparer();
 
         public int Compare(SequencePoint left, SequencePoint right) {
-            return CompareStart(left, right);
+            return left.CompareStart(right);
         }
     }
 }

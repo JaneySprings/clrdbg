@@ -40,7 +40,7 @@ await) and the stepper itself, then decides:
 | Symbols, but no sequence point at the IP | Step **into** again: compiler-generated code such as an async state machine's glue. |
 | IP unmapped / no mapping info | Error — logged, continued. |
 | A method (or declaring type) marked `DebuggerHidden`/`DebuggerStepThrough` — plus `DebuggerNonUserCode` when `JustMyCode` is on, vsdbg ignores it otherwise — at any offset | Step **into** again, marked as skipping: the step lands in the first user code the method calls or leaves it altogether. |
-| `STEP_CALL` into a property accessor or an operator method, with `EnableStepFiltering` (default on) | Step **out** again, marked as skipping — "step over properties and operators". |
+| `STEP_CALL` into a property accessor or an operator method (by the `get_`/`set_`/`op_` name after any explicit interface prefix, `IShape.get_Area`), with `EnableStepFiltering` (default on) | Step **out** again, marked as skipping — "step over properties and operators". |
 | `STEP_CALL` and the IP is before the next sequence point | Step **over** the callee's prolog to reach its first statement. |
 | IP in a hidden region that is cleanup between two statements: inside a `finally` handler (the one a `using`/`lock` compiles to), the plumbing between two nested finallys while a crossing is under way, or hidden code with an await still ahead of it (the hoisted `DisposeAsync` of `await using`/`await foreach`) | Step again with the user's kind (a step out continues as a step over), marked as crossing. Hidden code past its await's resume point is where a step out of an async method ends and stands. |
 | `STEP_RETURN` after a skip, back into the statement the user's step started from | Step again with the user's kind: the returned-to offset is only mapped approximately, so the rest of the statement is covered by stepping it again. |
@@ -79,9 +79,12 @@ TrySetupAsync(thread, kind)
 
 Breakpoint callback → AsyncStepper.TryHandleBreakpointAsync
   ├─ the NotifyDebuggerOfWaitCompletion breakpoint     → StepOut (controller steps out of it)
-  ├─ no active async step / another breakpoint / IP mismatch → not handled (async step cleared)
-  ├─ status Yield, same thread                         → capture the builder id, breakpoint moves
+  ├─ no active async step / another breakpoint / IP mismatch → not handled (the async step stays armed:
+  │                                                      a hit that stops disables it with everything else,
+  │                                                      one that does not carries the step on past it)
+  ├─ status Yield, same thread and frame depth         → capture the builder id, breakpoint moves
   │                                                      to the resume point, status Resume → Continue
+  │                                                      (a deeper activation's yield: not handled)
   └─ status Resume                                     → same invocation? new plain stepper of the
                                                          original kind, async step cleared → Continue
                                                          (another invocation: keep waiting → Continue)
@@ -97,8 +100,12 @@ invocation of the same method resuming past the shared resume breakpoint during 
 step. Only at a first yield, where the task does not exist yet, is it created through the builder's
 `ObjectIdForDebugger` property, which the method keeps as its box from then on. A matching thread id alone proves nothing — the pool
 reuses threads, so another invocation of the same method can resume on the stepping thread. The
-yield breakpoint is only honoured on the thread that set the step up, which is safe there: until
-the stepped invocation yields, it occupies that thread itself.
+yield breakpoint is only honoured on the thread that set the step up and at the frame depth recorded
+when the step was armed (`AsyncStep.FrameDepth`, the count of the thread's managed frames): until the
+stepped invocation yields it occupies that thread itself, but a recursive call (`await Walk(n - 1)`)
+runs the inner activation synchronously up to its first await, deeper on the same thread, and its
+yield hits the same breakpoint first — honouring it would carry the step to the inner activation's
+resume.
 
 Every await of the method gets a yield breakpoint, not just the next one in IL order: control flow
 decides which await runs next — a `break` inside an `await foreach` jumps over the loop's
@@ -130,4 +137,5 @@ yield/resume breakpoints and handle, and the notification breakpoint: an async s
 has not completed when the user stops elsewhere would otherwise fire a step stop later, in a place
 unrelated to what they were doing. `CancelStep` alone (the plain stepper) is what a breakpoint that
 merely evaluates — a false condition, a logpoint — uses, so an async step out survives those.
-`AsyncStepper.ClearActiveStep` alone runs on every `StepComplete`.
+`AsyncStepper.ClearActiveStep` alone runs on every `StepComplete`. A `StepComplete` arriving after the
+step was abandoned (a stop on another thread, an exception the user kept) is continued without a stop.

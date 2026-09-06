@@ -62,6 +62,7 @@ Then:
 | Situation | Choice |
 |---|---|
 | No method covers the position (blank line, comment, closing brace) | The `First` point with the earliest start across methods — the breakpoint snaps to the next line with code, and the client sees the adjusted line. |
+| A whole line covered only by statements starting above it, and another method has a statement at or below the line inside one of them (a blank line in the body of a multi-line lambda: the delegate assignment's point spans the whole lambda text) | That method's `First` point — the lambda's next statement, the way Microsoft's debugger binds it, rather than up to the start of the spanning statement. |
 | Exactly one method covers it | Its `Covering` point. |
 | Several cover it, one `Covering` starts later than the others | That one — the innermost lambda, whose own statement starts after the enclosing statement (e.g. the delegate assignment) that spans it. |
 | Several `Covering` points start at the same position (`items.Select(i => i * 2)` on one line) | netcoredbg's containment rule: if the nested method's range lies inside the outer's first statement the call site wins; otherwise, if the outer's first statement ends after the nested's, the lambda body wins. |
@@ -85,7 +86,10 @@ C# keywords become their metadata names, generic types carry their arity, `?` be
 an empty parameter) is an `ArgumentException` and becomes `BreakpointStatus.Error` with that message.
 
 `FunctionBreakpointResolver.Resolve` walks every type definition of a module with symbols and binds
-*every* matching method at its first non-hidden sequence point; a breakpoint therefore accumulates
+*every* matching method at its first non-hidden sequence point (`ResolveMethodEntry`: for an async or
+iterator method, which has no sequence points of its own, that of its state machine's `MoveNext`, found
+through the PDB's kickoff-method link); the parameter list normalizes `ref`/`out`/`in`, arrays and
+pointers to their signature names (`System.Int32&`, `System.String[]`); a breakpoint therefore accumulates
 `FunctionBindings` across modules and overloads, becomes `Bound` with the first one, and reports
 `NoMatchingFunctions` when the process is running and nothing matched anywhere.
 
@@ -123,7 +127,9 @@ debuggee or moving on:
 
 With `LaunchRequest.StopAtEntry`, `ModuleHandler.TrySetEntryPointBreakpoint` places a one-shot
 `ICorDebugFunctionBreakpoint` on the first loaded assembly that has a managed entry point
-(`CorHeader.EntryPointToken`, a MethodDef), at the entry method's first sequence point. It is not
+(`CorHeader.EntryPointToken`, a MethodDef), at the entry method's first sequence point - or, for the
+compiler's `<Main>` bridge over an async `Main`, at the first statement of the `Main` behind it
+(`ResolveEntryPoint`). It is not
 tracked by the manager: `TryHandleEntryPointBreakpoint` recognizes it, deactivates it and reports
 `StopReason.Entry`.
 

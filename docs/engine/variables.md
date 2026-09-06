@@ -42,6 +42,10 @@ share one).
    generated type (`GeneratedNameParser`: state machine or display class), that `this` is the
    generated object: the user's `this` is read from its `<>4__this` proxy field (following `<>8__`
    links to enclosing closures), and the generated object becomes the source of the hoisted locals.
+   In the method declaring a lambda the display class is a plain local (`CS$<>8__locals0`, which the
+   compiler leaves visible for the evaluator's sake): it is listed through its hoisted locals, never
+   itself, and a captured parameter already listed from the frame is not repeated. A display class not
+   created yet (its captured variables are not in scope) is a null field and lists nothing.
 3. **Hoisted locals** — the fields of the closure/state machine and of every enclosing closure,
    shown under their original names (`<count>5__1` → `count`); other generated fields are hidden.
 4. **IL locals**, named through the PDB local scopes that contain the current IL offset
@@ -101,7 +105,8 @@ for statics, `parent[0]` for elements, the bare name for hoisted locals.
 
 A value gets a children reference (`CreateChildrenReference`) when it is a non-empty array or an
 object of element type `CLASS`/`VALUETYPE`/`SZARRAY`/`ARRAY` — after unwrapping `Nullable<T>` to its
-value — and never for strings, decimals and boxed primitives, which are displayed as leaves.
+value, whose own members the reference then lists (`Point?` expands to `X`, `Y`) — and never for strings,
+decimals and boxed primitives, which are displayed as leaves.
 
 ## Formatting values
 
@@ -113,11 +118,11 @@ cases that need code to run in the debuggee:
 | primitives | Invariant-culture numbers, `true`/`false`, chars as `97 'a'`. |
 | `string` | C# literal (quoted and escaped) in variable views, raw for evaluation results used internally. |
 | `null` reference | `null`, with the static type's name. |
-| array | `{int[60]}`, `{string[2, 3]}`. |
+| array | `{int[60]}`, `{string[2, 3]}`, `{int[3][]}` for a jagged array (the lengths go into the array's own brackets). |
 | enum | The member name, `A \| B` for `[Flags]` values fully decomposed into members, the number otherwise. |
-| `Nullable<T>` | `null` or the value's text, typed `int?`. |
+| `Nullable<T>` | `null` or the value's text, typed `int?`; a `DateTime?` or `Guid?` shows its value's `ToString`/`DebuggerDisplay`, evaluated against the underlying value. |
 | `decimal` | Read from the struct's 16 bytes (`flags, hi, lo, mid`) through `new decimal(bits)`. |
-| object with `DebuggerDisplay` | The attribute string as an interpolated-string *template* (`Count = {Count}`; anonymous types' `\{ … }` fixed up; a `Name` argument becomes a `Name = ` prefix), evaluated against the object ([evaluation.md](evaluation.md)). `{Name,nq}` format specifiers are stripped by the compiler. |
+| object with `DebuggerDisplay` | The attribute string (inherited: the first one up the base chain, so a `List<int>` subclass shows `Count = 3`; `DebuggerTypeProxy` likewise, an open generic proxy closed over the declaring base's arguments) as an interpolated-string *template* (`Count = {Count}`; anonymous types' `\{ … }` fixed up; a `Name` argument becomes a `Name = ` prefix), evaluated against the object ([evaluation.md](evaluation.md)). `{Name,nq}` format specifiers are stripped by the compiler. |
 | exception, or a type overriding `ToString()` | The `{ToString()}` template, evaluated the same way. |
 | any other object | `{Namespace.Type}`. |
 
@@ -133,8 +138,11 @@ their aliases.
 ## Assignments
 
 `SetVariableAsync(reference, name, text)` finds the variable by name in the scope (locals by PDB
-name, then parameters by metadata name) or among the members (`[i]` elements, fields on the type and
-its bases), and `VariableWriter` writes it: `null` into reference slots, and parsed primitives
+name, then parameters by metadata name, then the locals the compiler hoisted onto a closure or state
+machine: the fields of the generated `this` of a lambda or `MoveNext`, of a display-class local of the
+declaring method, and of the enclosing closures those link to) or among the members (`[i]` elements,
+fields on the type and its bases; a constant is refused — "is a constant and cannot be assigned" —
+rather than written into a value that has no storage), and `VariableWriter` writes it: `null` into reference slots, and parsed primitives
 (`bool`, `char` — `'a'`, `a` or a code —, integers, `float`/`double`, `nint`/`nuint`) into generic
 values, after checking the size matches. Anything else ("Only primitive values are supported") is
 reported as an error; the updated value is returned formatted like any variable.

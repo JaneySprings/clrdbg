@@ -18,7 +18,9 @@ public class StepFilteringTests : BaseDebugTestFixture {
         var max = MaxArea(size.Width, size.Height); // marker:methodWithPropertyArgs
         var wrapped = WrappedValue(); // marker:stepThrough
         var plain = NonUserValue(); // marker:nonUserCode
-        Console.WriteLine(sum.Width + area + max + wrapped + doubled + plain); // marker:end
+        IShape shape = new Circle(2);
+        var circleArea = shape.Area; // marker:explicitGetter
+        Console.WriteLine(sum.Width + area + max + wrapped + doubled + plain + circleArea); // marker:end
 
         static int Double(int value) {
             return value * 2; // marker:insideDouble
@@ -64,6 +66,20 @@ public class StepFilteringTests : BaseDebugTestFixture {
 
             private static int Compute(int width, int height) {
                 return width * height; // marker:insideCompute
+            }
+        }
+        interface IShape {
+            double Area { get; }
+        }
+        class Circle : IShape {
+            private readonly double radius;
+
+            public Circle(double radius) {
+                this.radius = radius;
+            }
+
+            double IShape.Area {
+                get { return radius * radius * 3; } // marker:insideExplicitGetter
             }
         }
         """;
@@ -155,6 +171,23 @@ public class StepFilteringTests : BaseDebugTestFixture {
         var frame = StepIn(threadId);
         Assert.That(frame.Name, Does.Contain("NonUserValue"));
         Assert.That(frame.Line, Is.EqualTo(GetMarkerLine("marker:nonUserHeader")));
+    }
+
+    // An explicit interface accessor carries the interface's name in front ('IShape.get_Area'), it is an accessor still
+    [Test]
+    public void StepIntoExplicitInterfaceGetterIsFilteredTest() {
+        var threadId = StopAtMarker("marker:explicitGetter");
+        var frame = StepIn(threadId);
+        Assert.That(frame.Name, Does.Contain("Main"));
+        Assert.That(frame.Line, Is.EqualTo(GetMarkerLine("marker:end")));
+    }
+
+    [Test]
+    public void StepIntoExplicitInterfaceGetterWhenFilteringDisabledTest() {
+        var threadId = StopAtMarker("marker:explicitGetter", enableStepFiltering: false);
+        var frame = StepIn(threadId);
+        Assert.That(frame.Name, Does.Contain("get_Area"));
+        Assert.That(frame.Line, Is.EqualTo(GetMarkerLine("marker:insideExplicitGetter")));
     }
 
     [Test]

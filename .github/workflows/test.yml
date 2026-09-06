@@ -44,13 +44,14 @@ jobs:
           # dotnet-quality: preview
 
       - name: Run tests
-        run: dotnet test DotNet.Debugging.Tests/DotNet.Debugging.Tests.csproj -p:Configuration=Release
+        run: dotnet test DotNet.Debugging.Tests/DotNet.Debugging.Tests.csproj -p:Configuration=Release --blame-hang --blame-hang-timeout 4m --blame-hang-dump-type none --results-directory TestResults
 
-      # The engine logs every runtime callback, which is what a failure like a lost step is diagnosed from
       - name: Upload the engine logs
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: engine-logs-${{ matrix.platform }}
-          path: DotNet.Debugging.Tests/bin/**/logs/*.log
+          path: |
+            DotNet.Debugging.Tests/bin/**/logs/*.log
+            TestResults/**/Sequence_*.xml
           if-no-files-found: warn

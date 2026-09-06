@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Reflection.Metadata;
+using DotNet.Debugging.Engine.Extensions;
 
 namespace DotNet.Debugging.Engine.Metadata;
 
@@ -17,8 +18,8 @@ internal sealed class TypeNameSignatureProvider : ISignatureTypeProvider<string,
     public string GetPinnedType(string elementType) => elementType;
     public string GetPointerType(string elementType) => elementType + "*";
     public string GetSZArrayType(string elementType) => elementType + "[]";
-    public string GetTypeFromDefinition(MetadataReader reader, TypeDefinitionHandle handle, byte rawTypeKind) => GetTypeName(reader, handle);
-    public string GetTypeFromReference(MetadataReader reader, TypeReferenceHandle handle, byte rawTypeKind) => GetTypeName(reader, handle);
+    public string GetTypeFromDefinition(MetadataReader reader, TypeDefinitionHandle handle, byte rawTypeKind) => reader.GetTypeName(handle);
+    public string GetTypeFromReference(MetadataReader reader, TypeReferenceHandle handle, byte rawTypeKind) => reader.GetTypeName(handle);
     public string GetTypeFromSpecification(MetadataReader reader, object? genericContext, TypeSpecificationHandle handle, byte rawTypeKind) {
         return reader.GetTypeSpecification(handle).DecodeSignature(this, genericContext);
     }
@@ -44,25 +45,5 @@ internal sealed class TypeNameSignatureProvider : ISignatureTypeProvider<string,
             PrimitiveTypeCode.TypedReference => "System.TypedReference",
             _ => typeCode.ToString()
         };
-    }
-
-    public static string GetTypeName(MetadataReader reader, TypeDefinitionHandle handle) {
-        var type = reader.GetTypeDefinition(handle);
-        var name = reader.GetString(type.Name);
-        var declaringType = type.GetDeclaringType();
-        if (!declaringType.IsNil)
-            return $"{GetTypeName(reader, declaringType)}.{name}";
-        return JoinNamespace(reader.GetString(type.Namespace), name);
-    }
-    public static string GetTypeName(MetadataReader reader, TypeReferenceHandle handle) {
-        var type = reader.GetTypeReference(handle);
-        var name = reader.GetString(type.Name);
-        if (type.ResolutionScope.Kind == HandleKind.TypeReference)
-            return $"{GetTypeName(reader, (TypeReferenceHandle)type.ResolutionScope)}.{name}";
-        return JoinNamespace(reader.GetString(type.Namespace), name);
-    }
-
-    private static string JoinNamespace(string ns, string name) {
-        return string.IsNullOrEmpty(ns) ? name : $"{ns}.{name}";
     }
 }

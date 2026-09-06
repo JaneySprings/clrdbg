@@ -28,17 +28,17 @@ internal class FuncEvalRunner {
     // 'arguments' must hold the original reference values for instance methods ('this' is not dereferenced)
     public Task<ICorDebugValue?> CallFunctionAsync(ICorDebugEval eval, ICorDebugFunction function, ICorDebugType[] typeArguments, ICorDebugValue[] arguments, bool throwOnException = false) {
         return RunAsync(eval, throwOnException,
-            () => eval.CallParameterizedFunction(function, NullIfEmpty(typeArguments), arguments),
-            GetFunctionResult);
+            () => eval.CallParameterizedFunction(function, typeArguments.NullIfEmpty(), arguments),
+            it => it.GetCallResult());
     }
     public Task<ICorDebugValue?> NewObjectAsync(ICorDebugEval eval, ICorDebugFunction constructor, ICorDebugType[] typeArguments, ICorDebugValue[] arguments, bool throwOnException = false) {
         return RunAsync(eval, throwOnException,
-            () => eval.NewParameterizedObject(constructor, NullIfEmpty(typeArguments), arguments),
+            () => eval.NewParameterizedObject(constructor, typeArguments.NullIfEmpty(), arguments),
             it => it.GetResult());
     }
     public Task<ICorDebugValue?> NewObjectNoConstructorAsync(ICorDebugEval eval, ICorDebugClass corClass, ICorDebugType[] typeArguments, bool throwOnException = false) {
         return RunAsync(eval, throwOnException,
-            () => eval.NewParameterizedObjectNoConstructor(corClass, NullIfEmpty(typeArguments)),
+            () => eval.NewParameterizedObjectNoConstructor(corClass, typeArguments.NullIfEmpty()),
             it => it.GetResult());
     }
     public Task<ICorDebugValue?> NewArrayAsync(ICorDebugEval eval, ICorDebugType elementType, uint length, bool throwOnException = false) {
@@ -134,6 +134,9 @@ internal class FuncEvalRunner {
         var waitTask = waitForEvalEvent();
         if (await Task.WhenAny(waitTask, Task.Delay(EvalTimeoutMilliseconds)) == waitTask)
             return await waitTask;
+        // A completion that landed right at the deadline is a result, not a timeout
+        if (waitTask.IsCompleted)
+            return await waitTask;
 
         DebuggerLoggingService.LogMessage($"The evaluation did not complete within {EvalTimeoutMilliseconds} ms, aborting it");
         eval.TryAbort();
@@ -147,14 +150,5 @@ internal class FuncEvalRunner {
         if (eval.TryGetResult(out var result) == Cor.S_OK && result is ICorDebugHandleValue handle)
             handle.TryDispose();
         throw new EvaluationTimeoutException();
-    }
-    private static ICorDebugValue? GetFunctionResult(ICorDebugEval eval) {
-        var result = eval.TryGetResult(out var value);
-        if (result != Cor.CORDBG_S_FUNC_EVAL_HAS_NO_RESULT && value == null)
-            Marshal.ThrowExceptionForHR(result);
-        return value;
-    }
-    private static ICorDebugType[]? NullIfEmpty(ICorDebugType[] typeArguments) {
-        return typeArguments.Length == 0 ? null : typeArguments;
     }
 }

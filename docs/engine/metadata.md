@@ -103,6 +103,10 @@ names, field/method attributes, custom attributes (`DebuggerDisplay`, `DebuggerT
 `DebuggerBrowsable`, `Flags`, the step-filter attributes in `Metadata/AttributeNames`), enum literals
 and nested type lookups. `Extensions/MetadataImportExtensions` adds the small helpers the engine needs
 (`IsStatic`/`IsLiteral` on field tokens, `IsNonUserMethod`/`IsPropertyOrOperator` on method tokens,
-`HasAttribute`, `FindTypeDef`/`FindNestedTypeDef`, `FindProperty`), and `Variables/CustomAttributeReader`
+`HasAttribute`, `GetDebuggerBrowsableState`, `IsValueType`, `FindTypeDef`/`FindNestedTypeDef`, `FindProperty`,
+`GetTypeName` of a definition, reference or generic instantiation token), `Extensions/MetadataReaderExtensions`
+does the same over the `System.Reflection.Metadata` readers (`GetTypeName`/`GetFullName` of a definition or
+reference, `GetParameterList`, `TryFindTypeDefinition`/`TryFindMethodDefinition`, `IsValueType`,
+`MatchesAssemblyIdentity`), and `Variables/CustomAttributeReader`
 decodes attribute blobs (the prolog, a string
 constructor argument, string/`Type` named arguments, the `DebuggerBrowsableState` integer).

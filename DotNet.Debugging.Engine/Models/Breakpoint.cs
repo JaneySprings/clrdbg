@@ -1,5 +1,6 @@
 using DotNet.Debugging.CorApi;
 using DotNet.Debugging.Engine.Enums;
+using DotNet.Debugging.Engine.Extensions;
 
 namespace DotNet.Debugging.Engine.Models;
 
@@ -40,25 +41,21 @@ public class Breakpoint {
         RequestedColumn = request.Column;
         Line = request.Line;
         Column = request.Column;
-        Condition = NormalizeExpression(request.Condition);
-        HitCondition = NormalizeExpression(request.HitCondition);
-        LogMessage = NormalizeExpression(request.LogMessage);
+        Condition = request.Condition.NullIfWhiteSpace();
+        HitCondition = request.HitCondition.NullIfWhiteSpace();
+        LogMessage = request.LogMessage.NullIfWhiteSpace();
         FunctionBindings = new List<FunctionBreakpointBinding>();
     }
     public Breakpoint(int id, FunctionBreakpointRequest request) {
         Id = id;
         FunctionName = request.Name;
-        Condition = NormalizeExpression(request.Condition);
-        HitCondition = NormalizeExpression(request.HitCondition);
+        Condition = request.Condition.NullIfWhiteSpace();
+        HitCondition = request.HitCondition.NullIfWhiteSpace();
         FunctionBindings = new List<FunctionBreakpointBinding>();
     }
 
     internal void SetStatus(BreakpointStatus status, string? error = null) {
         Status = status;
         Error = error;
-    }
-
-    private static string? NormalizeExpression(string? expression) {
-        return string.IsNullOrWhiteSpace(expression) ? null : expression;
     }
 }

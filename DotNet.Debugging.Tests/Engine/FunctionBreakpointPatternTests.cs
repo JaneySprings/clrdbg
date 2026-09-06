@@ -58,4 +58,10 @@ public class FunctionBreakpointPatternTests {
     public void InvalidPatternTest(string value) {
         Assert.Throws<ArgumentException>(() => FunctionBreakpointPattern.Parse(value));
     }
+
+    [Test]
+    public void ModifiersAndSuffixesTest() {
+        var pattern = FunctionBreakpointPattern.Parse("Program.Run(ref int, out string[], int*, params object[], in int?)");
+        Assert.That(pattern.Parameters!.Value, Is.EqualTo(new[] { "System.Int32&", "System.String[]&", "System.Int32*", "System.Object[]", "System.Nullable`1<System.Int32>&" }));
+    }
 }

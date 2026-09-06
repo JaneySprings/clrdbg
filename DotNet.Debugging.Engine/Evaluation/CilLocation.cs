@@ -29,6 +29,20 @@ internal class CorDebugLocation : ICilLocation {
     // Fetched anew on every access when the location was created with a fetch (a frame slot): the value object of a
     // value type is a snapshot, and the debuggee's memory behind it changes under an instance call on the slot
     public ICorDebugValue Value => fetch != null ? fetch() : value!;
+    // A slot whose static type is a reference type: an 'object', class, string or array local, field or element
+    public bool IsReferenceSlot {
+        get {
+            if (GetStorageValue() is not ICorDebugReferenceValue reference)
+                return false;
+            if (reference.GetElementType() is not (CorElementType.CLASS or CorElementType.OBJECT or CorElementType.STRING or CorElementType.SZARRAY or CorElementType.ARRAY))
+                return false;
+            // A value-type location surfaced as a reference (an enum local) dereferences straight to its value, a
+            // reference slot to a heap object - a box included
+            if (!reference.IsNull() && reference.Dereference() is ICorDebugGenericValue target && target.GetElementType() == CorElementType.VALUETYPE)
+                return false;
+            return true;
+        }
+    }
 
     public CorDebugLocation(ICorDebugValue value) {
         this.value = value;
@@ -46,11 +60,11 @@ internal class CorDebugLocation : ICilLocation {
     }
     public void Write(CilValue source) {
         var storage = GetStorageValue();
-        // A source referencing a heap object (a string, a class instance, an array) goes into a reference slot as that
-        // reference whatever the slot holds now: an 'object' slot holding a boxed primitive unwraps to that primitive,
-        // and writing the source's bytes into the box would not be an assignment. Values (a boxed enum or struct the
-        // evaluation produced, a host primitive) keep copying their bytes into the unwrapped destination
-        if (storage is ICorDebugReferenceValue slotReference && IsHeapObjectReference(source)) {
+        // A reference slot takes the reference (or null) whatever it holds now: an 'object' slot holding a box unwraps to
+        // the boxed value, and writing the source's bytes into that box would change every other reference to it rather
+        // than assign the slot. A heap object (a string, a class instance, an array) is stored by reference everywhere;
+        // values (a boxed enum or struct the evaluation produced, a host primitive) copy their bytes into a value slot
+        if (storage is ICorDebugReferenceValue slotReference && (IsReferenceSlot || source.IsHeapObjectReference())) {
             WriteReference(slotReference, source);
             return;
         }
@@ -58,7 +72,7 @@ internal class CorDebugLocation : ICilLocation {
 
         // Value-typed storage. Value-type locations may be surfaced as an ICorDebugReferenceValue (e.g. enum locals),
         // so the discriminating signal is the dereferenced destination being a value-type generic, not whether the storage itself is a reference
-        if (destination is ICorDebugGenericValue destinationGeneric && IsValueType(destinationGeneric.GetElementType())) {
+        if (destination is ICorDebugGenericValue destinationGeneric && destinationGeneric.GetElementType().IsValueType()) {
             if (source.CorValue?.UnwrapDebugValue() is ICorDebugGenericValue sourceGeneric) {
                 if (destinationGeneric.GetSize() != sourceGeneric.GetSize())
                     throw new InvalidOperationException("CIL value sizes do not match");
@@ -112,18 +126,6 @@ internal class CorDebugLocation : ICilLocation {
         if (Value is ICorDebugReferenceValue byRef && byRef.GetElementType() == CorElementType.BYREF)
             return byRef.Dereference();
         return Value;
-    }
-    private static bool IsHeapObjectReference(CilValue source) {
-        if (source.CorValue is not ICorDebugReferenceValue reference || reference.IsNull())
-            return false;
-        var target = reference.Dereference();
-        return target is ICorDebugStringValue or ICorDebugArrayValue || (target is ICorDebugObjectValue && target is not ICorDebugBoxValue);
-    }
-    private static bool IsValueType(CorElementType elementType) {
-        return elementType is CorElementType.VALUETYPE or CorElementType.BOOLEAN or CorElementType.CHAR
-            or CorElementType.I1 or CorElementType.U1 or CorElementType.I2 or CorElementType.U2
-            or CorElementType.I4 or CorElementType.U4 or CorElementType.I8 or CorElementType.U8
-            or CorElementType.R4 or CorElementType.R8 or CorElementType.I or CorElementType.U;
     }
 }
 
@@ -195,6 +197,45 @@ internal static class CilValueEncoding {
             CorElementType.I4 or CorElementType.U4 or CorElementType.R4 => 4,
             CorElementType.I8 or CorElementType.U8 or CorElementType.R8 => 8,
             _ => throw new NotSupportedException($"The size of a '{elementType}' value is not fixed")
+        };
+    }
+    // The host primitive 'elementType' bytes hold at 'offset', null for an element type that is not a primitive
+    public static object? Decode(byte[] data, int offset, CorElementType elementType) {
+        var bytes = data.AsSpan(offset);
+        return elementType switch {
+            CorElementType.BOOLEAN => data[offset] != 0,
+            CorElementType.CHAR => BitConverter.ToChar(bytes),
+            CorElementType.I1 => unchecked((sbyte)data[offset]),
+            CorElementType.U1 => data[offset],
+            CorElementType.I2 => BitConverter.ToInt16(bytes),
+            CorElementType.U2 => BitConverter.ToUInt16(bytes),
+            CorElementType.I4 => BitConverter.ToInt32(bytes),
+            CorElementType.U4 => BitConverter.ToUInt32(bytes),
+            CorElementType.I8 => BitConverter.ToInt64(bytes),
+            CorElementType.U8 => BitConverter.ToUInt64(bytes),
+            CorElementType.R4 => BitConverter.ToSingle(bytes),
+            CorElementType.R8 => BitConverter.ToDouble(bytes),
+            CorElementType.I => bytes.Length == 8 ? BitConverter.ToInt64(bytes) : BitConverter.ToInt32(bytes),
+            CorElementType.U => bytes.Length == 8 ? BitConverter.ToUInt64(bytes) : BitConverter.ToUInt32(bytes),
+            _ => null
+        };
+    }
+    // The element type of a host primitive
+    public static CorElementType GetElementType(object value) {
+        return value switch {
+            bool => CorElementType.BOOLEAN,
+            char => CorElementType.CHAR,
+            sbyte => CorElementType.I1,
+            byte => CorElementType.U1,
+            short => CorElementType.I2,
+            ushort => CorElementType.U2,
+            int => CorElementType.I4,
+            uint => CorElementType.U4,
+            long => CorElementType.I8,
+            ulong => CorElementType.U8,
+            float => CorElementType.R4,
+            double => CorElementType.R8,
+            _ => throw new NotSupportedException($"Value '{value.GetType().Name}' is not a primitive CIL value")
         };
     }
     private static long GetIntegerBits(object value) {

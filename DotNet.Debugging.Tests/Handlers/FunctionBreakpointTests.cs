@@ -10,7 +10,9 @@ public class FunctionBreakpointTests : BaseDebugTestFixture {
         return """
         Worker.Process(1);
         Worker.Process("two");
+        Worker.Process(new[] { 3, 4 });
         Helper.Run();
+        await Worker.ProcessAsync(5);
         Console.WriteLine("done"); // marker:end
 
         public static class Worker {
@@ -19,6 +21,13 @@ public class FunctionBreakpointTests : BaseDebugTestFixture {
             }
             public static void Process(string text) { // marker:processString
                 Console.WriteLine(text);
+            }
+            public static void Process(int[] numbers) { // marker:processArray
+                Console.WriteLine(numbers.Length);
+            }
+            public static async Task ProcessAsync(int number) { // marker:processAsync
+                await Task.Delay(1);
+                Console.WriteLine(number);
             }
         }
         public static class Helper {
@@ -74,6 +83,31 @@ public class FunctionBreakpointTests : BaseDebugTestFixture {
         Assert.That(GetTopStackFrame(stopped.ThreadId!.Value).Line, Is.EqualTo(GetMarkerLine("marker:processString")),
             "Only the overload matching the parameter list stops");
 
+        Continue(stopped.ThreadId!.Value);
+        WaitForEvent<TerminatedEvent>();
+    }
+
+    // An async method has no code of its own, the breakpoint binds at its state machine's first statement
+    [Test]
+    public void AsyncMethodBindsAtItsBodyTest() {
+        Launch();
+        SetFunctionBreakpoints("Worker.ProcessAsync");
+        ConfigurationDone();
+
+        var stopped = WaitForStopped(StoppedEvent.ReasonValue.Breakpoint);
+        Assert.That(GetTopStackFrame(stopped.ThreadId!.Value).Line, Is.EqualTo(GetMarkerLine("marker:processAsync")));
+        Continue(stopped.ThreadId!.Value);
+        WaitForEvent<TerminatedEvent>();
+    }
+
+    [Test]
+    public void ArrayParameterSelectsTheOverloadTest() {
+        Launch();
+        SetFunctionBreakpoints("Worker.Process(int[])");
+        ConfigurationDone();
+
+        var stopped = WaitForStopped(StoppedEvent.ReasonValue.Breakpoint);
+        Assert.That(GetTopStackFrame(stopped.ThreadId!.Value).Line, Is.EqualTo(GetMarkerLine("marker:processArray")));
         Continue(stopped.ThreadId!.Value);
         WaitForEvent<TerminatedEvent>();
     }

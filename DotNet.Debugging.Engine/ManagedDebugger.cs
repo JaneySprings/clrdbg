@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using System.Reflection.Metadata;
-using System.Reflection.Metadata.Ecma335;
 using System.Runtime.InteropServices;
 using System.Threading.Channels;
 using DotNet.Debugging.CorApi;
@@ -11,7 +9,6 @@ using DotNet.Debugging.Engine.Evaluation;
 using DotNet.Debugging.Engine.Extensions;
 using DotNet.Debugging.Engine.Interop;
 using DotNet.Debugging.Engine.Logging;
-using DotNet.Debugging.Engine.Metadata;
 using DotNet.Debugging.Engine.Models;
 using DotNet.Debugging.Engine.Stepping;
 using DotNet.Debugging.Engine.Variables;
@@ -53,6 +50,7 @@ public partial class ManagedDebugger {
     // An exception stop is being reported and the subscriber has not continued it (yet)
     private bool isExceptionStopPending;
     private bool isRemoteAttach;
+    private string? remotePlatform;
     private int? mainThreadId;
     private int nextModuleId;
 
@@ -70,6 +68,8 @@ public partial class ManagedDebugger {
     // Incremented whenever a module is loaded or its metadata changes, so everything derived from the module set can detect staleness
     internal int ModulesVersion { get; private set; }
     internal bool IsEvaluating => FuncEval.IsRunning;
+    // A Mac Catalyst app is attached through the remote transport but runs on this machine
+    private bool HasLocalProcess => !isRemoteAttach || (remotePlatform != null && remotePlatform.Contains("maccatalyst", StringComparison.OrdinalIgnoreCase));
 
     public event Action<StopInfo>? OnStopped;
     // The subscriber decides whether to stop (do nothing) or to 'Continue()' after an exception
@@ -142,6 +142,7 @@ public partial class ManagedDebugger {
         DebuggerLoggingService.LogMessage($"Attaching to remote target on {attachInfo.Address}:{attachInfo.Port} ({attachInfo.Platform})");
         EnsureNotStarted();
         isRemoteAttach = true;
+        remotePlatform = attachInfo.Platform;
         corDebug = DbgShimHost.CreateRemote(attachInfo);
         corDebug.SetManagedHandler(callbacks);
         onListenerReady?.Invoke();
@@ -248,9 +249,10 @@ public partial class ManagedDebugger {
             foreach (var thread in process.GetThreads()) {
                 var threadId = thread.GetId();
                 var isMain = threadId == mainThreadId;
-                // The OS name of the main thread is the executable's ('dotnet' on Linux), the host labels it instead
-                var name = GetManagedThreadName(thread);
-                if (name == null && !isMain)
+                // The OS name of the main thread is the executable's ('dotnet' on Linux), the host labels it instead. The
+                // OS is asked for a local process only: a device's ids would name some unrelated local thread
+                var name = thread.GetManagedName();
+                if (name == null && !isMain && HasLocalProcess)
                     name = NativeThreadNames.GetThreadName(ProcessId, threadId);
                 result.Add(new ThreadInfo(threadId, name, isMain));
             }
@@ -267,7 +269,7 @@ public partial class ManagedDebugger {
             return result;
 
         var depth = 0;
-        foreach (var frame in EnumerateFrames(thread)) {
+        foreach (var frame in thread.GetManagedFrames()) {
             var frameId = frameReferenceManager.GetOrCreate(threadId, depth++);
             result.Add(CreateStackFrameInfo(frameId, frame));
         }
@@ -359,7 +361,7 @@ public partial class ManagedDebugger {
         try {
             if (value is ICorDebugReferenceValue reference && reference.IsNull())
                 return null;
-            var display = await variableProvider.FormatValueAsync(value, threadId, 0, false);
+            var display = await variableProvider.FormatValueAsync(value, threadId, 0, escapeStrings: false, createProxy: false);
             return display.Value;
         }
         finally {
@@ -396,7 +398,7 @@ public partial class ManagedDebugger {
     }
     // Frames are re-obtained from the thread every time, the ICorDebugFrame objects are neutered by any continue
     internal ICorDebugFrame GetFrame(int threadId, int depth) {
-        return EnumerateFrames(GetThread(threadId)).ElementAt(depth);
+        return GetThread(threadId).GetManagedFrames().ElementAt(depth);
     }
     internal ICorDebugILFrame GetILFrame(int threadId, int depth) {
         if (GetFrame(threadId, depth) is not ICorDebugILFrame frame)
@@ -466,7 +468,7 @@ public partial class ManagedDebugger {
     }
     private async Task DispatchEventAsync(CorDebugManagedCallbackEventArgs callbackEvent) {
         try {
-            DebuggerLoggingService.LogMessage($"Event: {DescribeEvent(callbackEvent)}");
+            DebuggerLoggingService.LogMessage($"Event: {callbackEvent.Describe()}");
             switch (callbackEvent) {
                 case LogMessageCorDebugManagedCallbackEventArgs logMessage:
                     HandleLogMessage(logMessage);
@@ -515,8 +517,12 @@ public partial class ManagedDebugger {
         }
         catch (Exception ex) {
             DebuggerLoggingService.LogError($"Error handling {callbackEvent.GetType().Name}", ex);
-            if (process != null && process.TryIsRunning(out var isRunning) == Cor.S_OK && !isRunning)
-                ContinueProcess();
+            // A failing recovery continue is logged rather than thrown: an exception here would end the event loop
+            if (process != null && process.TryIsRunning(out var isRunning) == Cor.S_OK && !isRunning) {
+                var result = process.TryContinue(false);
+                if (result != Cor.S_OK)
+                    DebuggerLoggingService.LogMessage($"The process could not be continued after the failed handler: 0x{result:X8}");
+            }
         }
     }
 
@@ -622,38 +628,6 @@ public partial class ManagedDebugger {
         }
     }
 
-    // The callback and what tells its occurrences apart: the thread, an exception dispatch's stage and frame, a step's reason
-    private string DescribeEvent(CorDebugManagedCallbackEventArgs callbackEvent) {
-        try {
-            switch (callbackEvent) {
-                case BreakpointCorDebugManagedCallbackEventArgs breakpoint:
-                    return $"Breakpoint on thread {breakpoint.Thread.GetId()} at {DescribeFrame(breakpoint.Thread.GetActiveFrame())}";
-                case StepCompleteCorDebugManagedCallbackEventArgs stepComplete:
-                    return $"StepComplete ({stepComplete.Reason}) on thread {stepComplete.Thread.GetId()} at {DescribeFrame(stepComplete.Thread.GetActiveFrame())}";
-                case ExceptionCorDebugManagedCallbackEventArgs exception:
-                    return $"Exception ({(exception.Unhandled ? "unhandled" : "first chance")}) on thread {exception.Thread.GetId()} at {DescribeFrame(exception.Thread.GetActiveFrame())}";
-                case Exception2CorDebugManagedCallbackEventArgs dispatch:
-                    return $"Exception2 ({dispatch.DwEventType}) on thread {dispatch.Thread.GetId()}, frame {DescribeFrame(dispatch.Frame)}, offset IL_{dispatch.NOffset:X4}";
-                case EvalCompleteCorDebugManagedCallbackEventArgs evalComplete:
-                    return $"EvalComplete on thread {evalComplete.Thread.GetId()}";
-                case EvalExceptionCorDebugManagedCallbackEventArgs evalException:
-                    return $"EvalException on thread {evalException.Thread.GetId()}";
-                default:
-                    return callbackEvent.GetType().Name;
-            }
-        }
-        catch {
-            return callbackEvent.GetType().Name;
-        }
-    }
-    private static string DescribeFrame(ICorDebugFrame? frame) {
-        if (frame is not ICorDebugILFrame ilFrame)
-            return frame == null ? "no frame" : "non-IL frame";
-        var function = ilFrame.GetFunction();
-        var methodName = function.GetModule().GetMetaDataInterface<IMetaDataImport>().GetMethodProps(function.GetToken()).szMethod;
-        return $"{methodName} IL_{ilFrame.GetIP().pnOffset:X4}";
-    }
-
     private void ContinueProcess() {
         ArgumentNullException.ThrowIfNull(process);
         process.Continue(false);
@@ -697,105 +671,19 @@ public partial class ManagedDebugger {
         standardInput = null;
     }
 
-    private static IEnumerable<ICorDebugFrame> EnumerateFrames(ICorDebugThread thread) {
-        foreach (var chain in thread.GetChains()) {
-            if (!chain.IsManaged())
-                continue;
-            foreach (var frame in chain.GetFrames())
-                yield return frame;
-        }
-    }
     private StackFrameInfo CreateStackFrameInfo(int frameId, ICorDebugFrame frame) {
         if (frame is ICorDebugILFrame ilFrame) {
             var function = ilFrame.GetFunction();
             var module = GetModule(function.GetModule());
-            var info = new StackFrameInfo(frameId, StackFrameKind.Managed, GetMethodDisplayName(function, module));
+            var info = new StackFrameInfo(frameId, StackFrameKind.Managed, function.GetDisplayName(module.MetadataReader.PeMetadataReader));
             info.ModuleName = module.Name;
             info.ModulePath = module.Path;
             info.Location = GetSourceLocation(ilFrame);
-            info.InstructionPointer = GetInstructionPointer(frame, function);
+            info.InstructionPointer = frame.GetInstructionPointer(function);
             return info;
         }
         if (frame is ICorDebugInternalFrame internalFrame)
-            return new StackFrameInfo(frameId, StackFrameKind.Internal, GetInternalFrameName(internalFrame.GetFrameType()));
+            return new StackFrameInfo(frameId, StackFrameKind.Internal, internalFrame.GetDisplayName());
         return new StackFrameInfo(frameId, StackFrameKind.Native, "[Native Frame]");
-    }
-    // 'Namespace.Type.Method(string[] args)', the parameter list comes from the PE metadata
-    private static string GetMethodDisplayName(ICorDebugFunction function, ModuleInfo module) {
-        try {
-            var token = function.GetToken();
-            var metadataImport = function.GetModule().GetMetaDataInterface<IMetaDataImport>();
-            var methodName = metadataImport.GetMethodProps(token).szMethod;
-            var typeName = metadataImport.GetTypeDefProps(function.GetClass().GetToken()).szTypeDef;
-            return $"{typeName}.{methodName}({GetParameterList(module.MetadataReader.PeMetadataReader, token, DisplayNameSignatureProvider.Instance)})";
-        }
-        catch {
-            return "Unknown";
-        }
-    }
-    private static string GetParameterList(MetadataReader reader, int methodToken, ISignatureTypeProvider<string, object?> typeProvider) {
-        try {
-            var method = reader.GetMethodDefinition(MetadataTokens.MethodDefinitionHandle(methodToken));
-            var parameterTypes = method.DecodeSignature(typeProvider, null).ParameterTypes;
-            // Sequence 0 is the return value, the rest are the 1-based positional parameters
-            var parameterNames = method.GetParameters()
-                .Select(reader.GetParameter)
-                .Where(it => it.SequenceNumber > 0)
-                .OrderBy(it => it.SequenceNumber)
-                .Select(it => reader.GetString(it.Name))
-                .ToList();
-            var parameters = parameterTypes.Select((type, index) => index < parameterNames.Count ? $"{type} {parameterNames[index]}" : type);
-            return string.Join(", ", parameters);
-        }
-        catch {
-            return string.Empty;
-        }
-    }
-    // The native address the frame is executing at: the start of the jitted code plus the native offset
-    private static ulong? GetInstructionPointer(ICorDebugFrame frame, ICorDebugFunction function) {
-        try {
-            if (frame is not ICorDebugNativeFrame nativeFrame)
-                return null;
-            return function.GetNativeCode().GetAddress().Value + (ulong)nativeFrame.GetIP();
-        }
-        catch {
-            // Not jitted yet, or no native view of the frame
-            return null;
-        }
-    }
-    private static string GetInternalFrameName(CorDebugInternalFrameType frameType) {
-        return frameType switch {
-            CorDebugInternalFrameType.STUBFRAME_M2U => "[Managed to Native Transition]",
-            CorDebugInternalFrameType.STUBFRAME_U2M => "[Native to Managed Transition]",
-            CorDebugInternalFrameType.STUBFRAME_APPDOMAIN_TRANSITION => "[Appdomain Transition]",
-            CorDebugInternalFrameType.STUBFRAME_LIGHTWEIGHT_FUNCTION => "[Lightweight Function]",
-            CorDebugInternalFrameType.STUBFRAME_FUNC_EVAL => "[Function Evaluation]",
-            CorDebugInternalFrameType.STUBFRAME_INTERNALCALL => "[Internal Call]",
-            CorDebugInternalFrameType.STUBFRAME_CLASS_INIT => "[Class Initialization]",
-            CorDebugInternalFrameType.STUBFRAME_EXCEPTION => "[Exception]",
-            CorDebugInternalFrameType.STUBFRAME_SECURITY => "[Security]",
-            CorDebugInternalFrameType.STUBFRAME_JIT_COMPILATION => "[JIT Compilation]",
-            _ => "[Unknown]"
-        };
-    }
-
-    // The managed 'Thread.Name': the '_name' field of the Thread object, read without running code
-    private string? GetManagedThreadName(ICorDebugThread thread) {
-        try {
-            if (thread.GetObject()?.UnwrapDebugValue() is ICorDebugObjectValue threadObject) {
-                var corClass = threadObject.GetClass();
-                var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
-                var nameField = metadataImport.EnumFieldsWithName(corClass.GetToken(), "_name").SingleOrDefault();
-                if (!nameField.IsNil && threadObject.GetFieldValue(corClass, nameField).UnwrapDebugValue() is ICorDebugStringValue name) {
-                    var managedName = name.GetString();
-                    if (!string.IsNullOrEmpty(managedName))
-                        return managedName;
-                }
-            }
-        }
-        catch (Exception ex) {
-            DebuggerLoggingService.LogMessage($"Failed to read the managed name of thread {thread.GetId()}: {ex.Message}");
-        }
-        return null;
     }
 }

@@ -1,4 +1,5 @@
 using System.Reflection.Metadata.Ecma335;
+using DotNet.Debugging.Engine.Extensions;
 using DotNet.Debugging.Engine.Metadata;
 using DotNet.Debugging.Engine.Models;
 
@@ -10,7 +11,7 @@ internal static class FunctionBreakpointResolver {
         var result = new List<ResolvedBreakpoint>();
         var reader = metadataReader.PeMetadataReader;
         foreach (var typeHandle in reader.TypeDefinitions) {
-            if (!pattern.MatchesType(TypeNameSignatureProvider.GetTypeName(reader, typeHandle)))
+            if (!pattern.MatchesType(reader.GetTypeName(typeHandle)))
                 continue;
 
             foreach (var methodHandle in reader.GetTypeDefinition(typeHandle).GetMethods()) {

@@ -81,9 +81,11 @@ public abstract class BaseDebugTestFixture {
             RedirectStandardError = true,
         });
         Assert.That(buildProcess, Is.Not.Null);
-        var buildOutput = buildProcess!.StandardOutput.ReadToEnd();
+        // Both streams are drained, a full stderr pipe would block the build
+        var buildErrors = buildProcess!.StandardError.ReadToEndAsync();
+        var buildOutput = buildProcess.StandardOutput.ReadToEnd();
         buildProcess.WaitForExit();
-        Assert.That(buildProcess.ExitCode, Is.EqualTo(0), $"Failed to build the debuggee:{Environment.NewLine}{buildOutput}");
+        Assert.That(buildProcess.ExitCode, Is.EqualTo(0), $"Failed to build the debuggee:{Environment.NewLine}{buildOutput}{buildErrors.Result}");
         Assert.That(File.Exists(ProgramPath), $"Debuggee assembly not found: {ProgramPath}");
         File.WriteAllText(stampPath, fingerprint);
     }

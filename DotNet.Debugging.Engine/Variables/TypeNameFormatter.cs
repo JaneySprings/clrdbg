@@ -25,6 +25,15 @@ internal static class TypeNameFormatter {
         var typeParameters = type.GetTypeParameters().ToList();
         return GetClassName(type.GetClass(), typeParameters);
     }
+    // Null when the type cannot be named (the remote transport hands back types without an element type)
+    public static string? TryGetTypeName(ICorDebugType type) {
+        try {
+            return GetTypeName(type);
+        }
+        catch {
+            return null;
+        }
+    }
     public static string? GetPrimitiveTypeName(CorElementType elementType) {
         return elementType switch {
             CorElementType.VOID => "void",

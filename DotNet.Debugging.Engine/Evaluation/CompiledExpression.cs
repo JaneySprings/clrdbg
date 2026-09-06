@@ -1,5 +1,6 @@
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
+using DotNet.Debugging.Engine.Extensions;
 
 namespace DotNet.Debugging.Engine.Evaluation;
 
@@ -16,7 +17,9 @@ internal class CompiledExpression : IDisposable {
         peStream = new MemoryStream(assembly, writable: false);
         PeReader = new PEReader(peStream);
         MetadataReader = PeReader.GetMetadataReader();
-        EntryMethod = FindMethod(MetadataReader, typeName, methodName);
+        if (!MetadataReader.TryFindMethodDefinition(typeName, methodName, out var entryMethod))
+            throw new InvalidOperationException($"The generated evaluation method '{typeName}.{methodName}' was not found");
+        EntryMethod = entryMethod;
     }
 
     public MethodBodyBlock GetMethodBody(MethodDefinitionHandle handle) {
@@ -36,18 +39,5 @@ internal class CompiledExpression : IDisposable {
     public void Dispose() {
         PeReader.Dispose();
         peStream.Dispose();
-    }
-
-    private static MethodDefinitionHandle FindMethod(MetadataReader reader, string typeName, string methodName) {
-        foreach (var typeHandle in reader.TypeDefinitions) {
-            var type = reader.GetTypeDefinition(typeHandle);
-            if (reader.GetString(type.Name) != typeName)
-                continue;
-            foreach (var methodHandle in type.GetMethods()) {
-                if (reader.GetString(reader.GetMethodDefinition(methodHandle).Name) == methodName)
-                    return methodHandle;
-            }
-        }
-        throw new InvalidOperationException($"The generated evaluation method '{typeName}.{methodName}' was not found");
     }
 }

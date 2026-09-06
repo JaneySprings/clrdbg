@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using System.Reflection.Metadata;
-using System.Reflection.Metadata.Ecma335;
 using System.Runtime.InteropServices;
 using DotNet.Debugging.CorApi;
 using DotNet.Debugging.CorApi.Extensions;
@@ -146,10 +144,15 @@ internal class VariableProvider {
         variable.VariablesReference = CreateChildrenReference(value, display.TypeName, threadId, frameDepth, display.ProxyValue, evaluateName);
         return variable;
     }
-    // Formats a value, running its DebuggerDisplay expression and creating its DebuggerTypeProxy in the debuggee when it has them
-    public async Task<ValueDisplay> FormatValueAsync(ICorDebugValue value, int threadId, int frameDepth, bool escapeStrings) {
+    // Formats a value, running its DebuggerDisplay expression and creating its DebuggerTypeProxy in the debuggee when it
+    // has them. A caller that only shows the text (a logpoint, an exception property) skips the proxy, which is a func eval
+    public async Task<ValueDisplay> FormatValueAsync(ICorDebugValue value, int threadId, int frameDepth, bool escapeStrings, bool createProxy = true) {
         var formatted = ValueFormatter.Format(value, escapeStrings);
         var text = formatted.Value;
+        // A nullable's template and proxy belong to its underlying value
+        var displayValue = value;
+        if (formatted.TypeName.EndsWith('?'))
+            displayValue = value.UnwrapDebugValueToObject().GetNullableValue() ?? value;
         if (formatted.RequiresDebuggerDisplay) {
             if (limitImplicitEvals && implicitEvalTime.ElapsedMilliseconds >= ImplicitEvalBudgetMilliseconds) {
                 // The budget ran out, the value falls back to the display it would have without the override
@@ -158,7 +161,7 @@ internal class VariableProvider {
             else {
                 implicitEvalTime.Start();
                 try {
-                    var context = new EvaluationContext(debugger.GetThread(threadId), threadId, frameDepth, value);
+                    var context = new EvaluationContext(debugger.GetThread(threadId), threadId, frameDepth, displayValue);
                     using var result = await debugger.GetEvaluator().EvaluateAsync($"$\"{text}\"", context);
                     if (result.TimedOut) {
                         // Cut off like a value past the budget, the way Microsoft's debugger shows one whose evaluation it aborted
@@ -180,8 +183,8 @@ internal class VariableProvider {
         }
 
         ICorDebugValue? proxyValue = null;
-        if (formatted.DebuggerProxyTypeName != null)
-            proxyValue = await CreateDebuggerProxyAsync(value, formatted.DebuggerProxyTypeName, threadId);
+        if (createProxy && formatted.DebuggerProxyTypeName != null)
+            proxyValue = await CreateDebuggerProxyAsync(displayValue, formatted.DebuggerProxyTypeName, threadId);
         return new ValueDisplay(formatted.TypeName, text, proxyValue, false);
     }
 
@@ -196,7 +199,7 @@ internal class VariableProvider {
         // the locals declared inside the lambda body itself are still plain IL locals
         if (hoistedLocalsContainer != null)
             await AddClosureMembersAsync(hoistedLocalsContainer, reference, result);
-        AddLocals(module, function, reference, result);
+        await AddLocalsAsync(module, function, reference, result);
     }
     private void AddCurrentException(VariableReference reference, List<VariableSlot> result) {
         var exception = debugger.GetCurrentException(reference.ThreadId);
@@ -224,7 +227,7 @@ internal class VariableProvider {
                 if (containingTypeKind is GeneratedNameKind.StateMachineType or GeneratedNameKind.LambdaDisplayClass) {
                     // 'this' is the generated class, the user's 'this' is one of its fields (absent when the user's method is static)
                     hoistedLocalsContainer = thisValue;
-                    thisValue = GetHoistedThis(thisValue, metadataImport);
+                    thisValue = thisValue.GetHoistedThis();
                 }
             }
             if (thisValue != null) {
@@ -235,8 +238,7 @@ internal class VariableProvider {
 
         var skipCount = isStatic ? 0 : 1;
         for (var i = skipCount; i < arguments.Length; i++) {
-            var paramDef = metadataImport.GetParamForMethodIndex(function.GetToken(), i - skipCount + 1);
-            var name = metadataImport.GetParamProps(paramDef).szName;
+            var name = metadataImport.FindParameterName(function.GetToken(), i - skipCount + 1);
             if (name == null)
                 continue;
             result.Add(CreateFrameSlot(name, arguments[i], reference));
@@ -249,7 +251,7 @@ internal class VariableProvider {
             return new VariableSlot(VariableInfo.CreateError(name, UnavailableLocation.Message));
         return new VariableSlot(name, async () => await CreateVariableAsync(name, value, reference.ThreadId, reference.FrameDepth, name));
     }
-    private void AddLocals(ModuleInfo module, ICorDebugFunction function, VariableReference reference, List<VariableSlot> result) {
+    private async Task AddLocalsAsync(ModuleInfo module, ICorDebugFunction function, VariableReference reference, List<VariableSlot> result) {
         var frame = debugger.GetILFrame(reference.ThreadId, reference.FrameDepth);
         var locals = frame.GetLocalVariables();
         if (locals.Length == 0)
@@ -260,38 +262,35 @@ internal class VariableProvider {
             // Compiler generated locals (e.g. a DefaultInterpolatedStringHandler) have no name
             if (!names.TryGetValue(i, out var name))
                 continue;
+            // The display class of a lambda declared here ('CS$<>8__locals0', which the compiler leaves visible for the
+            // evaluator's sake) holds the captured locals: those are listed, the class itself is not
+            if (GeneratedNames.GetKind(name) == GeneratedNameKind.DisplayClassLocalOrField) {
+                // A captured parameter is a field of the class and a slot of the frame, the slot listed already wins
+                var listedNames = new Dictionary<string, bool>(StringComparer.Ordinal);
+                foreach (var slot in result)
+                    listedNames[slot.Name] = false;
+                if (locals[i] != null)
+                    await AddClosureMembersAsync(locals[i]!, reference, result, listedNames);
+                continue;
+            }
             result.Add(CreateFrameSlot(name, locals[i], reference));
         }
     }
     // Lists the hoisted locals of a closure and of the closures enclosing it, linked through their '<>8__' fields
-    private async Task AddClosureMembersAsync(ICorDebugValue closure, VariableReference reference, List<VariableSlot> result) {
-        await AddMembersAsync(closure, closure.GetExactType(), MemberFilter.All, listStatics: false, reference, result);
+    private async Task AddClosureMembersAsync(ICorDebugValue closure, VariableReference reference, List<VariableSlot> result, Dictionary<string, bool>? seenNames = null) {
+        // A display class is created where its first captured variable comes into scope: until then the field is null
+        if (closure.UnwrapDebugValue() is not ICorDebugObjectValue objectValue)
+            return;
+        await AddMembersAsync(closure, objectValue.GetExactType(), MemberFilter.All, listStatics: false, reference, result, seenNames);
 
-        var objectValue = closure.UnwrapDebugValueToObject();
         var corClass = objectValue.GetClass();
         var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
         foreach (var field in metadataImport.EnumFields(corClass.GetToken())) {
             if (GeneratedNames.GetKind(metadataImport.GetFieldProps(field).szField) != GeneratedNameKind.DisplayClassLocalOrField)
                 continue;
-            await AddClosureMembersAsync(objectValue.GetFieldValue(corClass, field), reference, result);
+            await AddClosureMembersAsync(objectValue.GetFieldValue(corClass, field), reference, result, seenNames);
             break;
         }
-    }
-    // The user's 'this' captured by a closure or state machine, following the chain of enclosing closures
-    private static ICorDebugValue? GetHoistedThis(ICorDebugValue generatedInstance, IMetaDataImport metadataImport) {
-        var objectValue = generatedInstance.UnwrapDebugValueToObject();
-        var corClass = objectValue.GetClass();
-        foreach (var field in metadataImport.EnumFields(corClass.GetToken())) {
-            var kind = GeneratedNames.GetKind(metadataImport.GetFieldProps(field).szField);
-            if (kind == GeneratedNameKind.ThisProxyField)
-                return objectValue.GetFieldValue(corClass, field);
-            if (kind == GeneratedNameKind.DisplayClassLocalOrField) {
-                var parentClosure = objectValue.GetFieldValue(corClass, field);
-                var parentMetadataImport = parentClosure.UnwrapDebugValueToObject().GetClass().GetModule().GetMetaDataInterface<IMetaDataImport>();
-                return GetHoistedThis(parentClosure, parentMetadataImport);
-            }
-        }
-        return null;
     }
 
     private async Task AddChildrenAsync(VariableReference reference, List<VariableSlot> result, bool includeResultsView) {
@@ -312,7 +311,7 @@ internal class VariableProvider {
         else if (unwrapped is ICorDebugObjectValue objectValue) {
             var type = objectValue.GetExactType();
             await AddMembersAndGroupsAsync(value, type, reference, result, includeNonPublicGroup: true);
-            if (includeResultsView && IsEnumerableType(type))
+            if (includeResultsView && type.IsEnumerableType())
                 result.Add(CreateResultsViewNode(reference));
             SortMembers(result);
         }
@@ -361,14 +360,14 @@ internal class VariableProvider {
         summary.HasNonPublicMembers = filter == MemberFilter.Public && (fields.Any(it => !it.IsInline) || properties.Any(it => !it.IsInline));
 
         // The declaring type names the hidden and the static members, null when it cannot be formatted
-        var typeName = TryGetTypeName(type);
+        var typeName = TypeNameFormatter.TryGetTypeName(type);
         await AddFieldsAsync(FilterMembers(fields, filter), metadataImport, type, typeName, value, reference, result);
         // A property getter cannot be func-evaled with a byref-like 'this' (the debuggee can die on it), such a value lists its fields only
         if (!metadataImport.HasAttribute(typeToken, AttributeNames.IsByRefLike))
             await AddPropertiesAsync(FilterMembers(properties, filter), metadataImport, type, typeName, value, reference, result);
 
         var baseType = type.GetBaseType();
-        if (baseType == null || IsRootType(baseType))
+        if (baseType == null || baseType.IsRootType())
             return summary;
         var baseSummary = await AddMembersAsync(value, baseType, filter, listStatics, reference, result, seenNames);
         summary.HasStaticMembers |= baseSummary.HasStaticMembers;
@@ -389,7 +388,7 @@ internal class VariableProvider {
                 continue;
             // A field hides every base member of its name
             if (TryListMember(seenNames, name, hidesBaseMembers: true, out var isHidden))
-                result.Add(new ListedField(field, name, fieldProps.pdwAttr, fieldProps.pdwCPlusTypeFlag, fieldProps.ppValue, fieldProps.pcchValue, IsListedInline(GetVisibility(fieldProps.pdwAttr), hasSymbols), isHidden));
+                result.Add(new ListedField(field, name, fieldProps.pdwAttr, fieldProps.pdwCPlusTypeFlag, fieldProps.ppValue, fieldProps.pcchValue, IsListedInline(fieldProps.pdwAttr.ToVisibility(), hasSymbols), isHidden));
         }
         return result;
     }
@@ -417,7 +416,7 @@ internal class VariableProvider {
             // virtual members). Microsoft's debugger lists it with the public members, under its interface-qualified
             // name, when the type's module has symbols - among the non-public ones of a module without
             var isExplicitImplementation = getterAttributes.IsMdPrivate() && getterAttributes.IsMdVirtual();
-            var isInline = IsListedInline(GetVisibility(getterAttributes), hasSymbols) || (isExplicitImplementation && hasSymbols);
+            var isInline = IsListedInline(getterAttributes.ToVisibility(), hasSymbols) || (isExplicitImplementation && hasSymbols);
             if (TryListMember(seenNames, name, hidesBaseMembers, out var isHidden))
                 result.Add(new ListedProperty(property, getter, getterAttributes, name, isInline, isHidden, isExplicitImplementation));
         }
@@ -453,7 +452,7 @@ internal class VariableProvider {
             var name = member.GetDisplayName(typeName);
             try {
                 // Which fields the listing holds and how they are named comes from metadata alone, no value is read here
-                var browsable = GetDebuggerBrowsableState(metadataImport, field);
+                var browsable = metadataImport.GetDebuggerBrowsableState(field);
                 if (browsable == DebuggerBrowsableState.Never)
                     continue;
 
@@ -489,7 +488,7 @@ internal class VariableProvider {
             var name = member.GetDisplayName(typeName);
             try {
                 // No getter runs here, a property only costs a func eval once the page holding it is requested
-                var browsable = GetDebuggerBrowsableState(metadataImport, member.Token);
+                var browsable = metadataImport.GetDebuggerBrowsableState(member.Token);
                 if (browsable == DebuggerBrowsableState.Never)
                     continue;
 
@@ -669,11 +668,19 @@ internal class VariableProvider {
         var constructorDef = module.GetMetaDataInterface<IMetaDataImport>().FindMethod(proxyTypeDef, ".ctor", 0, 0);
         var constructor = module.GetFunctionFromToken(constructorDef);
 
-        // An open generic proxy ('ICollectionDebugView`1' on List<T>) is closed over the value's own type
-        // arguments, a closed one ('CollectionDebuggerProxy`1[...Match]' on MatchCollection) names them itself
-        var typeArguments = parsedName.TypeArguments.Count == 0
-            ? valueType.GetTypeParameters()
-            : parsedName.TypeArguments.Select(it => ResolveSerializedType(it, valueModule)).ToArray();
+        // An open generic proxy ('ICollectionDebugView`1' on List<T>) is closed over the type arguments of the type
+        // declaring it - the first generic type up the chain, a List<T> subclass has none of its own - a closed one
+        // ('CollectionDebuggerProxy`1[...Match]' on MatchCollection) names them itself
+        ICorDebugType[] typeArguments;
+        if (parsedName.TypeArguments.Count == 0) {
+            var proxyOwner = valueType;
+            while (proxyOwner.GetTypeParameters().Length == 0 && proxyOwner.GetBaseType() != null)
+                proxyOwner = proxyOwner.GetBaseType()!;
+            typeArguments = proxyOwner.GetTypeParameters();
+        }
+        else {
+            typeArguments = parsedName.TypeArguments.Select(it => ResolveSerializedType(it, valueModule)).ToArray();
+        }
 
         var eval = debugger.GetThread(threadId).CreateEval();
         var proxy = await debugger.FuncEval.NewObjectAsync(eval, constructor, typeArguments, [value]);
@@ -683,7 +690,7 @@ internal class VariableProvider {
         var (module, typeDef) = FindLoadedTypeDef(typeName.FullName, preferredModule)
             ?? throw new InvalidOperationException($"The type '{typeName.FullName}' was not found in the loaded modules");
         var typeArguments = typeName.TypeArguments.Select(it => ResolveSerializedType(it, module)).ToArray();
-        var elementType = IsValueTypeDef(module.GetMetaDataInterface<IMetaDataImport>(), typeDef) ? CorElementType.VALUETYPE : CorElementType.CLASS;
+        var elementType = module.GetMetaDataInterface<IMetaDataImport>().IsValueType(typeDef) ? CorElementType.VALUETYPE : CorElementType.CLASS;
         return ((ICorDebugClass2)module.GetClassFromToken(typeDef)).GetParameterizedType(elementType, typeArguments);
     }
     // The serialized name is looked up without its assembly qualifier, so a type living elsewhere (e.g. in the
@@ -699,19 +706,6 @@ internal class VariableProvider {
         }
         return null;
     }
-    private static bool IsValueTypeDef(IMetaDataImport metadataImport, TypeDefToken typeDef) {
-        var extends = metadataImport.GetTypeDefProps(typeDef).ptkExtends;
-        if (extends.IsNil)
-            return false;
-        string baseTypeName;
-        if (extends.Type == CorTokenType.mdtTypeDef)
-            baseTypeName = metadataImport.GetTypeDefProps(new TypeDefToken(extends.Value)).szTypeDef;
-        else if (extends.Type == CorTokenType.mdtTypeRef)
-            baseTypeName = metadataImport.GetTypeRefProps(new TypeRefToken(extends.Value)).szName;
-        else
-            return false;
-        return baseTypeName == "System.ValueType" || baseTypeName == "System.Enum";
-    }
     // Non-zero for values with members or elements to expand
     private int CreateChildrenReference(ICorDebugValue value, string typeName, int threadId, int frameDepth, ICorDebugValue? proxyValue, string? evaluateName) {
         var unwrapped = value.UnwrapDebugValue();
@@ -724,11 +718,12 @@ internal class VariableProvider {
             return 0;
 
         if (typeName.EndsWith('?')) {
-            // A nullable has the children of its value, if any
-            var underlyingValue = ValueFormatter.GetNullableValue(objectValue);
+            // A nullable has the children of its value, if any: they are listed from the value itself
+            var underlyingValue = objectValue.GetNullableValue();
             if (underlyingValue is not ICorDebugObjectValue underlyingObject)
                 return 0;
             objectValue = underlyingObject;
+            value = underlyingValue;
         }
 
         var elementType = objectValue.GetElementType();
@@ -763,8 +758,11 @@ internal class VariableProvider {
             }
             return arrayValue.GetElement(indices);
         }
-        if (unwrapped is ICorDebugObjectValue objectValue)
+        if (unwrapped is ICorDebugObjectValue objectValue) {
+            if (objectValue.IsLiteralField(name))
+                throw new InvalidOperationException($"'{name}' is a constant and cannot be assigned");
             return objectValue.GetFieldValueByName(debugger.GetILFrame(reference.ThreadId, reference.FrameDepth), name);
+        }
         return null;
     }
     private ICorDebugValue? FindFrameVariableValue(VariableReference reference, string name) {
@@ -784,55 +782,48 @@ internal class VariableProvider {
         var skipCount = metadataImport.GetMethodProps(function.GetToken()).pdwAttr.IsMdStatic() ? 0 : 1;
         var arguments = frame.GetArguments();
         for (var i = skipCount; i < arguments.Length; i++) {
-            var paramDef = metadataImport.GetParamForMethodIndex(function.GetToken(), i - skipCount + 1);
-            if (metadataImport.GetParamProps(paramDef).szName == name)
+            if (metadataImport.FindParameterName(function.GetToken(), i - skipCount + 1) == name)
                 return arguments[i];
+        }
+
+        // A hoisted local lives on the closure or state machine: the generated 'this' of a lambda or MoveNext, or the
+        // display class local of the method declaring a lambda
+        var containers = new List<ICorDebugValue>();
+        if (skipCount == 1 && arguments.Length > 0 && arguments[0] != null) {
+            var containingTypeKind = GeneratedNames.GetKind(metadataImport.GetTypeDefProps(function.GetClass().GetToken()).szTypeDef);
+            if (containingTypeKind is GeneratedNameKind.StateMachineType or GeneratedNameKind.LambdaDisplayClass)
+                containers.Add(arguments[0]!);
+        }
+        for (var i = 0; i < locals.Length; i++) {
+            if (locals[i] != null && names.TryGetValue(i, out var localName) && GeneratedNames.GetKind(localName) == GeneratedNameKind.DisplayClassLocalOrField)
+                containers.Add(locals[i]!);
+        }
+        foreach (var container in containers) {
+            var hoisted = FindHoistedVariableValue(container, name);
+            if (hoisted != null)
+                return hoisted;
+        }
+        return null;
+    }
+    // The field named after the variable on the generated instance, or on an enclosing closure it links to
+    private static ICorDebugValue? FindHoistedVariableValue(ICorDebugValue closure, string name) {
+        if (closure.UnwrapDebugValue() is not ICorDebugObjectValue objectValue)
+            return null;
+        var corClass = objectValue.GetClass();
+        var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
+        foreach (var field in metadataImport.EnumFields(corClass.GetToken())) {
+            var fieldName = metadataImport.GetFieldProps(field).szField;
+            if (TryGetDisplayName(fieldName, out var displayName) && displayName == name)
+                return objectValue.GetFieldValue(corClass, field);
+            if (GeneratedNames.GetKind(fieldName) == GeneratedNameKind.DisplayClassLocalOrField) {
+                var enclosing = FindHoistedVariableValue(objectValue.GetFieldValue(corClass, field), name);
+                if (enclosing != null)
+                    return enclosing;
+            }
         }
         return null;
     }
 
-    private static bool IsRootType(ICorDebugType type) {
-        var corClass = type.GetClass();
-        var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
-        return metadataImport.GetTypeDefProps(corClass.GetToken()).szTypeDef is "System.Object" or "System.ValueType" or "System.Enum";
-    }
-    // The C# compiler emits the transitive closure of implemented interfaces, so checking the base classes is enough
-    private static bool IsEnumerableType(ICorDebugType type) {
-        for (var current = type; current != null && !IsRootType(current); current = current.GetBaseType()) {
-            var corClass = current.GetClass();
-            var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
-            foreach (var impl in metadataImport.EnumInterfaceImpls(corClass.GetToken())) {
-                var interfaceName = GetInterfaceName(metadataImport, metadataImport.GetInterfaceImplProps(impl).ptkIface);
-                if (interfaceName is "System.Collections.IEnumerable" or "System.Collections.Generic.IEnumerable`1")
-                    return true;
-            }
-        }
-        return false;
-    }
-    private static string? GetInterfaceName(IMetaDataImport metadataImport, MetadataToken token) {
-        switch (token.Type) {
-            case CorTokenType.mdtTypeDef:
-                return metadataImport.GetTypeDefProps((int)token).szTypeDef;
-            case CorTokenType.mdtTypeRef:
-                return metadataImport.GetTypeRefProps((int)token).szName;
-            case CorTokenType.mdtTypeSpec:
-                return GetTypeSpecName(metadataImport, (int)token);
-            default:
-                return null;
-        }
-    }
-    // A generic interface ('IEnumerable<string>') is a type spec: GENERICINST, CLASS or VALUETYPE, then the coded type token
-    private static unsafe string? GetTypeSpecName(IMetaDataImport metadataImport, TypeSpecToken token) {
-        var (signature, size) = metadataImport.GetTypeSpecFromToken(token);
-        var reader = new BlobReader((byte*)signature, size);
-        if (reader.Length < 3 || reader.ReadByte() != (byte)CorElementType.GENERICINST)
-            return null;
-        reader.ReadByte(); // CLASS or VALUETYPE
-        var handle = reader.ReadTypeHandle();
-        if (handle.Kind != HandleKind.TypeDefinition && handle.Kind != HandleKind.TypeReference)
-            return null;
-        return GetInterfaceName(metadataImport, MetadataTokens.GetToken(handle));
-    }
     // Compiler generated fields are hidden, except hoisted locals ('<count>5__1') which are shown under their original name
     private static bool TryGetDisplayName(string? fieldName, out string displayName) {
         displayName = fieldName ?? string.Empty;
@@ -844,37 +835,6 @@ internal class VariableProvider {
             return false;
         displayName = fieldName.Substring(openBracketOffset + 1, closeBracketOffset - openBracketOffset - 1);
         return true;
-    }
-    private static DebuggerBrowsableState? GetDebuggerBrowsableState(IMetaDataImport metadataImport, MetadataToken token) {
-        if (metadataImport.TryGetCustomAttributeByName(token, AttributeNames.DebuggerBrowsable, out var data, out var size) != Cor.S_OK)
-            return null;
-        return (DebuggerBrowsableState)CustomAttributeReader.ReadInt32Argument(data, size);
-    }
-    // Null when the type cannot be named (the remote transport hands back types without an element type)
-    private static string? TryGetTypeName(ICorDebugType type) {
-        try {
-            return TypeNameFormatter.GetTypeName(type);
-        }
-        catch {
-            return null;
-        }
-    }
-    // 'protected internal' is internal at least, 'private protected' is protected at most
-    private static VariableVisibility GetVisibility(CorFieldAttr attributes) {
-        return (attributes & CorFieldAttr.fdFieldAccessMask) switch {
-            CorFieldAttr.fdPublic => VariableVisibility.Public,
-            CorFieldAttr.fdFamily or CorFieldAttr.fdFamANDAssem => VariableVisibility.Protected,
-            CorFieldAttr.fdAssembly or CorFieldAttr.fdFamORAssem => VariableVisibility.Internal,
-            _ => VariableVisibility.Private
-        };
-    }
-    private static VariableVisibility GetVisibility(CorMethodAttr attributes) {
-        return (attributes & CorMethodAttr.mdMemberAccessMask) switch {
-            CorMethodAttr.mdPublic => VariableVisibility.Public,
-            CorMethodAttr.mdFamily or CorMethodAttr.mdFamANDAssem => VariableVisibility.Protected,
-            CorMethodAttr.mdAssem or CorMethodAttr.mdFamORAssem => VariableVisibility.Internal,
-            _ => VariableVisibility.Private
-        };
     }
     private static VariableSlot CreateGroup(string name, int variablesReference) {
         var group = new VariableInfo(name, string.Empty, string.Empty);
@@ -957,7 +917,7 @@ internal class VariableProvider {
         public nint LiteralValue { get; }
         public int LiteralLength { get; }
         public override bool IsStatic => Attributes.IsFdStatic();
-        public override VariableVisibility Visibility => GetVisibility(Attributes);
+        public override VariableVisibility Visibility => Attributes.ToVisibility();
         public bool IsLiteral => Attributes.IsFdLiteral();
 
         public ListedField(FieldDefToken token, string name, CorFieldAttr attributes, CorElementType literalType, nint literalValue, int literalLength, bool isInline, bool isHidden)
@@ -974,7 +934,7 @@ internal class VariableProvider {
         public MethodDefToken Getter { get; }
         public CorMethodAttr GetterAttributes { get; }
         public override bool IsStatic => GetterAttributes.IsMdStatic();
-        public override VariableVisibility Visibility => GetVisibility(GetterAttributes);
+        public override VariableVisibility Visibility => GetterAttributes.ToVisibility();
 
         public ListedProperty(PropertyToken token, MethodDefToken getter, CorMethodAttr getterAttributes, string name, bool isInline, bool isHidden, bool isExplicitImplementation)
             : base(name, isInline, isHidden, isExplicitImplementation) {
