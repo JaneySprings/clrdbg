@@ -43,7 +43,7 @@ public partial class DebugSession : Session {
     }
 
     protected override void OnEmergencyStopReceived() => debugAgent?.Dispose();
-    protected override bool OnTraceMessageReceived() => debugAgent?.Configuration?.Logging != null;
+    protected override bool OnTraceMessageReceived() => debugAgent?.Configuration.Logging.TraceResponse == true;
 
     private void TargetStopped(StopInfo stop) {
         ResetHandles();
@@ -96,7 +96,8 @@ public partial class DebugSession : Session {
     }
     private void AssemblyLoaded(ModuleInfo module) {
         var justMyCode = debugAgent.Configuration.JustMyCode;
-        OnDebugDataReceived(module.ToLoadedAssemblyMessage(debugAgent.Configuration.GetApplicationName(), session.ProcessId, justMyCode));
+        if (debugAgent.Configuration.Logging.ModuleLoad)
+            OnDebugDataReceived(module.ToLoadedAssemblyMessage(debugAgent.Configuration.GetApplicationName(), session.ProcessId, justMyCode));
         Protocol.SendEvent(new ModuleEvent(ModuleEvent.ReasonValue.New, module.ToModule(moduleHandles.Create(module.Path), justMyCode)));
     }
     private void BreakpointStatusChanged(Breakpoint breakpoint) {

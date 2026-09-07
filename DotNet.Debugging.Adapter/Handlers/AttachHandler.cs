@@ -9,12 +9,14 @@ public partial class DebugSession {
             var configuration = new AttachConfiguration(arguments.ConfigurationProperties);
             configuration.VerifyMissingProperties();
 
+            if (configuration.Logging.LicenseBanner)
+                OnDebugDataReceived(Resources.MsgLicenseBanner);
+
             sourceLinkResolver = new SourceLinkResolver(configuration.SourceLinkOptions);
             sourceFileMapper = new SourceFileMapper(configuration.SourceFileMap);
             symbolsResolver = new SymbolsResolver(configuration.SymbolOptions);
             debugAgent = configuration.CreateDebugAgent(this);
 
-            OnDebugDataReceived(Resources.MsgLicenseBanner);
             InvokeDebugger(() => {
                 session.JustMyCode = configuration.JustMyCode;
                 session.RequireExactSource = configuration.RequireExactSource;

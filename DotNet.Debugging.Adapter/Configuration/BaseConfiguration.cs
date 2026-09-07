@@ -10,13 +10,13 @@ public abstract class BaseConfiguration {
     public Dictionary<string, SourceLinkOptions> SourceLinkOptions { get; }
     public Dictionary<string, string> SourceFileMap { get; }
     public SymbolOptions SymbolOptions { get; }
-    public LoggingOptions? Logging { get; }
+    public LoggingOptions Logging { get; }
 
     protected BaseConfiguration(Dictionary<string, JToken> properties) {
         JustMyCode = properties.TryGetValue("justMyCode").ToValue<bool>(true);
         RequireExactSource = properties.TryGetValue("requireExactSource").ToValue<bool>(true);
         EnableStepFiltering = properties.TryGetValue("enableStepFiltering").ToValue<bool>(true);
-        Logging = properties.TryGetValue("logging").ToClass<LoggingOptions>();
+        Logging = properties.TryGetValue("logging").ToClass<LoggingOptions>() ?? new LoggingOptions();
         SymbolOptions = properties.TryGetValue("symbolOptions").ToClass<SymbolOptions>() ?? new SymbolOptions();
         SourceFileMap = properties.TryGetValue("sourceFileMap").ToClass<Dictionary<string, string>>() ?? new Dictionary<string, string>();
         SourceLinkOptions = properties.TryGetValue("sourceLinkOptions").ToClass<Dictionary<string, SourceLinkOptions>>()

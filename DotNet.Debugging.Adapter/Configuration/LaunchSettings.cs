@@ -95,15 +95,18 @@ public class SymbolOptions {
 }
 
 public class LoggingOptions {
-    [JsonPropertyName("exceptions")]
-    public bool Exceptions { get; set; }
+    [JsonPropertyName("traceResponse")]
+    public bool TraceResponse { get; set; }
 
-    [JsonPropertyName("engineLogging")]
-    public bool EngineLogging { get; set; }
+    [JsonPropertyName("moduleLoad")]
+    public bool ModuleLoad { get; set; } = true;
 
-    [JsonPropertyName("elapsedTiming")]
-    public bool ElapsedTiming { get; set; }
+    [JsonPropertyName("banner")]
+    public bool LicenseBanner { get; set; } = true;
 
-    // [JsonPropertyName("browserStdOut")]
-    // public bool BrowserStdOut { get; set; }
+    // [JsonPropertyName("engineLogging")]
+    // public bool EngineLogging { get; set; }
+
+    // [JsonPropertyName("exceptions")]
+    // public bool Exceptions { get; set; }
 }
