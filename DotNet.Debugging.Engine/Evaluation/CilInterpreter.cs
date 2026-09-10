@@ -49,7 +49,7 @@ internal class CilInterpreter {
 
     private ICilLocation[] CreateArguments(ICorDebugILFrame? frame, EvaluationContext context) {
         if (context.RootValue != null)
-            return [new CorDebugLocation(context.RootValue)];
+            return [CreateRootArgument(context.RootValue)];
         var arguments = frame!.GetArguments();
         var result = new ICilLocation[arguments.Length];
         for (var i = 0; i < result.Length; i++) {
@@ -57,6 +57,15 @@ internal class CilInterpreter {
             result[i] = arguments[i] == null ? new UnavailableLocation() : new CorDebugLocation(() => GetFrame(context).GetArguments()[index]!);
         }
         return result;
+    }
+    // The expression is compiled as an instance method of the root value's type, and the 'this' of a struct method is the
+    // address of the value rather than the value: the IL reads it through ldobj and calls the struct's methods on it, so
+    // the slot holds the value's location the way a by-reference frame slot does. A boxed root is the value inside the box
+    private static ICilLocation CreateRootArgument(ICorDebugValue rootValue) {
+        var storage = rootValue.UnwrapDebugValue();
+        if (storage is ICorDebugGenericValue generic && generic.GetElementType().IsValueType())
+            return new ByRefLocation(new CorDebugLocation(storage));
+        return new CorDebugLocation(rootValue);
     }
     // The evaluation method's locals start with the frame's locals (so the expression can read and assign them), the rest are temporaries
     private ICilLocation[] CreateLocals(CompiledExpression compiled, ICorDebugILFrame? frame, StandaloneSignatureHandle localSignature, EvaluationContext context, bool isTypeContext) {

@@ -129,6 +129,23 @@ internal class CorDebugLocation : ICilLocation {
     }
 }
 
+// The address of another location: the 'this' of a struct evaluated outside a frame. Like a by-reference frame slot it
+// yields the location it points to, which the IL reads and writes through ldobj/stobj, and a store goes to that location
+internal class ByRefLocation : ICilLocation {
+    private readonly ICilLocation target;
+
+    public ByRefLocation(ICilLocation target) {
+        this.target = target;
+    }
+
+    public CilValue Read() {
+        return CilValue.FromLocation(target);
+    }
+    public void Write(CilValue value) {
+        target.Write(value);
+    }
+}
+
 internal class TemporaryLocation : ICilLocation {
     private CilValue value;
 
