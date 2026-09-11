@@ -86,6 +86,8 @@ public partial class ManagedDebugger {
     // Output text of a launched debuggee, 'true' for stderr
     public event Action<string, bool>? OnOutput;
     public event Action<string>? OnLogPoint;
+    // A message the debuggee logs to the debugger: Debug.WriteLine, Trace.WriteLine, Debugger.Log
+    public event Action<string>? OnDebugMessage;
     public event Action<Breakpoint>? OnBreakpointChanged;
 
     public ManagedDebugger() {

@@ -1,5 +1,6 @@
 using DotNet.Debugging.Adapter.Symbols;
 using DotNet.Debugging.Engine.Enums;
+using DotNet.Debugging.Engine.Logging;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
 
 namespace DotNet.Debugging.Adapter;
@@ -12,6 +13,8 @@ public partial class DebugSession {
 
             if (configuration.Logging.LicenseBanner)
                 OnDebugDataReceived(Resources.MsgLicenseBanner);
+            if (configuration.Logging.EngineLogging)
+                DebuggerLoggingService.OnEngineMessage += OnDebugDataReceived;
 
             sourceLinkResolver = new SourceLinkResolver(configuration.SourceLinkOptions);
             sourceFileMapper = new SourceFileMapper(configuration.SourceFileMap);

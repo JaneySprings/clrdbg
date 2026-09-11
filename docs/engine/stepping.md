@@ -50,12 +50,26 @@ Re-steps go through `CreateStepper` and `ContinueProcess` without reporting anyt
 
 ### Breakpoints during a step
 
-`BreakpointHandler` checks the stepper before anything else: if the stepper is no longer active the
-step has completed at the breakpoint's location and its `StepComplete` callback is queued behind the
-breakpoint — the breakpoint is continued and the step reports the stop. If the stepper is still
-active the breakpoint was hit before the step destination (inside a stepped-over call) and wins: the
-step is cancelled and the breakpoint stop is reported — the cancellation happens after the hit-count
-check, so a hit that does not stop leaves the step alone ([breakpoints.md](breakpoints.md)). A
+`BreakpointHandler` checks the stepper before anything else: if the stepper is no longer active and
+the breakpoint was hit by the stepping thread, the step has completed at the breakpoint's location
+and its `StepComplete` callback is queued behind the breakpoint — the breakpoint is continued and the
+step reports the stop. Otherwise a breakpoint that stops wins — it was hit before the step destination
+(inside a stepped-over call), or by another thread, in the same instant the step completed or earlier:
+the step is disabled and the breakpoint stop is reported. A hit that does not stop leaves the step
+alone: an unmet hit count continues right away; a false condition or a logpoint evaluates first, and
+the step survives the evaluation — on the stepping thread its stepper is suspended for the evaluation
+(`SuspendStep`) and re-armed after it (`ResumeSuspendedStep`: from inside a stepped-over call a step
+out marked as a skip returns into the statement, whose rest is then stepped; at the step's own depth
+the user's kind goes on), on another thread the stepper stays armed and a completion arriving while
+the debuggee runs for the evaluation is held back, its thread frozen (`THREAD_SUSPEND`) so it stays at
+the step destination, and reported once the breakpoint has decided not to stop
+([breakpoints.md](breakpoints.md)). The runtime queues the events of several threads behind one another, so another thread's breakpoint can
+arrive with the stepping thread's completion already queued behind it; the breakpoint is that
+thread's own stop, and the queued completion of the cancelled stepper is dropped by
+`HandleStepComplete`, which only honours the completion of the stepper the controller owns
+(`OwnsStepper`): the runtime dispatches it all the same — deactivating a stepper it already reports
+as inactive is a no-op that leaves it registered — and by then a new step may be in progress on the
+other thread, whose stepper the completion must not be taken for. A
 breakpoint or entry stop, `Pause`, `Debugger.Break()` and *taken* exception stops cancel everything
 (`Disable`, including the async notification breakpoint below); an exception the subscriber's filters
 let run on (it calls `Continue`) leaves the step in flight - a step over an await whose task faults, or
@@ -132,10 +146,13 @@ plain step out is used as well.
 ## Cleanup
 
 `StepController.Disable` (on every stop the user sees — breakpoint, entry, pause, `Debugger.Break()`,
-a taken exception — and on disposal) deactivates the stepper, drops the async step with its
-yield/resume breakpoints and handle, and the notification breakpoint: an async step out whose task
-has not completed when the user stops elsewhere would otherwise fire a step stop later, in a place
-unrelated to what they were doing. `CancelStep` alone (the plain stepper) is what a breakpoint that
-merely evaluates — a false condition, a logpoint — uses, so an async step out survives those.
+a taken exception — and on disposal) deactivates the stepper, releases a thread held for its
+completion, drops the async step with its yield/resume breakpoints and handle, and the notification
+breakpoint: an async step out whose task has not completed when the user stops elsewhere would
+otherwise fire a step stop later, in a place unrelated to what they were doing. `SuspendStep` (the
+plain stepper alone, remembered for its re-arm) is what a breakpoint that merely evaluates — a false
+condition, a logpoint — uses on the stepping thread, so an async step out, which has no stepper,
+survives those untouched.
 `AsyncStepper.ClearActiveStep` alone runs on every `StepComplete`. A `StepComplete` arriving after the
-step was abandoned (a stop on another thread, an exception the user kept) is continued without a stop.
+step was abandoned (a stop on another thread, an exception the user kept) is continued without a stop,
+also when it arrives once a new step is already in progress on another thread.

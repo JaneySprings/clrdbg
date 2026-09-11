@@ -38,6 +38,7 @@ public partial class DebugSession : Session {
         session.OnSymbolsRequested += SymbolsRequested;
         session.OnOutput += TargetOutput;
         session.OnLogPoint += TargetLogPoint;
+        session.OnDebugMessage += TargetDebugMessage;
         session.OnBreakpointChanged += BreakpointStatusChanged;
         session.OnTerminalLaunchRequested += TerminalLaunchRequested;
     }
@@ -112,6 +113,9 @@ public partial class DebugSession : Session {
     }
     private void TargetLogPoint(string message) {
         OnOutputDataReceived($"[LogPoint]: {message}");
+    }
+    private void TargetDebugMessage(string message) {
+        OnDebugDataReceived(message);
     }
     private void TerminalLaunchRequested(LaunchRequest launchRequest) {
         if (debugAgent is not LaunchDebugAgent launchDebugAgent)

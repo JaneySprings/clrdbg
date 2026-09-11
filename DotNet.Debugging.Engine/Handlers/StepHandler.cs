@@ -7,19 +7,25 @@ namespace DotNet.Debugging.Engine;
 
 public partial class ManagedDebugger {
     private void HandleStepComplete(StepCompleteCorDebugManagedCallbackEventArgs callbackEvent) {
-        // A step does not survive into an evaluation (a breakpoint that evaluates cancels it first), should one still
-        // complete meanwhile it is dropped: a stop here would leave the evaluation waiting for a completion that never comes
-        if (IsEvaluating) {
-            stepController.CancelStep();
-            ContinueProcess();
-            return;
-        }
-        // The step was abandoned (a stop on another thread, an exception the user kept) and the user has moved on since
-        if (!stepController.IsStepping) {
-            ContinueProcess();
-            return;
-        }
         var thread = callbackEvent.Thread;
+        // The step was abandoned (a stop on another thread, an exception the user kept) and the user has moved on since. Its
+        // completion can still arrive after the user's next step: queued behind the other thread's breakpoint, the next
+        // continue dispatches it, by which time a new stepper may already be in progress on the other thread
+        if (!stepController.OwnsStepper(callbackEvent.Stepper)) {
+            ContinueProcess();
+            return;
+        }
+        // A step completing while a breakpoint on another thread evaluates its condition or logpoint: no stop is possible
+        // until the evaluation is over, and the debuggee has to run for that. The completed thread is held where it stands
+        // and the completion reported once the breakpoint has decided not to stop (BreakpointHandler). A stepper on the
+        // evaluating thread itself is suspended before the evaluation; should one complete there anyway it is dropped,
+        // holding that thread would wedge the evaluation
+        if (IsEvaluating) {
+            if (FuncEval.RunningThreadId == thread.GetId() || !stepController.TryHoldCompletion(thread, callbackEvent.Reason))
+                stepController.CancelStep();
+            ContinueProcess();
+            return;
+        }
         if (!stepController.TryCompleteStep(thread, callbackEvent.Reason, out var location)) {
             ContinueProcess();
             return;

@@ -69,7 +69,8 @@ formats only the requested page, and `VariablePage.TotalCount` tells the host ho
 (`FirstChance`, `UserUnhandled`, `Unhandled`) and type name and leaves the decision to the
 subscriber — it either does nothing (the debuggee stays stopped) or calls `Continue()`.
 `OnModuleLoaded(ModuleInfo)`, `OnBreakpointChanged(Breakpoint)`, `OnThreadStarted/Exited`,
-`OnProcessStarted`, `OnExited`, `OnOutput` and `OnLogPoint` report what happened. Two events ask the
+`OnProcessStarted`, `OnExited`, `OnOutput`, `OnLogPoint` and `OnDebugMessage` (what the debuggee logs to
+the debugger: `Debug.WriteLine`, `Trace.WriteLine`, `Debugger.Log`) report what happened. Two events ask the
 host for something: `OnSymbolsRequested(SymbolsRequest)` when a module's PDB is not next to it — the
 subscriber may locate it (a search path, a symbol server) and set `SymbolFilePath`, without a
 subscriber such a module silently gets no symbols — and `OnTerminalLaunchRequested(LaunchRequest)` for

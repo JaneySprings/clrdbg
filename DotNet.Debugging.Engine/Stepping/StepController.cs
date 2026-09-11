@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using DotNet.Debugging.CorApi;
 using DotNet.Debugging.CorApi.Extensions;
 using DotNet.Debugging.Engine.Enums;
@@ -12,6 +13,8 @@ internal class StepController {
     private readonly ManagedDebugger debugger;
     private readonly AsyncStepper asyncStepper;
     private ICorDebugStepper? stepper;
+    // The thread the stepper runs on: a step completes on that thread only, and only that thread's breakpoint can be its destination
+    private int steppingThreadId;
     // The kind the user requested, a step continued past a filtered method resumes with it
     private StepKind userStepKind;
     // The last completed step left a filtered method behind and its continuation is running
@@ -23,10 +26,16 @@ internal class StepController {
     private ModuleInfo? stepStatementModule;
     private int stepStatementMethodToken;
     private int stepStatementStart;
+    private int stepFrameDepth;
+    private bool isStepSuspended;
+    // A step that completed on another thread while an evaluation ran: the thread is held where it stands and the completion reported after the evaluation
+    private ICorDebugThread? heldThread;
+    private CorDebugStepReason heldReason;
 
     public bool IsStepping => stepper != null;
     // The runtime reports the step as done but the StepComplete callback is still queued behind the current one
     public bool IsStepComplete => stepper != null && !stepper.IsActive();
+    public int SteppingThreadId => steppingThreadId;
 
     public StepController(ManagedDebugger debugger) {
         this.debugger = debugger;
@@ -43,6 +52,8 @@ internal class StepController {
         userStepKind = kind;
         isSkippingFilteredMethod = false;
         isCrossingHiddenFinally = false;
+        isStepSuspended = false;
+        stepFrameDepth = thread.GetFrameDepth();
         RememberStepStatement(frame);
         if (await asyncStepper.TrySetupAsync(thread, kind))
             return;
@@ -50,6 +61,59 @@ internal class StepController {
     }
     public Task<AsyncBreakpointResult> TryHandleBreakpointAsync(ICorDebugThread thread, ICorDebugFunctionBreakpoint breakpoint) {
         return asyncStepper.TryHandleBreakpointAsync(thread, breakpoint);
+    }
+    // Whether a completed stepper is the one in progress: the completion of an abandoned one (cancelled when another
+    // thread's breakpoint stopped, its callback already queued behind that breakpoint) still arrives with the next continue
+    public bool OwnsStepper(ICorDebugStepper candidate) {
+        return stepper != null && stepper == candidate;
+    }
+    // Cancels the stepper for an evaluation on its own thread (the hijacked evaluation and the stepper's patches would
+    // share the thread), to be re-armed by ResumeSuspendedStep once the evaluation has decided not to stop
+    public void SuspendStep() {
+        if (stepper == null)
+            return;
+        CancelStep();
+        isStepSuspended = true;
+    }
+    // Re-arms a suspended step. A breakpoint inside a stepped-over call leaves the thread deeper than the statement the
+    // step started in: a step out marked as a skip returns into it, and TryCompleteStep steps the rest of the statement
+    // from there. At the step's own depth (a step out passing a later breakpoint of its method) the user's kind goes on
+    public void ResumeSuspendedStep(ICorDebugThread thread) {
+        if (!isStepSuspended)
+            return;
+        isStepSuspended = false;
+        if (thread.GetActiveFrame() is not ICorDebugILFrame) {
+            DebuggerLoggingService.LogMessage($"The step suspended on thread {thread.GetId()} cannot be resumed, the active frame is not an IL frame");
+            return;
+        }
+        if (thread.GetFrameDepth() > stepFrameDepth) {
+            isSkippingFilteredMethod = true;
+            CreateStepper(thread, StepKind.Out);
+            return;
+        }
+        ResumeStep(thread, userStepKind);
+    }
+    // A step that completed while an evaluation runs cannot stop yet, and the debuggee has to run for the evaluation to end:
+    // the completed thread is held where it stands (it does not run with the rest of the process) until the completion is
+    // taken or dropped. False when the thread cannot be held, the caller drops the step then
+    public bool TryHoldCompletion(ICorDebugThread thread, CorDebugStepReason reason) {
+        ReleaseHeldThread();
+        var result = thread.TrySetDebugState(CorDebugThreadState.THREAD_SUSPEND);
+        if (result != Cor.S_OK) {
+            DebuggerLoggingService.LogMessage($"Thread {thread.GetId()} cannot be held for its step completion: 0x{result:X8}");
+            return false;
+        }
+        heldThread = thread;
+        heldReason = reason;
+        DebuggerLoggingService.LogMessage($"Step completed on thread {thread.GetId()} during an evaluation, the thread is held until the evaluation is over");
+        return true;
+    }
+    // The completion held during an evaluation, its thread released to run again once the stop is reported or the step goes on
+    public bool TryTakeHeldCompletion([NotNullWhen(true)] out ICorDebugThread? thread, out CorDebugStepReason reason) {
+        thread = heldThread;
+        reason = heldReason;
+        ReleaseHeldThread();
+        return thread != null;
     }
 
     // The location the completed step stops at, null when the step has to go on (another step is set up then)
@@ -175,12 +239,14 @@ internal class StepController {
         }
 
         stepper = newStepper;
-        DebuggerLoggingService.LogMessage($"Stepper created on thread {thread.GetId()}: {kind} at IL_{ilFrame.GetIP().pnOffset:X4}");
+        steppingThreadId = thread.GetId();
+        DebuggerLoggingService.LogMessage($"Stepper created on thread {steppingThreadId}: {kind} at IL_{ilFrame.GetIP().pnOffset:X4}");
         return newStepper;
     }
     public void CancelStep() {
         stepper?.Deactivate();
         stepper = null;
+        ReleaseHeldThread();
     }
     // Resumes an interrupted step: the async carry is armed anew first, so an await still ahead of the
     // resumed step (e.g. the hidden DisposeAsync a 'break' jumps to) carries it across the yield
@@ -194,6 +260,15 @@ internal class StepController {
         asyncStepper.Disable();
         isSkippingFilteredMethod = false;
         isCrossingHiddenFinally = false;
+        isStepSuspended = false;
+    }
+    private void ReleaseHeldThread() {
+        if (heldThread == null)
+            return;
+        var result = heldThread.TrySetDebugState(CorDebugThreadState.THREAD_RUN);
+        if (result != Cor.S_OK)
+            DebuggerLoggingService.LogMessage($"The held thread {heldThread.GetId()} could not be released: 0x{result:X8}");
+        heldThread = null;
     }
 
     private void RememberStepStatement(ICorDebugILFrame frame) {

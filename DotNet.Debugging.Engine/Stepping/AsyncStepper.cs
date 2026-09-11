@@ -87,7 +87,7 @@ internal class AsyncStepper {
         var function = frame.GetFunction();
         var corModule = function.GetModule();
         var methodToken = function.GetToken();
-        var step = new AsyncStep(thread.GetId(), kind, asyncInfo.Awaits, GetFrameDepth(thread));
+        var step = new AsyncStep(thread.GetId(), kind, asyncInfo.Awaits, thread.GetFrameDepth());
         foreach (var awaitInfo in asyncInfo.Awaits) {
             var yieldBreakpoint = function.GetILCode().CreateBreakpoint((int)awaitInfo.YieldOffset);
             yieldBreakpoint.Activate(true);
@@ -112,7 +112,7 @@ internal class AsyncStepper {
         if (currentStep.Status == AsyncStepStatus.YieldBreakpoint) {
             // The yield of another activation of the same method - a recursive call running synchronously up to its
             // first await, deeper on the same thread - is not the stepping one's
-            if (currentStep.ThreadId != thread.GetId() || currentStep.FrameDepth != GetFrameDepth(thread))
+            if (currentStep.ThreadId != thread.GetId() || currentStep.FrameDepth != thread.GetFrameDepth())
                 return AsyncBreakpointResult.NotHandled;
             await HandleYieldBreakpointAsync(frame, hitBreakpoint);
             return AsyncBreakpointResult.Continue;
@@ -264,9 +264,6 @@ internal class AsyncStepper {
         if (!await TrySetupAsync(thread, kind))
             stepController.CreateStepper(thread, kind);
         DebuggerLoggingService.LogMessage($"Async step: resumed, {(stepController.IsStepping ? "plain stepper created" : "carried by breakpoints")}");
-    }
-    private static int GetFrameDepth(ICorDebugThread thread) {
-        return thread.GetManagedFrames().Count();
     }
     private static string DescribeId(ICorDebugHandleValue? id) {
         if (id == null)

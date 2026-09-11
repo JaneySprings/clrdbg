@@ -14,6 +14,10 @@ internal static class CorDebugThreadExtensions {
                 yield return frame;
         }
     }
+    // The number of managed frames on the thread: tells a frame deeper than another apart, on the same thread
+    public static int GetFrameDepth(this ICorDebugThread thread) {
+        return thread.GetManagedFrames().Count();
+    }
     // The managed 'Thread.Name': the '_name' field of the Thread object, read without running code
     public static string? GetManagedName(this ICorDebugThread thread) {
         try {

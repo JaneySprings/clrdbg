@@ -104,8 +104,8 @@ public class LoggingOptions {
     [JsonPropertyName("banner")]
     public bool LicenseBanner { get; set; } = true;
 
-    // [JsonPropertyName("engineLogging")]
-    // public bool EngineLogging { get; set; }
+    [JsonPropertyName("engineLogging")]
+    public bool EngineLogging { get; set; }
 
     // [JsonPropertyName("exceptions")]
     // public bool Exceptions { get; set; }

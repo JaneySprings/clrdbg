@@ -20,8 +20,10 @@ public partial class ManagedDebugger {
             ContinueProcess();
             return;
         }
-        // A breakpoint at the step destination: the StepComplete callback is queued behind this one and reports the stop
-        if (stepController.IsStepping && stepController.IsStepComplete) {
+        // A breakpoint at the step destination, hit by the stepping thread: the StepComplete callback is queued behind this
+        // one and reports the stop. Another thread's breakpoint hit in the same instant is its own stop, the step is
+        // abandoned like by any other breakpoint (its queued completion is dropped by HandleStepComplete)
+        if (stepController.IsStepComplete && stepController.SteppingThreadId == callbackEvent.Thread.GetId()) {
             ContinueProcess();
             return;
         }
@@ -60,18 +62,22 @@ public partial class ManagedDebugger {
             ContinueProcess();
             return;
         }
-        // From here the breakpoint either stops or evaluates in the debuggee, neither of which a step survives:
-        // a breakpoint that stops wins over the step, and an evaluation would have the stepper complete inside
-        // the evaluated code (HandleStepComplete does not expect a completion while an evaluation runs)
-        stepController.CancelStep();
+        // From here the breakpoint either stops or evaluates in the debuggee. A stop wins over a step in flight. An
+        // evaluation runs the debuggee, and the step goes on afterwards when it does not stop: the stepping thread's
+        // own stepper is suspended for it (the hijacked evaluation and the stepper's patches would share the thread)
+        // and re-armed after; another thread's stepper stays armed, and a completion arriving during the evaluation
+        // is held back until the breakpoint has decided (HandleStepComplete)
+        var evaluates = breakpoint.Condition != null || breakpoint.LogMessage != null;
+        if (evaluates && stepController.SteppingThreadId == thread.GetId())
+            stepController.SuspendStep();
         if (breakpoint.Condition != null && !await EvaluateConditionAsync(thread, breakpoint.Condition)) {
             DebuggerLoggingService.LogMessage($"Breakpoint condition not met: {breakpoint.Condition}");
-            ContinueProcess();
+            ContinueAfterEvaluation(thread);
             return;
         }
         if (breakpoint.LogMessage != null) {
             OnLogPoint?.Invoke(await InterpolateLogMessageAsync(thread, breakpoint.LogMessage));
-            ContinueProcess();
+            ContinueAfterEvaluation(thread);
             return;
         }
 
@@ -82,6 +88,21 @@ public partial class ManagedDebugger {
         OnStopped?.Invoke(new StopInfo(thread.GetId(), StopReason.Breakpoint, location, [breakpoint.Id]));
     }
 
+    // Carries on after a breakpoint that evaluated without stopping: a step completion held back during the evaluation
+    // is reported now (or its step resumed, when the completed step has to go on), a step suspended on the evaluating
+    // thread is re-armed
+    private void ContinueAfterEvaluation(ICorDebugThread thread) {
+        if (stepController.TryTakeHeldCompletion(out var completedThread, out var reason)) {
+            if (stepController.TryCompleteStep(completedThread, reason, out var location)) {
+                OnStopped?.Invoke(new StopInfo(completedThread.GetId(), StopReason.Step, location));
+                return;
+            }
+            ContinueProcess();
+            return;
+        }
+        stepController.ResumeSuspendedStep(thread);
+        ContinueProcess();
+    }
     // The entry breakpoint is not tracked by the breakpoint manager, it is matched by identity or by exclusion
     private bool TryHandleEntryPointBreakpoint(ICorDebugThread thread, ICorDebugFunctionBreakpoint functionBreakpoint) {
         if (entryPointBreakpoint == null)

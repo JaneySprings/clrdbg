@@ -13,6 +13,11 @@ public partial class ManagedDebugger {
             ProcessId = process.GetId();
             DebuggerLoggingService.LogMessage($"The remote debuggee connected, PID: {ProcessId}");
         }
+        // Debug.WriteLine, Trace.WriteLine and Debugger.Log reach the debugger (the LogMessage callback) only while it
+        // asks for them; without this the runtime writes them to the system log instead
+        var result = callbackEvent.Process.TryEnableLogMessages(true);
+        if (result != Cor.S_OK)
+            DebuggerLoggingService.LogMessage($"The debuggee's log messages could not be enabled: 0x{result:X8}");
         ContinueProcess();
     }
     private void HandleProcessExited(ExitProcessCorDebugManagedCallbackEventArgs callbackEvent) {
@@ -26,8 +31,9 @@ public partial class ManagedDebugger {
         eventQueue.Writer.TryComplete();
         OnExited?.Invoke(exitCode);
     }
+    // Debug.WriteLine and friends: the runtime raises the callback for every message the debuggee logs
     private void HandleLogMessage(LogMessageCorDebugManagedCallbackEventArgs callbackEvent) {
-        DebuggerLoggingService.LogMessage($"Debuggee log: {callbackEvent.Message}");
+        OnDebugMessage?.Invoke(callbackEvent.Message);
         ContinueProcess();
     }
 }

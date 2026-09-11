@@ -99,9 +99,11 @@ pointers to their signature names (`System.Int32&`, `System.String[]`); a breakp
 debuggee or moving on:
 
 1. A function evaluation is running → continue (the hit belongs to evaluated code).
-2. A step is in progress and already complete → continue: the `StepComplete` callback is queued right
-   behind this one and reports the stop, so the breakpoint at the step destination is not reported
-   twice. A step still in flight is left alone here — see 8.
+2. A step is in progress and already complete, and the breakpoint was hit by the stepping thread →
+   continue: the `StepComplete` callback is queued right behind this one and reports the stop, so the
+   breakpoint at the step destination is not reported twice. Another thread's breakpoint is never
+   the step destination, it goes on to be reported as its own stop. A step still in flight is left
+   alone here — see 8.
 3. Not an `ICorDebugFunctionBreakpoint` → continue.
 4. The `AsyncStepper` gets a look: its yield/resume breakpoints continue, its
    `NotifyDebuggerOfWaitCompletion` one turns into a step out ([stepping.md](stepping.md)).
@@ -111,14 +113,21 @@ debuggee or moving on:
 7. `HitCount++`, then the hit condition: `3` / `== 3` (exactly), `>= 3`, `> 3`, `<= 3`, `< 3`,
    `% 3` (every third hit); unparsable conditions never stop — and a hit that does not stop leaves an
    in-flight step alone, the step carries on past the breakpoint.
-8. From here the breakpoint either stops or evaluates in the debuggee, neither of which a plain step
-   survives: the stepper is cancelled (`CancelStep`) — a breakpoint that stops wins over the step, and
-   an evaluation would have the stepper complete inside the evaluated code. An async step out, which
-   has no stepper, keeps waiting through 9 and 10.
+8. From here the breakpoint either stops or evaluates in the debuggee. A stop wins over a step in
+   flight (11). A step survives an evaluation that does not stop: on the stepping thread itself the
+   stepper is suspended first (`SuspendStep` — the hijacked evaluation and the stepper's patches would
+   share the thread) and re-armed afterwards (`ResumeSuspendedStep`: a thread left deeper than the
+   statement the step started in, inside a stepped-over call, steps out marked as a skip and the rest
+   of the statement is stepped from there; at the step's own depth the user's kind goes on); another
+   thread's stepper stays armed, and a completion arriving while the evaluation runs is held back —
+   the completed thread is frozen (`THREAD_SUSPEND`) so it does not run on with the debuggee — and
+   reported once the breakpoint has decided not to stop (`ContinueAfterEvaluation`). An async step
+   out, which has no stepper, keeps waiting through 9 and 10.
 9. The condition, evaluated in the top frame of the hitting thread
    ([evaluation.md](evaluation.md)); a compile or runtime error counts as "not met".
 10. A log message: every `{expression}` is evaluated and replaced by its display value (left as-is
-    when it fails), `OnLogPoint` receives the text and the debuggee continues.
+    when it fails), `OnLogPoint` receives the text and the debuggee continues — through
+    `ContinueAfterEvaluation`, like a condition that is not met.
 11. Every step is disabled (`StepController.Disable`, the async notification breakpoint included), then
     `OnStopped(StopReason.Breakpoint)` with the breakpoint's `Location` (the resolved one for source
     breakpoints, the current frame's for function breakpoints) and `[breakpoint.Id]`.

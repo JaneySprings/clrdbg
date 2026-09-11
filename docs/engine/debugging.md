@@ -87,13 +87,16 @@ point; a breakpoint can therefore hold several bindings.
 
 When a breakpoint callback arrives (`BreakpointHandler.HandleBreakpointAsync`) the decisions are
 made in this order: continue if an evaluation is running; continue if a step in progress is already
-complete (its `StepComplete` callback is queued right behind and reports the stop); give the
+complete and the stepping thread hit the breakpoint (its `StepComplete` callback is queued right
+behind and reports the stop; another thread's hit is its own stop); give the
 `AsyncStepper` its breakpoints; handle the entry breakpoint; then for a user breakpoint count the
 hit and check the hit condition (`BreakpointExtensions.MatchesHitCount`: `3`, `==3`, `>=3`, `<3`,
-`%3`) — a hit that does not stop leaves a step in flight alone; only past that point is the step
-cancelled, before the condition is evaluated, a logpoint printed (`OnLogPoint`, `{expression}`
-placeholders evaluated in the top frame) and continued, or every step disabled and `OnStopped`
-raised with `StopReason.Breakpoint` and the breakpoint id ([breakpoints.md](breakpoints.md)).
+`%3`) — a hit that does not stop leaves a step in flight alone, an evaluation included: the
+condition is evaluated, or a logpoint printed (`OnLogPoint`, `{expression}` placeholders evaluated in
+the top frame), with the stepping thread's own stepper suspended for it and re-armed after, and a
+step completing on another thread meanwhile held back and reported after it
+(`ContinueAfterEvaluation`); only a breakpoint that stops disables every step and raises `OnStopped`
+with `StopReason.Breakpoint` and the breakpoint id ([breakpoints.md](breakpoints.md)).
 
 ## 5. Stepping
 

@@ -20,6 +20,7 @@ internal class FuncEvalRunner {
     private readonly Func<Task<CorDebugManagedCallbackEventArgs>> waitForEvalEvent;
 
     public bool IsRunning { get; private set; }
+    public int? RunningThreadId { get; private set; }
 
     public FuncEvalRunner(Func<Task<CorDebugManagedCallbackEventArgs>> waitForEvalEvent) {
         this.waitForEvalEvent = waitForEvalEvent;
@@ -98,6 +99,7 @@ internal class FuncEvalRunner {
     private async Task<ICorDebugValue?> RunAsync(ICorDebugEval eval, bool throwOnException, Action start, Func<ICorDebugEval, ICorDebugValue?> getResult) {
         start();
         IsRunning = true;
+        RunningThreadId = eval.GetThread().GetId();
         try {
             eval.GetThread().GetProcess().Continue(false);
             var evalEvent = await WaitForCompletionAsync(eval);
@@ -125,6 +127,7 @@ internal class FuncEvalRunner {
         }
         finally {
             IsRunning = false;
+            RunningThreadId = null;
         }
     }
     // Waits for the completion callback, aborting the evaluation when it takes too long. The wait keeps dispatching
