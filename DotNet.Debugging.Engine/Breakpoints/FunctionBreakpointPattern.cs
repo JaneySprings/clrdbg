@@ -92,8 +92,9 @@ internal class FunctionBreakpointPattern {
         value = string.Concat(value.Where(it => !char.IsWhiteSpace(it)));
         if (value.EndsWith('*'))
             return NormalizeType(value.Substring(0, value.Length - 1)) + "*";
-        if (value.EndsWith(']') && value.LastIndexOf('[') > 0)
-            return NormalizeType(value.Substring(0, value.LastIndexOf('['))) + value.Substring(value.LastIndexOf('['));
+        var arrayStart = value.LastIndexOf('[');
+        if (value.EndsWith(']') && arrayStart > 0)
+            return string.Concat(NormalizeType(value[..arrayStart]), value.AsSpan(arrayStart));
         if (value.EndsWith('?'))
             return $"System.Nullable`1<{NormalizeType(value.Substring(0, value.Length - 1))}>";
 

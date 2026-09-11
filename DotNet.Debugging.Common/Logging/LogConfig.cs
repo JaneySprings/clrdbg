@@ -1,3 +1,4 @@
+#if LOGGING
 using NLog;
 using NLog.Config;
 using NLog.Targets;
@@ -6,9 +7,11 @@ using NLog.Targets.Wrappers;
 namespace DotNet.Debugging.Common.Logging;
 
 public static class LogConfig {
+
     private static readonly string _logDir = Path.Combine(AppContext.BaseDirectory, "logs");
-    public static readonly string ErrorLogFile = Path.Combine(_logDir, "Error.log");
-    public static readonly string DebugLogFile = Path.Combine(_logDir, "Debug.log");
+    private static readonly string ErrorLogFile = Path.Combine(_logDir, "Error.log");
+    private static readonly string DebugLogFile = Path.Combine(_logDir, "Debug.log");
+
 
     public static void InitializeLog() {
         var configuration = new LoggingConfiguration();
@@ -18,7 +21,7 @@ public static class LogConfig {
             Layout = "${time}|${message}",
             DeleteOldFileOnStartup = true,
             MaxArchiveFiles = 1,
-            ArchiveAboveSize = 1 * 1024 * 1024, //MB
+            ArchiveAboveSize = 10 * 1024 * 1024, //MB
         };
         var commonAsyncTarget = new AsyncTargetWrapper(commonTarget, 500, AsyncTargetWrapperOverflowAction.Discard);
         configuration.AddTarget("log", commonAsyncTarget);
@@ -28,7 +31,7 @@ public static class LogConfig {
             DeleteOldFileOnStartup = true,
             Layout = "${longdate}|${message}",
             MaxArchiveFiles = 1,
-            ArchiveAboveSize = 1 * 1024 * 1024, //MB
+            ArchiveAboveSize = 2 * 1024 * 1024, //MB
         };
         var errorAsyncTarget = new AsyncTargetWrapper(errorTarget, 500, AsyncTargetWrapperOverflowAction.Discard);
         configuration.AddTarget("errorLog", errorAsyncTarget);
@@ -41,3 +44,4 @@ public static class LogConfig {
         LogManager.ReconfigExistingLoggers();
     }
 }
+#endif

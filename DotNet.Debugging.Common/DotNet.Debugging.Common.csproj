@@ -4,8 +4,14 @@
     <PropertyGroup>
         <OutputType>Library</OutputType>
     </PropertyGroup>
+    <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+        <EnableLogging>true</EnableLogging>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(EnableLogging)' == 'true'">
+        <DefineConstants>$(DefineConstants);LOGGING</DefineConstants>
+    </PropertyGroup>
 
-    <ItemGroup>
+    <ItemGroup Condition="'$(EnableLogging)' == 'true'">
         <PackageReference Include="NLog" />
     </ItemGroup>
 </Project>

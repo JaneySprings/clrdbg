@@ -64,6 +64,6 @@ public abstract class Session : DebugAdapterBase, IProcessLogger {
     }
 
     public static ProtocolException GetProtocolException(string message) {
-        return new ProtocolException(message, message.GetHashCode(), message, url: $"file://{LogConfig.DebugLogFile}");
+        return new ProtocolException(message, message.GetHashCode(), message);
     }
 }

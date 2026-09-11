@@ -44,7 +44,7 @@ jobs:
           # dotnet-quality: preview
 
       - name: Run tests
-        run: dotnet test DotNet.Debugging.Tests/DotNet.Debugging.Tests.csproj -p:Configuration=Release --blame-hang --blame-hang-timeout 4m --blame-hang-dump-type none --results-directory TestResults
+        run: dotnet test DotNet.Debugging.Tests/DotNet.Debugging.Tests.csproj -p:Configuration=Release -p:EnableLogging=true --blame-hang --blame-hang-timeout 4m --blame-hang-dump-type none --results-directory TestResults
 
       - name: Upload the engine logs
         if: always()
