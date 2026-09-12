@@ -400,11 +400,11 @@ public class EvaluationSyntaxTests : BaseDebugTestFixture {
             ("person.Tags.Select(t => t + \"!\").Last()", "\"b!\""),
             ("bytes.Select(b => (int)b).Sum()", "10"),
             ("numbers.Select(n => new { Value = n, Twice = n * 2 }).First(v => v.Value == 2).Twice", "4"),
-            // Errors the operators throw, reported the way a debuggee exception is (the harness adds its own 'error: ')
-            ("numbers.First(n => n > 10)", "error: error: Evaluation threw System.InvalidOperationException"),
-            ("numbers.Single(n => n > 1)", "error: error: Evaluation threw System.InvalidOperationException"),
+            // Errors the operators throw, reported the way a debuggee exception is
+            ("numbers.First(n => n > 10)", "error: Evaluation threw System.InvalidOperationException"),
+            ("numbers.Single(n => n > 1)", "error: Evaluation threw System.InvalidOperationException"),
             // A lambda cannot leave the debugger: the debuggee has no code for it
-            ("wrapper.Map(v => v + 1)", "error: error: A lambda can be invoked or handed to a System.Linq operator, the debuggee has no code for it"));
+            ("wrapper.Map(v => v + 1)", "error: A lambda can be invoked or handed to a System.Linq operator, the debuggee has no code for it"));
     }
 
     [Test]
@@ -525,6 +525,7 @@ public class EvaluationSyntaxTests : BaseDebugTestFixture {
     [Test]
     public void ErrorsAreReportedTest() {
         var threadId = LaunchToMarker();
+        Assert.That(EvaluateOrError("undefinedName", threadId), Is.EqualTo("error: error CS0103: The name 'undefinedName' does not exist in the current context"));
         Assert.Multiple(() => {
             foreach (var expression in new[] {
                 "undefinedName",

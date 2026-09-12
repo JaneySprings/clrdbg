@@ -82,7 +82,7 @@ public class ExpressionContext {
             var result = context.CompileExpression(expression, DkmEvaluationFlags.TreatAsExpression, GetAliases(hasException), diagnostics, out _, testData: null);
             if (result == null || diagnostics.HasAnyErrors()) {
                 var errors = diagnostics.AsEnumerable().Where(it => it.Severity == DiagnosticSeverity.Error).ToList();
-                return new ExpressionCompileResult(errors.Select(it => it.GetMessage()).ToList(), GetMissingAssemblies(errors));
+                return new ExpressionCompileResult(errors.Select(it => DebuggerDiagnosticFormatter.Instance.Format(it)).ToList(), GetMissingAssemblies(errors));
             }
             return new ExpressionCompileResult(result.Assembly, result.TypeName, result.MethodName);
         }

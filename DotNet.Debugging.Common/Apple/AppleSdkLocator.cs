@@ -20,11 +20,11 @@ public static class AppleSdkLocator {
         if (string.IsNullOrEmpty(sdkPath))
             sdkPath = Path.Combine(dotnetPacksPath, "Microsoft.iOS.Windows.Sdk");
         if (!Directory.Exists(sdkPath))
-            throw new DirectoryNotFoundException("Could not find idevice tool");
+            throw new DirectoryNotFoundException("Could not find 'idevice' tool");
 
         var toolLocations = Directory.GetDirectories(sdkPath);
         if (toolLocations.Length == 0)
-            throw new FileNotFoundException("Could not find idevice tool");
+            throw new FileNotFoundException("Could not find 'idevice' tool");
 
         var latestToolDirectory = toolLocations.OrderByDescending(x => Path.GetFileName(x)).First();
         return Path.Combine(latestToolDirectory, "tools", "msbuild", "iOS", "imobiledevice-x64");
@@ -55,11 +55,11 @@ public static class AppleSdkLocator {
         if (string.IsNullOrEmpty(sdkPath))
             sdkPath = Path.Combine(dotnetPacksPath, "Microsoft.iOS.Sdk");
         if (!Directory.Exists(sdkPath))
-            throw new DirectoryNotFoundException("Could not find mlaunch tool");
+            throw new DirectoryNotFoundException("Could not find 'mlaunch' tool");
 
         var toolLocations = Directory.GetDirectories(sdkPath);
         if (toolLocations.Length == 0)
-            throw new FileNotFoundException("Could not find mlaunch tool");
+            throw new FileNotFoundException("Could not find 'mlaunch' tool");
 
         var latestToolDirectory = toolLocations.OrderByDescending(x => Path.GetFileName(x)).First();
         mlaunchToolPath = Path.Combine(latestToolDirectory, "tools", "bin", "mlaunch");
@@ -68,7 +68,7 @@ public static class AppleSdkLocator {
     public static string GetOpenPath() {
         string path = Path.Combine("/usr", "bin", "open");
         if (!File.Exists(path))
-            throw new InvalidOperationException("Could not find open tool");
+            throw new InvalidOperationException("Could not find 'open' tool");
 
         return path;
     }

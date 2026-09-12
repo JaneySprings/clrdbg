@@ -1,4 +1,5 @@
 using DotNet.Debugging.Adapter.Terminal;
+using DotNet.Debugging.Common;
 
 namespace DotNet.Debugging.Adapter;
 
@@ -8,6 +9,7 @@ public class Program {
 
     private static int Main(string[] args) {
         Directory.SetCurrentDirectory(AppContext.BaseDirectory);
+        Localizer.Init();
 
         foreach (var arg in args) {
             if (arg.StartsWith(ConnectionOption, StringComparison.OrdinalIgnoreCase))
