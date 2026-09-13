@@ -122,13 +122,13 @@ public class DebuggerDisplayTests : BaseDebugTestFixture {
     public void NullOnFragmentPathShowsTheExceptionInPlaceTest() {
         var locals = GetLocals(LaunchToMarker());
         Assert.That(locals["first"].Value, Is.EqualTo("first -> last"));
-        Assert.That(locals["last"].Value, Is.EqualTo("last -> {System.NullReferenceException: Object reference not set to an instance of an object.\n   at <>x.<>m0(Node <>4__this)}"));
+        Assert.That(locals["last"].Value, Is.EqualTo("last -> {System.NullReferenceException: Object reference not set to an instance of an object.}"));
     }
 
     [Test]
     public void ThrowingFragmentShowsTheExceptionTest() {
         var locals = GetLocals(LaunchToMarker());
-        Assert.That(locals["faulty"].Value, Does.StartWith("{System.NotSupportedException: no display\n   at Faulty.get_Broken() in "));
+        Assert.That(locals["faulty"].Value, Does.StartWith($"{{System.NotSupportedException: no display{Environment.NewLine}   at Faulty.get_Broken() in "));
         Assert.That(locals["faulty"].Value, Does.EndWith("}"));
     }
 

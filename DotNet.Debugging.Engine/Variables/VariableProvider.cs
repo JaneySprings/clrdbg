@@ -216,7 +216,7 @@ internal class VariableProvider {
                 return (await FormatValueAsync(evaluation.ThrownException, threadId, frameDepth, escapeStrings: false, createProxy: false, depth + 1)).Value;
             if (evaluation.Error != null) {
                 DebuggerLoggingService.LogMessage($"DebuggerDisplay fragment '{fragment.Text}' failed: {evaluation.Error}");
-                return IsNullDereference(evaluation.Failure) ? FormatNullDereference(value) : evaluation.Error;
+                return IsNullDereference(evaluation.Failure) ? FormatNullDereference() : evaluation.Error;
             }
             if (evaluation.Value == null)
                 return string.Empty;
@@ -242,13 +242,11 @@ internal class VariableProvider {
         }
         return false;
     }
-    // A fragment that dereferenced null is shown the way Microsoft's debugger shows it: the exception the runtime raised
-    // running it, thrown out of the method the expression compiler generates for a type context ('<>x.<>m0(Link <>4__this)')
-    private static string FormatNullDereference(ICorDebugValue value) {
-        var corClass = value.UnwrapDebugValueToObject().GetClass();
-        var typeName = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>().GetTypeDefProps(corClass.GetToken()).szTypeDef;
-        typeName = typeName.Substring(typeName.LastIndexOf('.') + 1);
-        return $"{{System.NullReferenceException: Object reference not set to an instance of an object.\n   at <>x.<>m0({typeName} <>4__this)}}";
+    // A fragment that dereferenced null shows the exception its evaluation raises, in the braces a ToString result
+    // gets. Microsoft's debugger adds the frame of the method its expression compiler generated ('at <>x.<>m0(...)'),
+    // which says nothing to a user and is left out
+    private static string FormatNullDereference() {
+        return $"{{{typeof(NullReferenceException).FullName}: {new NullReferenceException().Message}}}";
     }
 
     private async Task AddScopeVariablesAsync(VariableReference reference, List<VariableSlot> result) {

@@ -137,8 +137,9 @@ numbers, a nested object through its own display or `ToString` (nesting stops at
 with `{Type}`), `null` — so `{Amount} {Currency}` shows `12.5 "USD"` and `box of {Value}` shows
 `box of 1 EUR`. A fragment that fails shows its failure in its own place while the others still
 render: a compile error verbatim, code that threw as the exception's `{ToString()}` (the
-`EvaluationResult` carries the thrown object), a null dereference as the `NullReferenceException`
-Microsoft's debugger reports out of the compiler's generated method (`at <>x.<>m0(Link <>4__this)`).
+`EvaluationResult` carries the thrown object), a null dereference as the braced
+`{System.NullReferenceException: …}` header alone (Microsoft's debugger appends the frame of its
+generated method, `at <>x.<>m0(…)`, which is left out on purpose).
 The `Type` template replaces the type name (`labelled [RetypedThing]`); the `Name` template replaces
 the name of a *member or element* (a dictionary's `["key"]` entries), never that of a scope variable
 or an evaluated expression. None of this marks the variable as a failed evaluation. A time-out — an
