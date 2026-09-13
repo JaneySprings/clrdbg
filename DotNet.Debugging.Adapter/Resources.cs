@@ -27,6 +27,11 @@ public static class Resources {
     public const string MsgBreakpointSourceMismatch = "A copy of {0} was found in {1}, but the current source code is different from the version built into {1}.\r\nTo allow this breakpoint to be hit: Add '\"requireExactSource\": false' to launch.json and restart debugging.";
     public const string MsgBreakpointNoFunctions = "No functions matching '{0}' were found.";
     public const string MsgBreakpointError = "Error binding breakpoint: {0}";
+    public const string MsgBreakpointFunctionNotFound = "The function cannot be found: {0}";
+    public const string MsgBreakpointInHiddenMethod = "Breakpoints cannot be set in method or class with the 'DebuggerHidden' attribute.";
+    public const string MsgBreakpointInStepThroughMethod = "Breakpoints cannot be set in method or classes with the 'DebuggerStepThrough' attribute when the debugger option 'Just My Code' is enabled.";
+    public const string MsgBreakpointConditionFailed = "The breakpoint condition '{0}' could not be evaluated: {1}";
+    public const string MsgBreakpointWarning = "Breakpoint warning: {0} - {1}:{2}";
 
     public const string MsgExceptionThrown = "Exception thrown: '{0}' in {1}";
     public const string MsgExceptionUnhandled = "An unhandled exception of type '{0}' occurred in {1}";

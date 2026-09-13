@@ -20,9 +20,13 @@ internal static class MetadataImportExtensions {
     // type, plus [DebuggerNonUserCode] while Just My Code is on
     public static bool IsNonUserMethod(this IMetaDataImport metadataImport, MethodDefToken methodToken, bool justMyCode) {
         var attributeNames = justMyCode ? AttributeNames.JustMyCodeNonUserMethodAttributes : AttributeNames.NonUserMethodAttributes;
-        if (metadataImport.HasAnyAttribute(methodToken, attributeNames))
+        return attributeNames.Any(it => metadataImport.HasMethodOrTypeAttribute(methodToken, it));
+    }
+    // Whether the method carries the attribute, directly or through its declaring type
+    public static bool HasMethodOrTypeAttribute(this IMetaDataImport metadataImport, MethodDefToken methodToken, string attributeName) {
+        if (metadataImport.HasAttribute(methodToken, attributeName))
             return true;
-        return metadataImport.HasAnyAttribute(metadataImport.GetMethodProps(methodToken).pClass, attributeNames);
+        return metadataImport.HasAttribute(metadataImport.GetMethodProps(methodToken).pClass, attributeName);
     }
     // A property accessor or an operator method, what 'step over properties and operators' filters out
     public static bool IsPropertyOrOperator(this IMetaDataImport metadataImport, MethodDefToken methodToken) {

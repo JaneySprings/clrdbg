@@ -41,7 +41,7 @@ public class FuncEvalLifetimeTests : BaseDebugTestFixture {
     public void StructLocalExpandsAfterItsDisplayEvaluationTest() {
         var threadId = LaunchToMarker();
         var point = GetLocalVariables(threadId).First(it => it.Name.StartsWith("point "));
-        Assert.That(point.Value, Is.EqualTo("P3"), "The DebuggerDisplay ran a func eval on the struct");
+        Assert.That(point.Value, Is.EqualTo("\"P3\""), "The DebuggerDisplay ran a func eval on the struct (its string fragment is quoted)");
         Assert.That(point.VariablesReference, Is.GreaterThan(0), "The struct is still expandable after that eval");
 
         var members = GetVariables(point.VariablesReference);
@@ -54,7 +54,7 @@ public class FuncEvalLifetimeTests : BaseDebugTestFixture {
         var threadId = LaunchToMarker();
         var points = GetLocalVariables(threadId).First(it => it.Name.StartsWith("points"));
         var elements = GetVariables(points.VariablesReference);
-        Assert.That(elements.Select(it => it.Value), Is.EqualTo(new[] { "P1", "P5" }), "The second element is read after the first one's eval");
+        Assert.That(elements.Select(it => it.Value), Is.EqualTo(new[] { "\"P1\"", "\"P5\"" }), "The second element is read after the first one's eval");
         Assert.That(GetVariables(elements[1].VariablesReference).First(it => it.Name.StartsWith("X [")).Value, Is.EqualTo("5"));
     }
 

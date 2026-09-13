@@ -93,11 +93,15 @@ public class ValueFormattingTests : BaseDebugTestFixture {
         Assert.That(locals.First(it => it.Name == "boxed [int]").Value, Is.EqualTo("123"), "A boxed primitive is shown as the primitive itself");
     }
 
+    // The compiler's display is '\{ Id = {Id}, Name = {Name} }' with Type = "<Anonymous Type>": the escaped braces are
+    // literal, a string fragment is quoted like any other, the type argument names the type
     [Test]
     public void AnonymousTypeDisplayTest() {
         var threadId = LaunchToMarker();
         var anonymous = GetLocalVariables(threadId).First(it => it.Name.StartsWith("anonymous"));
-        Assert.That(anonymous.Value, Is.EqualTo("{ Id = 7, Name = seven }"), "The anonymous type's DebuggerDisplay runs with its escaped braces");
+        Assert.That(anonymous.Value, Is.EqualTo("{ Id = 7, Name = \"seven\" }"));
+        Assert.That(anonymous.Name, Is.EqualTo("anonymous [<Anonymous Type>]"));
+        Assert.That(anonymous.Type, Is.EqualTo("<Anonymous Type>"));
     }
 
     [Test]

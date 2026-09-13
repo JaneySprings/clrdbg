@@ -117,8 +117,12 @@ the await may have continued the debuggee.
 
 `CreateThread`/`ExitThread` maintain the `threads` dictionary (the first thread created is the main
 thread), and `GetThread(id)` answers from it: `ICorDebugThread` objects stay valid until the thread
-exits, and `ICorDebugProcess.GetThread` is not implemented by the remote (mobile) transport. Thread
-names are read without running code: the managed `Thread._name` field of the thread object, then —
+exits, and `ICorDebugProcess.GetThread` is not implemented by the remote (mobile) transport.
+`GetThreads` lists the dictionary's threads that have managed frames (`HasManagedFrames`): the
+runtime's own threads — the finalizer, the tiered compilation worker — have none while idle, whether
+or not they raised `CreateThread` (the process enumerates some that never did), and a client could
+show nothing for them; while the process runs the frames cannot be walked, and every thread is
+listed. Thread names are read without running code: the managed `Thread._name` field of the thread object, then —
 for every thread but the main one, whose OS name is the executable's, and only for a process running
 on this machine (a remote attach asks the OS solely for a Mac Catalyst platform) — the OS thread name
 (`NativeThreadNames`: `proc_pidinfo` on macOS, `/proc/<pid>/task/<tid>/comm` on Linux,

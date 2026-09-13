@@ -44,7 +44,9 @@ share one).
    links to enclosing closures), and the generated object becomes the source of the hoisted locals.
    In the method declaring a lambda the display class is a plain local (`CS$<>8__locals0`, which the
    compiler leaves visible for the evaluator's sake): it is listed through its hoisted locals, never
-   itself, and a captured parameter already listed from the frame is not repeated. A display class not
+   itself. A captured parameter is a field of the class and a slot of the frame: the method reads and
+   writes the field from its first statement on, the slot keeps the value it was entered with, so the
+   field replaces the slot already listed (one entry, the live value). A display class not
    created yet (its captured variables are not in scope) is a null field and lists nothing.
 3. **Hoisted locals** — the fields of the closure/state machine and of every enclosing closure,
    shown under their original names (`<count>5__1` → `count`); other generated fields are hidden.
@@ -122,14 +124,27 @@ cases that need code to run in the debuggee:
 | enum | The member name, `A \| B` for `[Flags]` values fully decomposed into members, the number otherwise. |
 | `Nullable<T>` | `null` or the value's text, typed `int?`; a `DateTime?` or `Guid?` shows its value's `ToString`/`DebuggerDisplay`, evaluated against the underlying value. |
 | `decimal` | Read from the struct's 16 bytes (`flags, hi, lo, mid`) through `new decimal(bits)`. |
-| object with `DebuggerDisplay` | The attribute string (inherited: the first one up the base chain, so a `List<int>` subclass shows `Count = 3`; `DebuggerTypeProxy` likewise, an open generic proxy closed over the declaring base's arguments) as an interpolated-string *template* (`Count = {Count}`; anonymous types' `\{ … }` fixed up; a `Name` argument becomes a `Name = ` prefix), evaluated against the object ([evaluation.md](evaluation.md)). `{Name,nq}` format specifiers are stripped by the compiler. |
-| exception, or a type overriding `ToString()` | The `{ToString()}` template, evaluated the same way. |
+| object with `DebuggerDisplay` | The attribute string (inherited: the first one up the base chain, so a `List<int>` subclass shows `Count = 3`; `DebuggerTypeProxy` likewise, an open generic proxy closed over the declaring base's arguments), rendered by `VariableProvider` as described below; the attribute's `Name` and `Type` strings are carried along as templates. |
+| exception, or a type overriding `ToString()` | The display string `\{{ToString(),nq}\}` — the result in braces, never quoted — rendered the same way. |
 | any other object | `{Namespace.Type}`. |
 
-A failed template evaluation makes the variable an error entry with the error text — except a
-time-out: an implicit evaluation the engine had to abort ([evaluation.md](evaluation.md)) falls back to
-`{TypeName}` like one past the listing's two-second implicit-eval budget, the way Microsoft's debugger
-shows a value whose evaluation it cut off.
+**Rendering a display string** (`VariableProvider.RenderDisplayAsync`): `DebuggerDisplayTemplate.Parse`
+splits it into literal text and `{expression}` fragments (`\{`/`\}` are literal braces, a `}` outside a
+fragment is text, `,nq` and other format specifiers after a top-level comma are split off). Each fragment
+is evaluated on its own in the value's type context ([evaluation.md](evaluation.md)) and its result is
+formatted like a variable's value — a string quoted unless `,nq`, `true`/`false`, `120 'x'`, invariant
+numbers, a nested object through its own display or `ToString` (nesting stops at `MaxDisplayDepth`
+with `{Type}`), `null` — so `{Amount} {Currency}` shows `12.5 "USD"` and `box of {Value}` shows
+`box of 1 EUR`. A fragment that fails shows its failure in its own place while the others still
+render: a compile error verbatim, code that threw as the exception's `{ToString()}` (the
+`EvaluationResult` carries the thrown object), a null dereference as the `NullReferenceException`
+Microsoft's debugger reports out of the compiler's generated method (`at <>x.<>m0(Link <>4__this)`).
+The `Type` template replaces the type name (`labelled [RetypedThing]`); the `Name` template replaces
+the name of a *member or element* (a dictionary's `["key"]` entries), never that of a scope variable
+or an evaluated expression. None of this marks the variable as a failed evaluation. A time-out — an
+implicit evaluation the engine had to abort — falls back to `{TypeName}`, like a value past the
+listing's two-second implicit-eval budget, the way Microsoft's debugger shows a value whose evaluation
+it cut off.
 `TypeNameFormatter` renders types as C#: keywords for primitives, `string[]`/`int[,]`, generic
 instantiations with the arguments consumed by arity along the nesting chain (`Outer<string>.Inner<int>`),
 `System.Nullable<T>` as `T?`, `System.String`/`System.Object`/`System.Decimal` and boxed primitives as
@@ -138,9 +153,10 @@ their aliases.
 ## Assignments
 
 `SetVariableAsync(reference, name, text)` finds the variable by name in the scope (locals by PDB
-name, then parameters by metadata name, then the locals the compiler hoisted onto a closure or state
-machine: the fields of the generated `this` of a lambda or `MoveNext`, of a display-class local of the
-declaring method, and of the enclosing closures those link to) or among the members (`[i]` elements,
+name, then the locals the compiler hoisted onto a closure or state machine: the fields of the
+generated `this` of a lambda or `MoveNext`, of a display-class local of the declaring method, and of
+the enclosing closures those link to — before the parameters by metadata name, since a captured
+parameter's live copy is the hoisted one) or among the members (`[i]` elements,
 fields on the type and its bases; a constant is refused — "is a constant and cannot be assigned" —
 rather than written into a value that has no storage), and `VariableWriter` writes it: `null` into reference slots, and parsed primitives
 (`bool`, `char` — `'a'`, `a` or a code —, integers, `float`/`double`, `nint`/`nuint`) into generic

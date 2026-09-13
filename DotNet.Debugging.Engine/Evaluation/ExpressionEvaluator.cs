@@ -48,7 +48,7 @@ internal class ExpressionEvaluator {
             // Roslyn's expression compiler generates no code for a variable a pattern declares ('x is int n') and fails
             // looking the local up; the failure is reported as what it is rather than as a missing dictionary key
             var message = cause is KeyNotFoundException ? $"Variables declared by a pattern ('x is int n') are not supported in the debugger ({cause.Message})" : cause.Message;
-            return EvaluationResult.FromError(message, ex is EvaluationTimeoutException);
+            return EvaluationResult.FromError(message, ex, ex is EvaluationTimeoutException);
         }
     }
 

@@ -122,6 +122,24 @@ internal sealed class ModuleMetadataReader : IDisposable {
         }
     }
 
+    // Methods marked [DebuggerNonUserCode], [DebuggerStepThrough] or [DebuggerHidden], directly or through their type -
+    // the same rule 'IsNonUserMethod' applies to a frame under Just My Code
+    public IEnumerable<int> GetMethodsMarkedNonUserCode() {
+        var reader = PeMetadataReader;
+        foreach (var handle in reader.CustomAttributes) {
+            var attribute = reader.GetCustomAttribute(handle);
+            if (!AttributeNames.JustMyCodeNonUserMethodAttributes.Contains(reader.GetAttributeTypeName(attribute)))
+                continue;
+            if (attribute.Parent.Kind == HandleKind.MethodDefinition) {
+                yield return MetadataTokens.GetToken(attribute.Parent);
+            }
+            else if (attribute.Parent.Kind == HandleKind.TypeDefinition) {
+                foreach (var methodHandle in reader.GetTypeDefinition((TypeDefinitionHandle)attribute.Parent).GetMethods())
+                    yield return MetadataTokens.GetToken(methodHandle);
+            }
+        }
+    }
+
     public SourceLocation? GetSourceLocation(int methodToken, int ilOffset) {
         var reader = PdbMetadataReader;
         if (reader == null)

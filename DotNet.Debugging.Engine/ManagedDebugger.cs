@@ -236,20 +236,24 @@ public partial class ManagedDebugger {
 
     public List<Breakpoint> SetBreakpoints(string filePath, List<BreakpointRequest> requests) {
         DebuggerLoggingService.LogMessage($"SetBreakpoints: {filePath}, lines: {string.Join(", ", requests.Select(it => it.Line))}");
-        return breakpointManager.SetBreakpoints(filePath, requests, Modules, process != null, RequireExactSource);
+        return breakpointManager.SetBreakpoints(filePath, requests, Modules, process != null, RequireExactSource, JustMyCode);
     }
     public List<Breakpoint> SetFunctionBreakpoints(List<FunctionBreakpointRequest> requests) {
         DebuggerLoggingService.LogMessage($"SetFunctionBreakpoints: {string.Join(", ", requests.Select(it => it.Name))}");
         return breakpointManager.SetFunctionBreakpoints(requests, Modules, process != null);
     }
 
+    // The threads announced through 'CreateThread' that run managed code: the runtime's own (the finalizer, the tiered
+    // compilation worker) have no managed frames while idle and a client could show nothing for them - Microsoft's
+    // debugger leaves them out too
     public List<ThreadInfo> GetThreads() {
         var result = new List<ThreadInfo>();
         if (process == null)
             return result;
         try {
-            foreach (var thread in process.GetThreads()) {
-                var threadId = thread.GetId();
+            foreach (var (threadId, thread) in threads) {
+                if (!thread.HasManagedFrames())
+                    continue;
                 var isMain = threadId == mainThreadId;
                 // The OS name of the main thread is the executable's ('dotnet' on Linux), the host labels it instead. The
                 // OS is asked for a local process only: a device's ids would name some unrelated local thread

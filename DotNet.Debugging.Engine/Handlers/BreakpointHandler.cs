@@ -9,6 +9,7 @@ using DotNet.Debugging.Engine.Extensions;
 using DotNet.Debugging.Engine.Logging;
 using DotNet.Debugging.Engine.Models;
 using DotNet.Debugging.Engine.Stepping;
+using DotNet.Debugging.Engine.Variables;
 
 namespace DotNet.Debugging.Engine;
 
@@ -48,44 +49,66 @@ public partial class ManagedDebugger {
         if (TryHandleEntryPointBreakpoint(thread, functionBreakpoint))
             return;
 
-        var breakpoint = breakpointManager.FindByCorBreakpoint(functionBreakpoint);
-        if (breakpoint == null) {
+        // Every breakpoint bound at the location is hit at once, they share the runtime breakpoint
+        var hits = breakpointManager.FindByCorBreakpoint(functionBreakpoint);
+        if (hits.Count == 0) {
             DebuggerLoggingService.LogMessage("A breakpoint unknown to the debugger was hit");
             ContinueProcess();
             return;
         }
 
-        breakpoint.HitCount++;
-        // A hit count that does not stop leaves an in-flight step alone, the step carries on past the breakpoint
-        if (breakpoint.HitCondition != null && !breakpoint.HitCondition.MatchesHitCount(breakpoint.HitCount)) {
-            DebuggerLoggingService.LogMessage($"Hit count condition not met: count={breakpoint.HitCount}, condition={breakpoint.HitCondition}");
-            ContinueProcess();
-            return;
+        // A breakpoint either stops, evaluates in the debuggee, or is passed by its hit count, which leaves an in-flight
+        // step alone. A stop wins over a step in flight. An evaluation runs the debuggee and the step goes on afterwards
+        // when nothing stops: the stepping thread's own stepper is suspended for it (the hijacked evaluation and the
+        // stepper's patches would share the thread) and re-armed after, another thread's stepper stays armed and its
+        // completion is held back until the breakpoints have decided (HandleStepComplete)
+        var stopping = new List<Breakpoint>();
+        FailedCondition? failedCondition = null;
+        var evaluated = false;
+        foreach (var breakpoint in hits) {
+            breakpoint.HitCount++;
+            if (breakpoint.HitCondition != null && !breakpoint.HitCondition.MatchesHitCount(breakpoint.HitCount)) {
+                DebuggerLoggingService.LogMessage($"Hit count condition not met: count={breakpoint.HitCount}, condition={breakpoint.HitCondition}");
+                continue;
+            }
+            if (breakpoint.Condition != null || breakpoint.LogMessage != null) {
+                if (stepController.SteppingThreadId == thread.GetId())
+                    stepController.SuspendStep();
+                evaluated = true;
+            }
+            if (breakpoint.Condition != null) {
+                try {
+                    if (!await EvaluateConditionAsync(thread, breakpoint.Condition)) {
+                        DebuggerLoggingService.LogMessage($"Breakpoint condition not met: {breakpoint.Condition}");
+                        continue;
+                    }
+                }
+                catch (Exception ex) {
+                    // Passed silently, the breakpoint would be lost with nothing anywhere to say why
+                    DebuggerLoggingService.LogMessage($"Breakpoint condition could not be evaluated: {breakpoint.Condition}: {ex.Message}");
+                    failedCondition ??= new FailedCondition(breakpoint, ex.Message);
+                    stopping.Add(breakpoint);
+                    continue;
+                }
+            }
+            if (breakpoint.LogMessage != null) {
+                OnLogPoint?.Invoke(await InterpolateLogMessageAsync(thread, breakpoint.LogMessage));
+                continue;
+            }
+            stopping.Add(breakpoint);
         }
-        // From here the breakpoint either stops or evaluates in the debuggee. A stop wins over a step in flight. An
-        // evaluation runs the debuggee, and the step goes on afterwards when it does not stop: the stepping thread's
-        // own stepper is suspended for it (the hijacked evaluation and the stepper's patches would share the thread)
-        // and re-armed after; another thread's stepper stays armed, and a completion arriving during the evaluation
-        // is held back until the breakpoint has decided (HandleStepComplete)
-        var evaluates = breakpoint.Condition != null || breakpoint.LogMessage != null;
-        if (evaluates && stepController.SteppingThreadId == thread.GetId())
-            stepController.SuspendStep();
-        if (breakpoint.Condition != null && !await EvaluateConditionAsync(thread, breakpoint.Condition)) {
-            DebuggerLoggingService.LogMessage($"Breakpoint condition not met: {breakpoint.Condition}");
-            ContinueAfterEvaluation(thread);
-            return;
-        }
-        if (breakpoint.LogMessage != null) {
-            OnLogPoint?.Invoke(await InterpolateLogMessageAsync(thread, breakpoint.LogMessage));
-            ContinueAfterEvaluation(thread);
+        if (stopping.Count == 0) {
+            if (evaluated)
+                ContinueAfterEvaluation(thread);
+            else
+                ContinueProcess();
             return;
         }
 
         // The stop abandons what is left of the step, including an async step out that has no stepper and waits
         // for its task through the notification breakpoint: it must not fire after the user has moved on
         stepController.Disable();
-        var location = breakpoint.ResolvedLocation?.Location ?? GetSourceLocation(thread.GetActiveFrame());
-        OnStopped?.Invoke(new StopInfo(thread.GetId(), StopReason.Breakpoint, location, [breakpoint.Id]));
+        OnStopped?.Invoke(new StopInfo(thread.GetId(), StopReason.Breakpoint, GetSourceLocation(thread.GetActiveFrame()), stopping.Select(it => it.Id).ToList(), failedCondition));
     }
 
     // Carries on after a breakpoint that evaluated without stopping: a step completion held back during the evaluation
@@ -115,21 +138,18 @@ public partial class ManagedDebugger {
         OnStopped?.Invoke(new StopInfo(thread.GetId(), StopReason.Entry, GetSourceLocation(thread.GetActiveFrame())));
         return true;
     }
-    // A condition that cannot be evaluated does not stop
+    // Whether the condition holds in the top frame of the thread. A condition that cannot be evaluated - a name that
+    // does not exist, a call that throws, a result that is no boolean - throws the reason, and the caller stops on it
     private async Task<bool> EvaluateConditionAsync(ICorDebugThread thread, string condition) {
-        try {
-            var context = new EvaluationContext(thread, thread.GetId(), 0);
-            using var result = await GetEvaluator().EvaluateAsync(condition, context);
-            if (result.Error != null) {
-                DebuggerLoggingService.LogMessage($"Condition evaluation error for '{condition}': {result.Error}");
-                return false;
-            }
-            return result.Value != null && CilValue.FromCorValue(result.Value).IsTrue();
-        }
-        catch (Exception ex) {
-            DebuggerLoggingService.LogError($"Exception evaluating the condition '{condition}'", ex);
-            return false;
-        }
+        var context = new EvaluationContext(thread, thread.GetId(), 0);
+        using var result = await GetEvaluator().EvaluateAsync(condition, context);
+        if (result.Failure is EvaluationThrewException threw)
+            throw new EvaluationException($"{threw.ExceptionTypeName} was thrown");
+        if (result.Error != null)
+            throw new EvaluationException(result.Error);
+        if (result.Value == null || ValueFormatter.Format(result.Value, false).TypeName != "bool")
+            throw new EvaluationException("the result is not a boolean");
+        return CilValue.FromCorValue(result.Value).IsTrue();
     }
     // Every '{expression}' of the message is replaced by its value in the top frame, an expression that fails is kept as is
     private async Task<string> InterpolateLogMessageAsync(ICorDebugThread thread, string message) {

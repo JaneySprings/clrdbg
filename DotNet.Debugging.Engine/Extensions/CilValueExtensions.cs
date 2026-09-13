@@ -47,13 +47,16 @@ internal static class CilValueExtensions {
     public static ICorDebugArrayValue GetArrayValue(this ICorDebugValue value) {
         return value.UnwrapDebugValue() as ICorDebugArrayValue ?? throw new NullReferenceException("The array reference is null");
     }
+    // A null receiver is the null dereference the debuggee itself would raise, told apart from a value of the wrong kind
     public static ICorDebugObjectValue GetFieldReceiver(this CilValue receiver) {
         var corValue = receiver.CorValue;
         if (corValue == null && receiver.Location is CorDebugLocation directLocation)
             corValue = directLocation.Value;
         else if (corValue == null && receiver.Location != null)
             corValue = receiver.Location.Read().CorValue;
-        return corValue?.UnwrapDebugValueToObject() ?? throw new NullReferenceException("The instance field receiver is null");
+        if (corValue == null || (corValue is ICorDebugReferenceValue reference && reference.IsNull()))
+            throw new NullReferenceException("The instance field receiver is null");
+        return corValue.UnwrapDebugValueToObject();
     }
     public static ICorDebugBoxValue GetBoxedValue(this CilValue source) {
         source = source.DereferenceLocation();

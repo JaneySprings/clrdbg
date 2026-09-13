@@ -47,6 +47,9 @@ public static class ServerExtensions {
     public static string ToDisplayMessage(this ExceptionStopInfo exception) {
         return FormatExceptionMessage(exception.Kind, exception.TypeName, exception.ModuleName);
     }
+    public static string ToDisplayMessage(this FailedCondition failedCondition) {
+        return string.Format(Resources.MsgBreakpointConditionFailed, failedCondition.Breakpoint.Condition, failedCondition.Error);
+    }
     public static DebugProtocol.ExceptionInfoResponse ToExceptionInfoResponse(this ExceptionInfo exception) {
         var description = $"{FormatExceptionMessage(exception.Kind, exception.TypeName, exception.ModuleName)}: '{exception.Message}'";
         var details = CreateExceptionDetails(exception.TypeName, exception.Message, exception.Source, exception.StackTrace, exception.HResult);
@@ -150,16 +153,16 @@ public static class ServerExtensions {
         };
     }
     public static DebugProtocol.Breakpoint ToBreakpoint(this Breakpoint breakpoint, SourceLinkResolver sourceLinkResolver, SourceFileMapper sourceFileMapper) {
-        var isBoundSourceBreakpoint = !breakpoint.IsFunctionBreakpoint && breakpoint.Verified;
+        var location = breakpoint.Location;
         return new DebugProtocol.Breakpoint() {
             Id = breakpoint.Id,
             Verified = breakpoint.Verified,
             Message = breakpoint.ToStatusMessage(),
-            Line = breakpoint.IsFunctionBreakpoint ? null : breakpoint.Line,
-            Column = isBoundSourceBreakpoint ? breakpoint.Column : null,
-            EndLine = isBoundSourceBreakpoint ? breakpoint.EndLine : null,
-            EndColumn = isBoundSourceBreakpoint ? breakpoint.EndColumn : null,
-            Source = isBoundSourceBreakpoint ? breakpoint.Location?.ToSource(sourceLinkResolver, sourceFileMapper) : null,
+            Line = location != null ? location.Line : breakpoint.IsFunctionBreakpoint ? null : breakpoint.RequestedLine,
+            Column = location?.Column,
+            EndLine = location?.EndLine,
+            EndColumn = location?.EndColumn,
+            Source = location?.ToSource(sourceLinkResolver, sourceFileMapper),
         };
     }
     public static DebugProtocol.StackFrame ToStackFrame(this StackFrameInfo frame, int? moduleId, SourceLinkResolver sourceLinkResolver, SourceFileMapper sourceFileMapper) {

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text;
 using DotNet.Debugging.CorApi;
 using DotNet.Debugging.CorApi.Extensions;
 using DotNet.Debugging.Engine.Enums;
@@ -22,14 +23,15 @@ internal enum MemberFilter {
 internal class ValueDisplay {
     public string TypeName { get; }
     public string Value { get; }
+    // The name the DebuggerDisplay attribute's 'Name' gives a member shown with this value, null without one
+    public string? Name { get; }
     public ICorDebugValue? ProxyValue { get; }
-    public bool IsError { get; }
 
-    public ValueDisplay(string typeName, string value, ICorDebugValue? proxyValue, bool isError) {
+    public ValueDisplay(string typeName, string value, string? name, ICorDebugValue? proxyValue) {
         TypeName = typeName;
         Value = value;
+        Name = name;
         ProxyValue = proxyValue;
-        IsError = isError;
     }
 }
 
@@ -45,10 +47,14 @@ internal class VariableProvider {
     // The implicit evaluations (ToString, DebuggerDisplay) of one variables request share this time budget,
     // so a single slow override cannot stall a whole listing - Microsoft's debugger cuts the formatting off the same way
     private const int ImplicitEvalBudgetMilliseconds = 2000;
+    // A display fragment showing a value with a display of its own renders it in turn; a display that comes back to
+    // its own type (a linked node showing its successor) stops there with the type name
+    private const int MaxDisplayDepth = 4;
 
     private readonly ManagedDebugger debugger;
     private readonly VariableManager variableManager;
     private readonly Stopwatch implicitEvalTime = new Stopwatch();
+    private int implicitEvalNesting;
     private bool limitImplicitEvals;
 
     public VariableProvider(ManagedDebugger debugger, VariableManager variableManager) {
@@ -132,52 +138,48 @@ internal class VariableProvider {
             evaluateName = reference.EvaluateName + name;
         else
             evaluateName = $"{reference.EvaluateName}.{name}";
-        return await CreateVariableAsync(name, target, reference.ThreadId, reference.FrameDepth, evaluateName);
+        return await CreateVariableAsync(name, target, reference.ThreadId, reference.FrameDepth, evaluateName, useDisplayName: reference.Kind != VariableReferenceKind.Scope);
     }
-    public async Task<VariableInfo> CreateVariableAsync(string name, ICorDebugValue value, int threadId, int frameDepth, string? evaluateName, VariableKind kind = VariableKind.Data, VariableVisibility? visibility = null) {
+    // 'useDisplayName': the 'Name' of the value's DebuggerDisplay attribute replaces the name of a member or an element
+    // (a dictionary's '[key]' entries), never that of a variable of the scope or of an evaluated expression
+    public async Task<VariableInfo> CreateVariableAsync(string name, ICorDebugValue value, int threadId, int frameDepth, string? evaluateName, VariableKind kind = VariableKind.Data, VariableVisibility? visibility = null, bool useDisplayName = false) {
         var display = await FormatValueAsync(value, threadId, frameDepth, escapeStrings: true);
-        var variable = new VariableInfo(name, display.Value, display.TypeName);
+        var variable = new VariableInfo(useDisplayName && display.Name != null ? display.Name : name, display.Value, display.TypeName);
         variable.Kind = kind;
         variable.Visibility = visibility;
         variable.EvaluateName = evaluateName;
-        variable.IsError = display.IsError;
         variable.VariablesReference = CreateChildrenReference(value, display.TypeName, threadId, frameDepth, display.ProxyValue, evaluateName);
         return variable;
     }
-    // Formats a value, running its DebuggerDisplay expression and creating its DebuggerTypeProxy in the debuggee when it
-    // has them. A caller that only shows the text (a logpoint, an exception property) skips the proxy, which is a func eval
-    public async Task<ValueDisplay> FormatValueAsync(ICorDebugValue value, int threadId, int frameDepth, bool escapeStrings, bool createProxy = true) {
+    // Formats a value, rendering its DebuggerDisplay and creating its DebuggerTypeProxy in the debuggee when it has them.
+    // A caller that only shows the text (a logpoint, an exception property) skips the proxy, which is a func eval.
+    // 'depth' counts the displays nested in one another, a fragment showing a value with a display of its own
+    public async Task<ValueDisplay> FormatValueAsync(ICorDebugValue value, int threadId, int frameDepth, bool escapeStrings, bool createProxy = true, int depth = 0) {
         var formatted = ValueFormatter.Format(value, escapeStrings);
         var text = formatted.Value;
+        var typeName = formatted.TypeName;
+        string? name = null;
         // A nullable's template and proxy belong to its underlying value
         var displayValue = value;
         if (formatted.TypeName.EndsWith('?'))
             displayValue = value.UnwrapDebugValueToObject().GetNullableValue() ?? value;
         if (formatted.RequiresDebuggerDisplay) {
-            if (limitImplicitEvals && implicitEvalTime.ElapsedMilliseconds >= ImplicitEvalBudgetMilliseconds) {
-                // The budget ran out, the value falls back to the display it would have without the override
+            if (IsImplicitEvalBudgetSpent || depth >= MaxDisplayDepth) {
+                // The budget ran out (or the displays nest too deep), the value falls back to the display it would have without the override
                 text = $"{{{formatted.TypeName}}}";
             }
             else {
-                implicitEvalTime.Start();
                 try {
-                    var context = new EvaluationContext(debugger.GetThread(threadId), threadId, frameDepth, displayValue);
-                    using var result = await debugger.GetEvaluator().EvaluateAsync($"$\"{text}\"", context);
-                    if (result.TimedOut) {
-                        // Cut off like a value past the budget, the way Microsoft's debugger shows one whose evaluation it aborted
-                        DebuggerLoggingService.LogMessage("DebuggerDisplay evaluation timed out");
-                        text = $"{{{formatted.TypeName}}}";
-                    }
-                    else if (result.Error != null) {
-                        DebuggerLoggingService.LogMessage($"DebuggerDisplay evaluation error: {result.Error}");
-                        return new ValueDisplay(formatted.TypeName, result.Error, null, true);
-                    }
-                    else {
-                        text = ValueFormatter.Format(result.Value!, false).Value;
-                    }
+                    text = await RenderDisplayAsync(formatted.Value, displayValue, threadId, frameDepth, depth);
+                    if (formatted.TypeTemplate != null)
+                        typeName = await RenderDisplayAsync(formatted.TypeTemplate, displayValue, threadId, frameDepth, depth);
+                    if (formatted.NameTemplate != null)
+                        name = await RenderDisplayAsync(formatted.NameTemplate, displayValue, threadId, frameDepth, depth);
                 }
-                finally {
-                    implicitEvalTime.Stop();
+                catch (EvaluationTimeoutException) {
+                    // Cut off like a value past the budget, the way Microsoft's debugger shows one whose evaluation it aborted
+                    DebuggerLoggingService.LogMessage("DebuggerDisplay evaluation timed out");
+                    text = $"{{{formatted.TypeName}}}";
                 }
             }
         }
@@ -185,7 +187,68 @@ internal class VariableProvider {
         ICorDebugValue? proxyValue = null;
         if (createProxy && formatted.DebuggerProxyTypeName != null)
             proxyValue = await CreateDebuggerProxyAsync(displayValue, formatted.DebuggerProxyTypeName, threadId);
-        return new ValueDisplay(formatted.TypeName, text, proxyValue, false);
+        return new ValueDisplay(typeName, text, name, proxyValue);
+    }
+    private bool IsImplicitEvalBudgetSpent => limitImplicitEvals && implicitEvalTime.ElapsedMilliseconds >= ImplicitEvalBudgetMilliseconds;
+
+    // Every '{expression}' is evaluated in the value's type context and shown the way a variable holding its result is
+    // (a string quoted unless ',nq', a nested value through its own DebuggerDisplay or ToString), the text between the
+    // fragments stays; a fragment that fails shows its failure in its own place - the way Microsoft's debugger has it
+    private async Task<string> RenderDisplayAsync(string template, ICorDebugValue value, int threadId, int frameDepth, int depth) {
+        var result = new StringBuilder();
+        foreach (var part in DebuggerDisplayTemplate.Parse(template)) {
+            if (part.IsExpression)
+                result.Append(await RenderFragmentAsync(part, value, threadId, frameDepth, depth));
+            else
+                result.Append(part.Text);
+        }
+        return result.ToString();
+    }
+    private async Task<string> RenderFragmentAsync(DebuggerDisplayPart fragment, ICorDebugValue value, int threadId, int frameDepth, int depth) {
+        BeginImplicitEval();
+        try {
+            var context = new EvaluationContext(debugger.GetThread(threadId), threadId, frameDepth, value);
+            using var evaluation = await debugger.GetEvaluator().EvaluateAsync(fragment.Text, context);
+            if (evaluation.TimedOut)
+                throw new EvaluationTimeoutException();
+            // Shown like the '$exception' variable, '{Type: message ...}'
+            if (evaluation.ThrownException != null)
+                return (await FormatValueAsync(evaluation.ThrownException, threadId, frameDepth, escapeStrings: false, createProxy: false, depth + 1)).Value;
+            if (evaluation.Error != null) {
+                DebuggerLoggingService.LogMessage($"DebuggerDisplay fragment '{fragment.Text}' failed: {evaluation.Error}");
+                return IsNullDereference(evaluation.Failure) ? FormatNullDereference(value) : evaluation.Error;
+            }
+            if (evaluation.Value == null)
+                return string.Empty;
+            return (await FormatValueAsync(evaluation.Value, threadId, frameDepth, escapeStrings: !fragment.NoQuotes, createProxy: false, depth + 1)).Value;
+        }
+        finally {
+            EndImplicitEval();
+        }
+    }
+    // The evaluations nest (a fragment rendering a value renders that value's fragments): the watch runs from the outermost
+    private void BeginImplicitEval() {
+        if (implicitEvalNesting++ == 0)
+            implicitEvalTime.Start();
+    }
+    private void EndImplicitEval() {
+        if (--implicitEvalNesting == 0)
+            implicitEvalTime.Stop();
+    }
+    private static bool IsNullDereference(Exception? failure) {
+        for (var current = failure; current != null; current = current.InnerException) {
+            if (current is NullReferenceException)
+                return true;
+        }
+        return false;
+    }
+    // A fragment that dereferenced null is shown the way Microsoft's debugger shows it: the exception the runtime raised
+    // running it, thrown out of the method the expression compiler generates for a type context ('<>x.<>m0(Link <>4__this)')
+    private static string FormatNullDereference(ICorDebugValue value) {
+        var corClass = value.UnwrapDebugValueToObject().GetClass();
+        var typeName = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>().GetTypeDefProps(corClass.GetToken()).szTypeDef;
+        typeName = typeName.Substring(typeName.LastIndexOf('.') + 1);
+        return $"{{System.NullReferenceException: Object reference not set to an instance of an object.\n   at <>x.<>m0({typeName} <>4__this)}}";
     }
 
     private async Task AddScopeVariablesAsync(VariableReference reference, List<VariableSlot> result) {
@@ -263,32 +326,39 @@ internal class VariableProvider {
             if (!names.TryGetValue(i, out var name))
                 continue;
             // The display class of a lambda declared here ('CS$<>8__locals0', which the compiler leaves visible for the
-            // evaluator's sake) holds the captured locals: those are listed, the class itself is not
+            // evaluator's sake) holds the captured locals: those are listed, the class itself is not. A captured parameter
+            // is a field of the class and a slot of the frame: the method reads and writes the field from its first
+            // statement on, the slot keeps the value it was entered with, so the field replaces the slot listed already
             if (GeneratedNames.GetKind(name) == GeneratedNameKind.DisplayClassLocalOrField) {
-                // A captured parameter is a field of the class and a slot of the frame, the slot listed already wins
-                var listedNames = new Dictionary<string, bool>(StringComparer.Ordinal);
-                foreach (var slot in result)
-                    listedNames[slot.Name] = false;
-                if (locals[i] != null)
-                    await AddClosureMembersAsync(locals[i]!, reference, result, listedNames);
+                if (locals[i] == null)
+                    continue;
+                var closureSlots = new List<VariableSlot>();
+                await AddClosureMembersAsync(locals[i]!, reference, closureSlots);
+                foreach (var closureSlot in closureSlots) {
+                    var listedIndex = result.FindIndex(it => it.Name == closureSlot.Name);
+                    if (listedIndex >= 0)
+                        result[listedIndex] = closureSlot;
+                    else
+                        result.Add(closureSlot);
+                }
                 continue;
             }
             result.Add(CreateFrameSlot(name, locals[i], reference));
         }
     }
     // Lists the hoisted locals of a closure and of the closures enclosing it, linked through their '<>8__' fields
-    private async Task AddClosureMembersAsync(ICorDebugValue closure, VariableReference reference, List<VariableSlot> result, Dictionary<string, bool>? seenNames = null) {
+    private async Task AddClosureMembersAsync(ICorDebugValue closure, VariableReference reference, List<VariableSlot> result) {
         // A display class is created where its first captured variable comes into scope: until then the field is null
         if (closure.UnwrapDebugValue() is not ICorDebugObjectValue objectValue)
             return;
-        await AddMembersAsync(closure, objectValue.GetExactType(), MemberFilter.All, listStatics: false, reference, result, seenNames);
+        await AddMembersAsync(closure, objectValue.GetExactType(), MemberFilter.All, listStatics: false, reference, result);
 
         var corClass = objectValue.GetClass();
         var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
         foreach (var field in metadataImport.EnumFields(corClass.GetToken())) {
             if (GeneratedNames.GetKind(metadataImport.GetFieldProps(field).szField) != GeneratedNameKind.DisplayClassLocalOrField)
                 continue;
-            await AddClosureMembersAsync(objectValue.GetFieldValue(corClass, field), reference, result, seenNames);
+            await AddClosureMembersAsync(objectValue.GetFieldValue(corClass, field), reference, result);
             break;
         }
     }
@@ -474,7 +544,7 @@ internal class VariableProvider {
                     await AddRootHiddenMemberAsync(name, readValueAsync, reference, result, evaluateName, VariableKind.Data, visibility);
                     continue;
                 }
-                result.Add(new VariableSlot(name, async () => await CreateVariableAsync(name, (await readValueAsync())!, reference.ThreadId, reference.FrameDepth, evaluateName, VariableKind.Data, visibility)));
+                result.Add(new VariableSlot(name, async () => await CreateVariableAsync(name, (await readValueAsync())!, reference.ThreadId, reference.FrameDepth, evaluateName, VariableKind.Data, visibility, useDisplayName: true)));
             }
             catch (Exception ex) {
                 // A member that cannot even be listed is shown with the error as its value, like one that cannot be read
@@ -517,6 +587,8 @@ internal class VariableProvider {
                     }
                     catch (EvaluationThrewException ex) {
                         // A getter that throws is a failed read, worded the way Microsoft's debugger words it - not the exception as the value
+                        if (ex.ExceptionValue is ICorDebugHandleValue thrownHandle)
+                            thrownHandle.TryDispose();
                         return VariableInfo.CreateError(name, $"'{propertyName}' threw an exception of type '{ex.ExceptionTypeName}'");
                     }
                     if (propertyValue == null)
@@ -524,7 +596,7 @@ internal class VariableProvider {
 
                     var keepHandle = false;
                     try {
-                        var variable = await CreateVariableAsync(name, propertyValue, reference.ThreadId, reference.FrameDepth, evaluateName, VariableKind.Property, visibility);
+                        var variable = await CreateVariableAsync(name, propertyValue, reference.ThreadId, reference.FrameDepth, evaluateName, VariableKind.Property, visibility, useDisplayName: true);
                         // A value with children stays alive behind its variables reference
                         keepHandle = variable.VariablesReference != 0;
                         return variable;
@@ -555,7 +627,7 @@ internal class VariableProvider {
                 AddArrayElementSlots(memberValue, reference, result, evaluateName);
                 return;
             }
-            result.Add(new VariableSlot(name, async () => await CreateVariableAsync(name, memberValue, reference.ThreadId, reference.FrameDepth, evaluateName, kind, visibility)));
+            result.Add(new VariableSlot(name, async () => await CreateVariableAsync(name, memberValue, reference.ThreadId, reference.FrameDepth, evaluateName, kind, visibility, useDisplayName: true)));
         }
         catch (Exception ex) {
             result.Add(new VariableSlot(VariableInfo.CreateError(name, ex.Message)));
@@ -637,7 +709,7 @@ internal class VariableProvider {
         result.Add(new VariableSlot(count, getElementName, async position => {
             var name = getElementName(position);
             var evaluateName = parentEvaluateName == null ? name : parentEvaluateName + name;
-            return await CreateVariableAsync(name, ReadArrayElement(arraySource, position), reference.ThreadId, reference.FrameDepth, evaluateName);
+            return await CreateVariableAsync(name, ReadArrayElement(arraySource, position), reference.ThreadId, reference.FrameDepth, evaluateName, useDisplayName: true);
         }));
     }
     // The name of the element at a row major position: '[2]', or '[0, 1]' for a multidimensional array
@@ -778,16 +850,12 @@ internal class VariableProvider {
                 return locals[i];
         }
 
+        // A hoisted local lives on the closure or state machine: the generated 'this' of a lambda or MoveNext, or the
+        // display class local of the method declaring a lambda. It is looked up before the arguments: a captured
+        // parameter is on the display class as well as in its frame slot, and only the display class copy is live
         var metadataImport = function.GetModule().GetMetaDataInterface<IMetaDataImport>();
         var skipCount = metadataImport.GetMethodProps(function.GetToken()).pdwAttr.IsMdStatic() ? 0 : 1;
         var arguments = frame.GetArguments();
-        for (var i = skipCount; i < arguments.Length; i++) {
-            if (metadataImport.FindParameterName(function.GetToken(), i - skipCount + 1) == name)
-                return arguments[i];
-        }
-
-        // A hoisted local lives on the closure or state machine: the generated 'this' of a lambda or MoveNext, or the
-        // display class local of the method declaring a lambda
         var containers = new List<ICorDebugValue>();
         if (skipCount == 1 && arguments.Length > 0 && arguments[0] != null) {
             var containingTypeKind = GeneratedNames.GetKind(metadataImport.GetTypeDefProps(function.GetClass().GetToken()).szTypeDef);
@@ -802,6 +870,11 @@ internal class VariableProvider {
             var hoisted = FindHoistedVariableValue(container, name);
             if (hoisted != null)
                 return hoisted;
+        }
+
+        for (var i = skipCount; i < arguments.Length; i++) {
+            if (metadataImport.FindParameterName(function.GetToken(), i - skipCount + 1) == name)
+                return arguments[i];
         }
         return null;
     }

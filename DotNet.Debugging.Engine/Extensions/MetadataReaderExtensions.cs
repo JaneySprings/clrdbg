@@ -40,6 +40,20 @@ internal static class MetadataReaderExtensions {
         }
     }
 
+    // 'System.Diagnostics.DebuggerHiddenAttribute': the type the attribute's constructor belongs to, defined in this
+    // module or referenced from another; null for a constructor the reader cannot resolve
+    public static string? GetAttributeTypeName(this MetadataReader reader, CustomAttribute attribute) {
+        switch (attribute.Constructor.Kind) {
+            case HandleKind.MemberReference:
+                var parent = reader.GetMemberReference((MemberReferenceHandle)attribute.Constructor).Parent;
+                return parent.Kind == HandleKind.TypeReference ? reader.GetTypeName((TypeReferenceHandle)parent) : null;
+            case HandleKind.MethodDefinition:
+                return reader.GetTypeName(reader.GetMethodDefinition((MethodDefinitionHandle)attribute.Constructor).GetDeclaringType());
+            default:
+                return null;
+        }
+    }
+
     public static bool TryFindTypeDefinition(this MetadataReader reader, string @namespace, string name, out TypeDefinitionHandle handle) {
         foreach (var typeHandle in reader.TypeDefinitions) {
             var type = reader.GetTypeDefinition(typeHandle);

@@ -2,9 +2,6 @@ using DotNet.Debugging.CorApi;
 using DotNet.Debugging.CorApi.Extensions;
 using DotNet.Debugging.Engine.Models;
 using DotNet.Debugging.Evaluation;
-using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
-using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace DotNet.Debugging.Engine.Evaluation;
 
@@ -28,9 +25,6 @@ internal class ExpressionCompiler {
         ICorDebugILFrame? frame = null;
         ModuleInfo preferredModule;
         if (context.RootValue != null) {
-            // DebuggerDisplay format specifiers ({Name,nq}) are not valid interpolation alignments
-            var syntax = SyntaxFactory.ParseExpression(expression);
-            expression = new RemoveFormatSpecifierRewriter().Visit(syntax)!.ToFullString();
             preferredModule = debugger.GetModule(context.RootValue.GetExactType().GetClass().GetModule());
         }
         else {
@@ -168,15 +162,6 @@ internal class ExpressionCompiler {
             Value = value;
             Node = node;
             Constraints = constraints;
-        }
-    }
-
-    private class RemoveFormatSpecifierRewriter : CSharpSyntaxRewriter {
-        public override SyntaxNode? VisitInterpolation(InterpolationSyntax node) {
-            var result = (InterpolationSyntax)base.VisitInterpolation(node)!;
-            if (result.AlignmentClause != null && result.AlignmentClause.Value is not LiteralExpressionSyntax { RawKind: (int)SyntaxKind.NumericLiteralExpression })
-                result = result.WithAlignmentClause(null);
-            return result;
         }
     }
 }

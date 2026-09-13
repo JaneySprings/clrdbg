@@ -1,4 +1,3 @@
-using DotNet.Debugging.CorApi;
 using DotNet.Debugging.Engine.Enums;
 using DotNet.Debugging.Engine.Extensions;
 
@@ -11,47 +10,43 @@ public class Breakpoint {
     public string? Condition { get; }
     public string? HitCondition { get; }
     public string? LogMessage { get; }
-    // The requested position, kept while 'Line'/'Column' snap to the bound location
     public int RequestedLine { get; }
     public int? RequestedColumn { get; }
-    public int Line { get; internal set; }
-    public int? Column { get; internal set; }
-    public int EndLine { get; internal set; }
-    public int? EndColumn { get; internal set; }
     public BreakpointStatus Status { get; internal set; }
     // Details of a 'BreakpointStatus.Error'
     public string? Error { get; internal set; }
     // The module whose equally named document was rejected, for 'BreakpointStatus.SourceMismatch'
     public string? SourceMismatchModule { get; internal set; }
     public int HitCount { get; internal set; }
-    // The location the breakpoint is bound to, with the document's checksum and Source Link
+    // Where the breakpoint is bound (a function breakpoint: its first binding), with the document's checksum and Source Link
     public SourceLocation? Location { get; internal set; }
 
     public bool Verified => Status == BreakpointStatus.Bound;
     public bool IsFunctionBreakpoint => FunctionName != null;
+    // The bound line, the requested one until then
+    public int Line => Location?.Line ?? RequestedLine;
 
-    internal ICorDebugFunctionBreakpoint? CorBreakpoint { get; set; }
-    internal ResolvedBreakpoint? ResolvedLocation { get; set; }
-    internal List<FunctionBreakpointBinding> FunctionBindings { get; }
+    // One for a source breakpoint, one per matching method for a function breakpoint
+    internal List<BreakpointBinding> Bindings { get; }
+    // A source breakpoint bound to a document matched by path or checksum rather than by file name alone
+    internal bool IsExactMatch { get; set; }
 
     public Breakpoint(int id, string filePath, BreakpointRequest request) {
         Id = id;
         FilePath = filePath;
         RequestedLine = request.Line;
         RequestedColumn = request.Column;
-        Line = request.Line;
-        Column = request.Column;
         Condition = request.Condition.NullIfWhiteSpace();
         HitCondition = request.HitCondition.NullIfWhiteSpace();
         LogMessage = request.LogMessage.NullIfWhiteSpace();
-        FunctionBindings = new List<FunctionBreakpointBinding>();
+        Bindings = new List<BreakpointBinding>();
     }
     public Breakpoint(int id, FunctionBreakpointRequest request) {
         Id = id;
         FunctionName = request.Name;
         Condition = request.Condition.NullIfWhiteSpace();
         HitCondition = request.HitCondition.NullIfWhiteSpace();
-        FunctionBindings = new List<FunctionBreakpointBinding>();
+        Bindings = new List<BreakpointBinding>();
     }
 
     internal void SetStatus(BreakpointStatus status, string? error = null) {

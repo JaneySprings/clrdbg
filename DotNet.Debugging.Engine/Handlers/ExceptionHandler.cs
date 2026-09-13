@@ -87,21 +87,30 @@ public partial class ManagedDebugger {
             stepController.Disable();
     }
     private bool IsUserCodeFrame(ICorDebugFrame? frame) {
-        return GetFrameModule(frame) is { IsUserCode: true };
+        return TryClassifyFrame(frame, out var isUserCode) && isUserCode;
     }
     // Only a positively identified non-user handler counts: a throw out of a catch funclet arrives with a null
     // handler frame, and treating that as non-user would stop on exceptions the state machine catches itself
     private bool IsNonUserCodeFrame(ICorDebugFrame? frame) {
-        return GetFrameModule(frame) is { IsUserCode: false };
+        return TryClassifyFrame(frame, out var isUserCode) && !isUserCode;
     }
-    private ModuleInfo? GetFrameModule(ICorDebugFrame? frame) {
+    // User code is a user module's method that did not opt out through [DebuggerNonUserCode] (under Just My Code),
+    // [DebuggerStepThrough] or [DebuggerHidden]: a catch in such a method is exactly what the filter for exceptions
+    // leaving user code exists for. False when the frame cannot be resolved
+    private bool TryClassifyFrame(ICorDebugFrame? frame, out bool isUserCode) {
+        isUserCode = false;
         try {
             if (frame is not ICorDebugILFrame ilFrame)
-                return null;
-            return FindModule(ilFrame.GetFunction().GetModule());
+                return false;
+            var function = ilFrame.GetFunction();
+            var module = FindModule(function.GetModule());
+            if (module == null)
+                return false;
+            isUserCode = module.IsUserCode && !module.Module.GetMetaDataInterface<IMetaDataImport>().IsNonUserMethod(function.GetToken(), JustMyCode);
+            return true;
         }
         catch {
-            return null;
+            return false;
         }
     }
     private string? GetExceptionTypeName(int threadId) {

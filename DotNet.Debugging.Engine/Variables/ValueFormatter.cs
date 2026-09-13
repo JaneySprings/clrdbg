@@ -10,16 +10,21 @@ namespace DotNet.Debugging.Engine.Variables;
 
 internal class FormattedValue {
     public string TypeName { get; }
-    // The display text, or an interpolated string template when 'RequiresDebuggerDisplay' is set
+    // The display text, or a DebuggerDisplay string (see DebuggerDisplayTemplate) when 'RequiresDebuggerDisplay' is set
     public string Value { get; }
     public bool RequiresDebuggerDisplay { get; }
+    // The attribute's 'Name' and 'Type' strings, shown in place of a member's name and of the type name
+    public string? NameTemplate { get; }
+    public string? TypeTemplate { get; }
     public string? DebuggerProxyTypeName { get; }
 
-    public FormattedValue(string typeName, string value, bool requiresDebuggerDisplay = false, string? debuggerProxyTypeName = null) {
+    public FormattedValue(string typeName, string value, bool requiresDebuggerDisplay = false, string? debuggerProxyTypeName = null, string? nameTemplate = null, string? typeTemplate = null) {
         TypeName = typeName;
         Value = value;
         RequiresDebuggerDisplay = requiresDebuggerDisplay;
         DebuggerProxyTypeName = debuggerProxyTypeName;
+        NameTemplate = nameTemplate;
+        TypeTemplate = typeTemplate;
     }
 }
 
@@ -27,6 +32,8 @@ internal class FormattedValue {
 // debuggee (DebuggerDisplay, ToString overrides) come back as a template for the expression evaluator
 internal static class ValueFormatter {
     private const CorFieldAttr EnumMemberAttributes = CorFieldAttr.fdPublic | CorFieldAttr.fdStatic | CorFieldAttr.fdLiteral | CorFieldAttr.fdHasDefault;
+    // A ToString result is shown in braces ('{Text}') and never quoted, written as a display string would write it
+    private const string ToStringTemplate = "\\{{ToString(),nq}\\}";
 
     public static FormattedValue Format(ICorDebugValue value, bool escapeStrings) {
         switch (value) {
@@ -129,7 +136,7 @@ internal static class ValueFormatter {
                 return new FormattedValue(typeName, "null");
             // The underlying value's display template and proxy carry over, they run against that value
             var underlying = Format(underlyingValue, escapeStrings);
-            return new FormattedValue(typeName, underlying.Value, underlying.RequiresDebuggerDisplay, underlying.DebuggerProxyTypeName);
+            return new FormattedValue(typeName, underlying.Value, underlying.RequiresDebuggerDisplay, underlying.DebuggerProxyTypeName, underlying.NameTemplate, underlying.TypeTemplate);
         }
         // A boxed primitive is shown as the primitive itself, without evaluating its ToString override
         if (TypeNameFormatter.IsPrimitiveTypeName(typeName)) {
@@ -149,24 +156,16 @@ internal static class ValueFormatter {
 
         if (TryGetInheritedAttribute(exactType, AttributeNames.DebuggerDisplay, out var displayData, out var displaySize)) {
             var display = CustomAttributeReader.ReadStringArgument(displayData, displaySize) ?? string.Empty;
-            if (typeName.StartsWith("<>f__AnonymousType", StringComparison.Ordinal)) {
-                // An anonymous type's display is '\{ Id = {Id}, Name = {Name} }' - the escaped braces
-                // have to become '{{' and '}}' to be a valid interpolated string
-                display = string.Concat("{{", display.AsSpan(2, display.Length - 3), "}}");
-            }
-            // The 'Name' part of the attribute is shown as a prefix of the value rather than replacing the variable name
-            var displayName = CustomAttributeReader.ReadNamedStringArgument(displayData, displaySize, "Name");
-            if (displayName != null)
-                display = $"{displayName} = {display}";
-            return new FormattedValue(typeName, display, true, proxyTypeName);
+            var nameTemplate = CustomAttributeReader.ReadNamedStringArgument(displayData, displaySize, "Name");
+            var typeTemplate = CustomAttributeReader.ReadNamedStringArgument(displayData, displaySize, "Type");
+            return new FormattedValue(typeName, display, true, proxyTypeName, nameTemplate, typeTemplate);
         }
-        // A ToString result is shown in braces ('{Text}'), unlike a DebuggerDisplay one - the '{{'/'}}' are the literal braces
         if (exactType.IsExceptionType())
-            return new FormattedValue(typeName, "{{{ToString()}}}", true, proxyTypeName);
+            return new FormattedValue(typeName, ToStringTemplate, true, proxyTypeName);
         if (typeName == "decimal")
             return new FormattedValue(typeName, FormatDecimal(objectValue));
         if (exactType.OverridesToString())
-            return new FormattedValue(typeName, "{{{ToString()}}}", true, proxyTypeName);
+            return new FormattedValue(typeName, ToStringTemplate, true, proxyTypeName);
 
         return new FormattedValue(typeName, $"{{{typeName}}}", false, proxyTypeName);
     }

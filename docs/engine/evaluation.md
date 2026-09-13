@@ -36,9 +36,10 @@ Two contexts exist:
   local constants, imports and the *reuse span* (the IL range the compiled expression stays valid
   for). Locals come out as `LocalSymbol`s in slot order, which is what lets the generated method read
   the frame's actual locals.
-- **Type context** (`DebuggerDisplay` templates): a synthesized method on the displayed object's type,
-  with the object as the only argument; the template is parsed first and `{Name,nq}`-style alignment
-  clauses removed (`RemoveFormatSpecifierRewriter`), as they are not valid C#.
+- **Type context** (`DebuggerDisplay` fragments): a synthesized method on the displayed object's type,
+  with the object as the only argument (`<>x.<>m0(T <>4__this)`); each fragment of a display string
+  is one such expression, its format specifier (`,nq`) split off by `DebuggerDisplayTemplate` before
+  ([variables.md](variables.md)).
 
 When the thread has a current exception, a `$exception` alias is registered so the expression can name
 it. The compiler also needs `Microsoft.VisualStudio.Debugger.Clr.IntrinsicMethods` — the debugger

@@ -18,6 +18,16 @@ internal static class CorDebugThreadExtensions {
     public static int GetFrameDepth(this ICorDebugThread thread) {
         return thread.GetManagedFrames().Count();
     }
+    // Whether the thread runs managed code. The frames cannot be walked while the process runs (an attach that has
+    // just landed, a request racing a continue) - nothing tells the thread apart then, and it counts as running some
+    public static bool HasManagedFrames(this ICorDebugThread thread) {
+        try {
+            return thread.GetManagedFrames().Any();
+        }
+        catch {
+            return true;
+        }
+    }
     // The managed 'Thread.Name': the '_name' field of the Thread object, read without running code
     public static string? GetManagedName(this ICorDebugThread thread) {
         try {

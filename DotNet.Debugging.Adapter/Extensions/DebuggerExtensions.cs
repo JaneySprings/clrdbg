@@ -39,15 +39,17 @@ public static class DebuggerExtensions {
             return null;
         return $"{version.Major}.{Math.Max(version.Minor, 0):00}.{Math.Max(version.Build, 0)}.{Math.Max(version.Revision, 0)}";
     }
-    public static string ToStatusMessage(this Breakpoint breakpoint) {
+    public static string? ToStatusMessage(this Breakpoint breakpoint) {
         return breakpoint.Status switch {
             BreakpointStatus.Pending => Resources.MsgBreakpointPending,
-            BreakpointStatus.NotProcessed => Resources.MsgBreakpointNotProcessed,
+            BreakpointStatus.NotProcessed => breakpoint.IsFunctionBreakpoint ? string.Format(Resources.MsgBreakpointFunctionNotFound, breakpoint.FunctionName) : Resources.MsgBreakpointNotProcessed,
             BreakpointStatus.NoSymbols => Resources.MsgBreakpointNoSymbols,
+            BreakpointStatus.InHiddenMethod => Resources.MsgBreakpointInHiddenMethod,
+            BreakpointStatus.InStepThroughMethod => Resources.MsgBreakpointInStepThroughMethod,
             BreakpointStatus.SourceMismatch => string.Format(Resources.MsgBreakpointSourceMismatch, Path.GetFileName(breakpoint.FilePath), breakpoint.SourceMismatchModule),
             BreakpointStatus.NoMatchingFunctions => string.Format(Resources.MsgBreakpointNoFunctions, breakpoint.FunctionName),
             BreakpointStatus.Error => string.Format(Resources.MsgBreakpointError, breakpoint.Error),
-            _ => string.Empty
+            _ => null
         };
     }
     public static string ToLoadedAssemblyMessage(this ModuleInfo module, string processName, int processId, bool justMyCode) {

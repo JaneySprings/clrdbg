@@ -48,6 +48,8 @@ public partial class DebugSession : Session {
 
     private void TargetStopped(StopInfo stop) {
         ResetHandles();
+        if (stop.FailedCondition != null)
+            ReportFailedCondition(stop.FailedCondition);
         Protocol.SendEvent(new StoppedEvent(stop.Reason.ToStoppedReason()) {
             ThreadId = stop.ThreadId,
             AllThreadsStopped = true,
@@ -103,7 +105,7 @@ public partial class DebugSession : Session {
     }
     private void BreakpointStatusChanged(Breakpoint breakpoint) {
         if (breakpoint.Status == BreakpointStatus.SourceMismatch)
-            OnDebugDataReceived($"Breakpoint warning: {breakpoint.ToStatusMessage()} - {breakpoint.FilePath}: {breakpoint.Line}");
+            ReportBreakpointWarning(breakpoint, breakpoint.ToStatusMessage()!);
         Protocol.SendEvent(new BreakpointEvent(BreakpointEvent.ReasonValue.Changed, breakpoint.ToBreakpoint(sourceLinkResolver, sourceFileMapper)));
     }
     private void TargetOutput(string output, bool isError) {

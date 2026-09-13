@@ -57,7 +57,12 @@ behind them are gone once the debuggee runs (`ClearReferences`), and tolerates
   id matches the CodeView entry, or an embedded one.
 - The *user code* heuristic: a module jitted with `CORDEBUG_JIT_DISABLE_OPTIMIZATION` or
   `CORDEBUG_JIT_ENABLE_ENC` was built by the user. With `JustMyCode`, such modules with symbols get
-  `SetJMCStatus(true)` so the stepper never stops elsewhere.
+  `SetJMCStatus(true)` so the stepper never stops elsewhere — except in their methods that opt out:
+  those without sequence points (the compiler's `<Main>` bridge over an async `Main`) and those
+  marked `[DebuggerNonUserCode]`, `[DebuggerStepThrough]` or `[DebuggerHidden]`, directly or through
+  their type (`GetMethodsMarkedNonUserCode`), are set back to non-user per method
+  (`TrySetMethodNotUserCode`), so the runtime raises no user-first-chance exception dispatch in them
+  and its steppers pass them.
 - `System.Private.CoreLib` creates the `ExpressionEvaluator` (it needs the primitive type classes),
   which is why evaluation is available at every stop.
 - `BreakpointManager.BindPending(module)` binds what the new module resolves and `OnBreakpointChanged`
@@ -95,8 +100,11 @@ hit and check the hit condition (`BreakpointExtensions.MatchesHitCount`: `3`, `=
 condition is evaluated, or a logpoint printed (`OnLogPoint`, `{expression}` placeholders evaluated in
 the top frame), with the stepping thread's own stepper suspended for it and re-armed after, and a
 step completing on another thread meanwhile held back and reported after it
-(`ContinueAfterEvaluation`); only a breakpoint that stops disables every step and raises `OnStopped`
-with `StopReason.Breakpoint` and the breakpoint id ([breakpoints.md](breakpoints.md)).
+(`ContinueAfterEvaluation`). Breakpoints resolving to one location share one runtime breakpoint and
+are all hit at once; only when one of them stops — a condition that cannot be evaluated stops too,
+reported with a `FailedCondition` the adapter turns into a re-reported breakpoint and a debug console
+line — is every step disabled and `OnStopped` raised with
+`StopReason.Breakpoint` and the ids of the breakpoints that stop ([breakpoints.md](breakpoints.md)).
 
 ## 5. Stepping
 
@@ -145,7 +153,11 @@ not stop at all under Just My Code — the reason a "break on all exceptions" fi
 thrown and caught inside a library. `Exception2` also follows the dispatch for the third kind: a
 first-chance notification in a user-code frame marks the thread, and when the catch handler is found
 in non-user code for a marked thread the engine raises `UserUnhandled` — an exception that passed
-through user code and is about to be swallowed by a library. In every case the host applies its
+through user code and is about to be swallowed by a library. User code is decided per frame
+(`TryClassifyFrame`): a user module's method counts unless it, or its type, is marked
+`[DebuggerNonUserCode]` (under Just My Code), `[DebuggerStepThrough]` or `[DebuggerHidden]` — a catch
+block in such a method of the user's own assembly is a `UserUnhandled` stop like a library's, the
+exception left the code the user is debugging. In every case the host applies its
 filters and calls `Continue()` when it does not want the stop — inside the callback, which the engine
 records: a stop the host took abandons any step in flight, a continued exception leaves it running.
 The engine does not read that back from `ICorDebugProcess.IsRunning`, which can still report the
@@ -153,7 +165,10 @@ process stopped right after a continue issued inside a callback.
 
 ## 7. Inspecting state
 
-- `GetThreads` names threads from the managed `Thread._name` field (read directly, no evaluation)
+- `GetThreads` lists the threads announced through `CreateThread` that have managed frames (the
+  runtime's own threads — the finalizer, the tiered compilation worker — have none while idle and stay
+  out, as they do in Microsoft's debugger; while the process runs the frames cannot be walked and every
+  thread is listed), names them from the managed `Thread._name` field (read directly, no evaluation)
   or, except for the main thread, the OS thread name (`NativeThreadNames`, for a process on this
   machine: a launched or locally attached one, or a Mac Catalyst app behind the remote transport —
   a device's thread ids would name unrelated local threads), and marks the first thread as main so
@@ -166,7 +181,8 @@ process stopped right after a continue issued inside a callback.
   nothing to show. `GetVariablesAsync` then goes through `VariableProvider`:
   the current `$exception`, `this` and the arguments (for lambdas and async methods `this` is the
   generated closure or state machine, whose captured `this` and hoisted locals are listed instead),
-  then the IL locals named by the PDB scopes at the current offset.
+  then the IL locals named by the PDB scopes at the current offset — a display class local stands
+  for its captured variables, whose copy of a captured parameter replaces the frame's stale slot.
 - Expanding a value lists its instance fields and properties, base types included up to
   `Object`/`ValueType`/`Enum`; properties are read by evaluating their getters. Every type shows its
   public members inline plus a `Non-Public members` group when non-public ones exist, and
@@ -175,8 +191,9 @@ process stopped right after a continue issued inside a callback.
   `RootHidden` inlines an array's elements.
 - `ValueFormatter` produces the text: escaped strings, `{int[60]}` arrays, enum names and `A | B`
   flags, `int?` nullables, decimals, and `{TypeName}` for objects. Types with a `DebuggerDisplay`
-  attribute or a `ToString` override hand back a template that `VariableProvider` evaluates in the
-  debuggee through the expression evaluator.
+  attribute or a `ToString` override hand back a display string that `VariableProvider` renders
+  fragment by fragment through the expression evaluator, each fragment's result formatted like a
+  variable's value ([variables.md](variables.md)).
 - `SetVariableAsync` (`VariableWriter`) assigns primitives and `null`; `SetNextStatement` moves the
   instruction pointer to the sequence point of a line in the current method.
 
@@ -199,7 +216,8 @@ process stopped right after a continue issued inside a callback.
    expandable, so the variables reference can release it later.
 
 Breakpoint conditions, logpoints and `DebuggerDisplay`/`ToString` values use the same path, with
-errors turned into "condition not met" or an error-marked variable rather than a failed request.
+errors turned into a breakpoint stop carrying the failed condition, a logpoint placeholder left as
+is, or an error-marked variable rather than a failed request.
 
 ## 9. Source Link
 

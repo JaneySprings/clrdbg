@@ -33,7 +33,7 @@ cannot bind to it, and the stepper does not stop in it with `JustMyCode`.
 | Member | Source |
 |---|---|
 | `Path`, `Name` | `ICorDebugModule.GetName`. |
-| `IsUserCode` | The JIT flags: `CORDEBUG_JIT_DISABLE_OPTIMIZATION` or `CORDEBUG_JIT_ENABLE_ENC` mean the assembly was built for debugging by the user — the Just My Code heuristic. User modules with symbols get `SetJMCStatus(true)` when `JustMyCode` is on. |
+| `IsUserCode` | The JIT flags: `CORDEBUG_JIT_DISABLE_OPTIMIZATION` or `CORDEBUG_JIT_ENABLE_ENC` mean the assembly was built for debugging by the user — the Just My Code heuristic. User modules with symbols get `SetJMCStatus(true)` when `JustMyCode` is on, with the methods that opt out (no sequence points, or `[DebuggerNonUserCode]`/`[DebuggerStepThrough]`/`[DebuggerHidden]` on them or their type) set back per method. |
 | `Version` | The file version (`FileVersionInfo`), falling back to the assembly version from metadata; the adapter formats it as vsdbg does (`1.00.0.0`). |
 | `HasSymbols`, `SymbolFilePath` | From the reader. |
 | `IsDynamic` | `ICorDebugModule.IsDynamic`: a module the debuggee emitted at run time — no file, no image, no base address. |
@@ -50,6 +50,7 @@ keyed by it, as a new module changes what an expression may bind to.
 | `ResolveBreakpoint(filePath, line, column, requireExactSource, out sourceMismatch)` | The document (exact path, then file name — see below) and `SequencePointResolver`'s choice among its methods' sequence points — see [breakpoints.md](breakpoints.md). | Breakpoint binding, `SetNextStatement`. |
 | `ResolveMethodEntry(methodToken)` | The method's first non-hidden sequence point. | Function breakpoints, `stopAtEntry`. |
 | `GetEntryPointToken()` | `CorHeader.EntryPointTokenOrRelativeVirtualAddress` when it is a MethodDef and not a native entry point. | `stopAtEntry`. |
+| `GetMethodsWithoutSequencePoints()`, `GetMethodsMarkedNonUserCode()` | The methods Just My Code marks non-user per method: those the PDB has no sequence points for, and those `[DebuggerNonUserCode]`, `[DebuggerStepThrough]` or `[DebuggerHidden]` applies to, directly or through their type (the PE custom attribute table, attribute types resolved by `GetAttributeTypeName`). | Module load under `JustMyCode`. |
 | `GetLocalVariableNames(methodToken, ilOffset)` | The names of the locals in the scopes containing the offset, by slot; `DebuggerHidden` and unnamed locals are absent. | Locals, assignments. |
 | `TryGetStepRange(methodToken, ilOffset)` | The offsets of the sequence point at/before the IP and of the next one. | Statement-wide step ranges. |
 | `GetNextSequencePointOffset(methodToken, ilOffset)` | The first sequence point with source at or after the offset. | Step completion (prolog detection, end of method). |

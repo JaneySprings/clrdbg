@@ -1,7 +1,9 @@
 using DotNet.Debugging.CorApi;
 using DotNet.Debugging.CorApi.Extensions;
 using DotNet.Debugging.Engine.Enums;
+using DotNet.Debugging.Engine.Extensions;
 using DotNet.Debugging.Engine.Logging;
+using DotNet.Debugging.Engine.Metadata;
 using DotNet.Debugging.Engine.Models;
 
 namespace DotNet.Debugging.Engine.Breakpoints;
@@ -14,7 +16,7 @@ internal class BreakpointManager {
     public IEnumerable<Breakpoint> Breakpoints => breakpoints.Values;
 
     // Replaces the breakpoints of a file. Without a running process they stay pending until modules load
-    public List<Breakpoint> SetBreakpoints(string filePath, List<BreakpointRequest> requests, IReadOnlyCollection<ModuleInfo> modules, bool hasProcess, bool requireExactSource) {
+    public List<Breakpoint> SetBreakpoints(string filePath, List<BreakpointRequest> requests, IReadOnlyCollection<ModuleInfo> modules, bool hasProcess, bool requireExactSource, bool justMyCode) {
         foreach (var existing in breakpoints.Values.Where(it => !it.IsFunctionBreakpoint && it.FilePath == filePath).ToList()) {
             Deactivate(existing);
             breakpoints.Remove(existing.Id);
@@ -27,7 +29,7 @@ internal class BreakpointManager {
             if (!hasProcess)
                 breakpoint.SetStatus(BreakpointStatus.Pending);
             else
-                TryBind(breakpoint, modules, requireExactSource);
+                TryBind(breakpoint, modules, requireExactSource, justMyCode);
             result.Add(breakpoint);
         }
         return result;
@@ -57,14 +59,9 @@ internal class BreakpointManager {
         return result;
     }
 
-    public Breakpoint? FindByCorBreakpoint(ICorDebugFunctionBreakpoint corBreakpoint) {
-        foreach (var breakpoint in breakpoints.Values) {
-            if (breakpoint.CorBreakpoint == corBreakpoint)
-                return breakpoint;
-            if (breakpoint.FunctionBindings.Any(it => it.CorBreakpoint == corBreakpoint))
-                return breakpoint;
-        }
-        return null;
+    // Every breakpoint bound through the runtime breakpoint: the ones resolving to one location share it
+    public List<Breakpoint> FindByCorBreakpoint(ICorDebugFunctionBreakpoint corBreakpoint) {
+        return breakpoints.Values.Where(it => it.Bindings.Any(binding => binding.CorBreakpoint == corBreakpoint)).ToList();
     }
     // The process exists now, so pending breakpoints are no longer waiting for the debugging to start
     public List<Breakpoint> MarkProcessStarted() {
@@ -75,7 +72,7 @@ internal class BreakpointManager {
         return breakpoints.Values.ToList();
     }
     // Binds what the newly loaded module can resolve, returns the breakpoints whose reported status changed
-    public List<Breakpoint> BindPending(ModuleInfo module, bool requireExactSource) {
+    public List<Breakpoint> BindPending(ModuleInfo module, bool requireExactSource, bool justMyCode) {
         var changed = new List<Breakpoint>();
         if (!module.HasSymbols)
             return changed;
@@ -87,16 +84,16 @@ internal class BreakpointManager {
             }
             else if (!breakpoint.Verified) {
                 var statusBefore = breakpoint.Status;
-                if (TryBind(breakpoint, [module], requireExactSource))
+                if (TryBind(breakpoint, [module], requireExactSource, justMyCode))
                     changed.Add(breakpoint);
-                // Microsoft's debugger also reports a breakpoint rejected because an equally named source did not match
-                else if (breakpoint.Status == BreakpointStatus.SourceMismatch && statusBefore != BreakpointStatus.SourceMismatch)
+                // A rejection by the module is reported too (an equally named source that did not match, a method that
+                // takes no breakpoint), a module without the document is not
+                else if (breakpoint.Status != statusBefore && breakpoint.Status is BreakpointStatus.SourceMismatch or BreakpointStatus.InHiddenMethod or BreakpointStatus.InStepThroughMethod)
                     changed.Add(breakpoint);
             }
             // Microsoft's debugger moves a binding made by file name alone to a module whose document matches exactly
-            else if (breakpoint.ResolvedLocation != null && !breakpoint.ResolvedLocation.IsExactMatch) {
-                if (TryRebind(breakpoint, module, requireExactSource))
-                    changed.Add(breakpoint);
+            else if (!breakpoint.IsExactMatch && TryRebind(breakpoint, module, requireExactSource, justMyCode)) {
+                changed.Add(breakpoint);
             }
         }
         return changed;
@@ -108,7 +105,7 @@ internal class BreakpointManager {
         nextId = 1;
     }
 
-    private bool TryBind(Breakpoint breakpoint, IReadOnlyCollection<ModuleInfo> modules, bool requireExactSource) {
+    private bool TryBind(Breakpoint breakpoint, IReadOnlyCollection<ModuleInfo> modules, bool requireExactSource, bool justMyCode) {
         try {
             ModuleInfo? targetModule = null;
             ModuleInfo? mismatchModule = null;
@@ -142,6 +139,11 @@ internal class BreakpointManager {
                 return false;
             }
 
+            var rejection = GetAttributeRejection(targetModule, resolved.MethodToken, justMyCode);
+            if (rejection != null) {
+                breakpoint.SetStatus(rejection.Value);
+                return false;
+            }
             Bind(breakpoint, targetModule, resolved);
             return true;
         }
@@ -153,10 +155,10 @@ internal class BreakpointManager {
     }
     // Upgrades a binding made by file name alone once a module matching the document exactly loads.
     // The loose binding stays active until then, so an already bound breakpoint keeps working
-    private bool TryRebind(Breakpoint breakpoint, ModuleInfo module, bool requireExactSource) {
+    private bool TryRebind(Breakpoint breakpoint, ModuleInfo module, bool requireExactSource, bool justMyCode) {
         try {
             var resolved = module.MetadataReader.ResolveBreakpoint(breakpoint.FilePath!, breakpoint.RequestedLine, breakpoint.RequestedColumn, requireExactSource, out _);
-            if (resolved == null || !resolved.IsExactMatch)
+            if (resolved == null || !resolved.IsExactMatch || GetAttributeRejection(module, resolved.MethodToken, justMyCode) != null)
                 return false;
 
             Bind(breakpoint, module, resolved);
@@ -167,20 +169,24 @@ internal class BreakpointManager {
             return false;
         }
     }
+    // A method the debugger must never stop in refuses the breakpoint: one marked [DebuggerHidden] (directly or through
+    // its type) always, one marked [DebuggerStepThrough] under Just My Code - the way Microsoft's debugger has it
+    private static BreakpointStatus? GetAttributeRejection(ModuleInfo module, int methodToken, bool justMyCode) {
+        var metadataImport = module.Module.GetMetaDataInterface<IMetaDataImport>();
+        var method = new MethodDefToken((uint)methodToken);
+        if (metadataImport.HasMethodOrTypeAttribute(method, AttributeNames.DebuggerHidden))
+            return BreakpointStatus.InHiddenMethod;
+        if (justMyCode && metadataImport.HasMethodOrTypeAttribute(method, AttributeNames.DebuggerStepThrough))
+            return BreakpointStatus.InStepThroughMethod;
+        return null;
+    }
+    // A rebind replaces the previous loose binding rather than keeping both active
     private void Bind(Breakpoint breakpoint, ModuleInfo module, ResolvedBreakpoint resolved) {
-        var function = module.Module.GetFunctionFromToken(resolved.MethodToken);
-        var corBreakpoint = function.GetILCode().CreateBreakpoint(resolved.ILOffset);
-        corBreakpoint.Activate(true);
-        // A rebind replaces the previous loose binding rather than keeping both active
-        breakpoint.CorBreakpoint?.TryActivate(false);
-
-        breakpoint.CorBreakpoint = corBreakpoint;
-        breakpoint.ResolvedLocation = resolved;
-        breakpoint.Line = resolved.Location.Line;
-        breakpoint.Column = resolved.Location.Column;
-        breakpoint.EndLine = resolved.Location.EndLine;
-        breakpoint.EndColumn = resolved.Location.EndColumn;
+        Deactivate(breakpoint);
+        breakpoint.Bindings.Clear();
+        breakpoint.Bindings.Add(CreateBinding(module.Module, resolved));
         breakpoint.Location = resolved.Location;
+        breakpoint.IsExactMatch = resolved.IsExactMatch;
         breakpoint.SetStatus(BreakpointStatus.Bound);
         DebuggerLoggingService.LogMessage($"Breakpoint {breakpoint.Id} bound at {resolved.Location.FilePath}:{breakpoint.Line} -> IL offset {resolved.ILOffset} in method 0x{resolved.MethodToken:X}");
     }
@@ -200,12 +206,10 @@ internal class BreakpointManager {
         var wasVerified = breakpoint.Verified;
         try {
             foreach (var resolved in FunctionBreakpointResolver.Resolve(module.MetadataReader, pattern)) {
-                if (breakpoint.FunctionBindings.Any(it => it.Module == module.Module && it.MethodToken == resolved.MethodToken))
+                if (breakpoint.Bindings.Any(it => it.Module == module.Module && it.MethodToken == resolved.MethodToken))
                     continue;
-                var function = module.Module.GetFunctionFromToken(resolved.MethodToken);
-                var corBreakpoint = function.GetILCode().CreateBreakpoint(resolved.ILOffset);
-                corBreakpoint.Activate(true);
-                breakpoint.FunctionBindings.Add(new FunctionBreakpointBinding(corBreakpoint, module.Module, resolved.MethodToken));
+                breakpoint.Bindings.Add(CreateBinding(module.Module, resolved));
+                breakpoint.Location ??= resolved.Location;
                 breakpoint.SetStatus(BreakpointStatus.Bound);
             }
         }
@@ -216,13 +220,23 @@ internal class BreakpointManager {
         }
         return !wasVerified && breakpoint.Verified;
     }
+    // Breakpoints resolving to one location (a source breakpoint on a method's first line and a function breakpoint on
+    // the method, two breakpoints on one statement) share one runtime breakpoint: the runtime then reports the location
+    // once, naming all of them, rather than once per breakpoint with a continue needed for each
+    private BreakpointBinding CreateBinding(ICorDebugModule module, ResolvedBreakpoint resolved) {
+        var corBreakpoint = breakpoints.Values.SelectMany(it => it.Bindings).FirstOrDefault(it => it.IsAt(module, resolved.MethodToken, resolved.ILOffset))?.CorBreakpoint;
+        if (corBreakpoint == null) {
+            corBreakpoint = module.GetFunctionFromToken(resolved.MethodToken).GetILCode().CreateBreakpoint(resolved.ILOffset);
+            corBreakpoint.Activate(true);
+        }
+        return new BreakpointBinding(corBreakpoint, module, resolved.MethodToken, resolved.ILOffset);
+    }
+    // A runtime breakpoint another breakpoint still shares stays active; a process that is gone has nothing left to deactivate
     private void Deactivate(Breakpoint breakpoint) {
-        var corBreakpoints = breakpoint.FunctionBindings.Select(it => it.CorBreakpoint).ToList();
-        if (breakpoint.CorBreakpoint != null)
-            corBreakpoints.Add(breakpoint.CorBreakpoint);
-
-        foreach (var corBreakpoint in corBreakpoints) {
-            var result = corBreakpoint.TryActivate(false);
+        foreach (var binding in breakpoint.Bindings) {
+            if (FindByCorBreakpoint(binding.CorBreakpoint).Any(it => it != breakpoint))
+                continue;
+            var result = binding.CorBreakpoint.TryActivate(false);
             if (result == Cor.CORDBG_E_PROCESS_TERMINATED)
                 return;
             if (result != Cor.S_OK)

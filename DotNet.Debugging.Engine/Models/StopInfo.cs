@@ -7,11 +7,13 @@ public class StopInfo {
     public StopReason Reason { get; }
     public SourceLocation? Location { get; }
     public List<int>? HitBreakpointIds { get; }
+    public FailedCondition? FailedCondition { get; }
 
-    public StopInfo(int threadId, StopReason reason, SourceLocation? location = null, List<int>? hitBreakpointIds = null) {
+    public StopInfo(int threadId, StopReason reason, SourceLocation? location = null, List<int>? hitBreakpointIds = null, FailedCondition? failedCondition = null) {
         ThreadId = threadId;
         Reason = reason;
         Location = location;
         HitBreakpointIds = hitBreakpointIds;
+        FailedCondition = failedCondition;
     }
 }

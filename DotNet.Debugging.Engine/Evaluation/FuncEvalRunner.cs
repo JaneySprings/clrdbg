@@ -114,14 +114,7 @@ internal class FuncEvalRunner {
                 var exceptionValue = eval.GetResult() ?? throw new EvaluationException("The evaluation threw an exception, but its value is not available");
                 if (!throwOnException)
                     return exceptionValue;
-
-                try {
-                    throw new EvaluationThrewException(TypeNameFormatter.GetTypeName(exceptionValue.GetExactType()));
-                }
-                finally {
-                    if (exceptionValue is ICorDebugHandleValue handle)
-                        handle.TryDispose();
-                }
+                throw new EvaluationThrewException(TypeNameFormatter.GetTypeName(exceptionValue.GetExactType()), exceptionValue);
             }
             return null;
         }
