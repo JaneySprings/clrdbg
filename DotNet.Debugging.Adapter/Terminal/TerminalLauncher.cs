@@ -32,16 +32,12 @@ public class TerminalLauncher : IDisposable {
             arguments.Add(typeof(TerminalLauncher).Assembly.Location);
 
         arguments.Add($"{Program.ConnectionOption}{ConnectionPath}");
-        var request = new RunInTerminalRequest() {
+        return new RunInTerminalRequest() {
             Title = title,
             Arguments = arguments,
             Kind = console == ConsoleType.ExternalTerminal ? RunInTerminalArguments.KindValue.External : RunInTerminalArguments.KindValue.Integrated,
             Cwd = Path.GetDirectoryName(executablePath),
         };
-        if (console == ConsoleType.ExternalTerminal)
-            request.Env = new Dictionary<string, object>();
-
-        return request;
     }
     public int LaunchProgram(LaunchRequest launchRequest) {
         WaitForHost();
