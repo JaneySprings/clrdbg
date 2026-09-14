@@ -8,10 +8,9 @@ public class StackFrameInfo {
     // 'Namespace.Type.Method(string[] args)' for managed frames, a description like 'Managed to Native Transition' for the others
     public string Name { get; }
     public string? ModuleName { get; set; }
-    public string? ModulePath { get; set; }
+    // The id of the module the frame's method belongs to, the one its module event carried
+    public int? ModuleId { get; set; }
     public SourceLocation? Location { get; set; }
-    // The native address the frame is executing at, null when the code is not jitted or the frame is not managed
-    public ulong? InstructionPointer { get; set; }
 
     public StackFrameInfo(int id, StackFrameKind kind, string name) {
         Id = id;

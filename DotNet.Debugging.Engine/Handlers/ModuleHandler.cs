@@ -42,7 +42,7 @@ public partial class ManagedDebugger {
 
         if (JustMyCode && isUserCode && metadataReader.HasSymbols) {
             corModule.SetJMCStatus(true, []);
-            // Not user code, the way Microsoft's debugger has it: methods without sequence points (the compiler's '<Main>'
+            // Not user code: methods without sequence points (the compiler's '<Main>'
             // bridge over an async Main) and methods opting out through [DebuggerNonUserCode], [DebuggerStepThrough] or
             // [DebuggerHidden] - the runtime raises no user-first-chance dispatch in them and its steppers pass them
             foreach (var methodToken in metadataReader.GetMethodsWithoutSequencePoints().Concat(metadataReader.GetMethodsMarkedNonUserCode()))
@@ -60,7 +60,7 @@ public partial class ManagedDebugger {
             evaluator = new ExpressionEvaluator(this, PrimitiveTypeClasses.Load(module.Module));
 
         OnModuleLoaded?.Invoke(module);
-        foreach (var breakpoint in breakpointManager.BindPending(module, RequireExactSource, JustMyCode))
+        foreach (var breakpoint in breakpointManager.BindPending(module, RequireExactSource))
             OnBreakpointChanged?.Invoke(breakpoint);
     }
     private void RefreshDynamicModule(ICorDebugModule corModule) {

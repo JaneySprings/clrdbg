@@ -156,7 +156,7 @@ public class StepFilteringTests : BaseDebugTestFixture {
         Assert.That(frame.Line, Is.EqualTo(GetMarkerLine("marker:innerHeader")));
     }
 
-    // [DebuggerNonUserCode] counts as non-user only while Just My Code is on, the way vsdbg has it
+    // [DebuggerNonUserCode] counts as non-user only while Just My Code is on
     [Test]
     public void StepIntoNonUserCodeMethodIsSteppedThroughTest() {
         var threadId = StopAtMarker("marker:nonUserCode");

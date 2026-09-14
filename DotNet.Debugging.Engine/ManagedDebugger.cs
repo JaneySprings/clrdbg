@@ -50,7 +50,6 @@ public partial class ManagedDebugger {
     // An exception stop is being reported and the subscriber has not continued it (yet)
     private bool isExceptionStopPending;
     private bool isRemoteAttach;
-    private string? remotePlatform;
     private int? mainThreadId;
     private int nextModuleId;
 
@@ -68,8 +67,6 @@ public partial class ManagedDebugger {
     // Incremented whenever a module is loaded or its metadata changes, so everything derived from the module set can detect staleness
     internal int ModulesVersion { get; private set; }
     internal bool IsEvaluating => FuncEval.IsRunning;
-    // A Mac Catalyst app is attached through the remote transport but runs on this machine
-    private bool HasLocalProcess => !isRemoteAttach || (remotePlatform != null && remotePlatform.Contains("maccatalyst", StringComparison.OrdinalIgnoreCase));
 
     public event Action<StopInfo>? OnStopped;
     // The subscriber decides whether to stop (do nothing) or to 'Continue()' after an exception
@@ -144,7 +141,6 @@ public partial class ManagedDebugger {
         DebuggerLoggingService.LogMessage($"Attaching to remote target on {attachInfo.Address}:{attachInfo.Port} ({attachInfo.Platform})");
         EnsureNotStarted();
         isRemoteAttach = true;
-        remotePlatform = attachInfo.Platform;
         corDebug = DbgShimHost.CreateRemote(attachInfo);
         corDebug.SetManagedHandler(callbacks);
         onListenerReady?.Invoke();
@@ -156,7 +152,6 @@ public partial class ManagedDebugger {
             DebuggerLoggingService.LogMessage($"DebugActiveProcess(0) threw as expected for a remote attach: {ex.Message}");
         }
         DebuggerLoggingService.LogMessage($"Debugger listening on port {attachInfo.Port}, awaiting the connection from the debuggee");
-        SendBreakpointStatus();
     }
 
     public void Continue() {
@@ -236,16 +231,15 @@ public partial class ManagedDebugger {
 
     public List<Breakpoint> SetBreakpoints(string filePath, List<BreakpointRequest> requests) {
         DebuggerLoggingService.LogMessage($"SetBreakpoints: {filePath}, lines: {string.Join(", ", requests.Select(it => it.Line))}");
-        return breakpointManager.SetBreakpoints(filePath, requests, Modules, process != null, RequireExactSource, JustMyCode);
+        return breakpointManager.SetBreakpoints(filePath, requests, Modules, RequireExactSource);
     }
     public List<Breakpoint> SetFunctionBreakpoints(List<FunctionBreakpointRequest> requests) {
         DebuggerLoggingService.LogMessage($"SetFunctionBreakpoints: {string.Join(", ", requests.Select(it => it.Name))}");
-        return breakpointManager.SetFunctionBreakpoints(requests, Modules, process != null);
+        return breakpointManager.SetFunctionBreakpoints(requests, Modules);
     }
 
     // The threads announced through 'CreateThread' that run managed code: the runtime's own (the finalizer, the tiered
-    // compilation worker) have no managed frames while idle and a client could show nothing for them - Microsoft's
-    // debugger leaves them out too
+    // compilation worker) have no managed frames while idle and a client could show nothing for them
     public List<ThreadInfo> GetThreads() {
         var result = new List<ThreadInfo>();
         if (process == null)
@@ -254,13 +248,7 @@ public partial class ManagedDebugger {
             foreach (var (threadId, thread) in threads) {
                 if (!thread.HasManagedFrames())
                     continue;
-                var isMain = threadId == mainThreadId;
-                // The OS name of the main thread is the executable's ('dotnet' on Linux), the host labels it instead. The
-                // OS is asked for a local process only: a device's ids would name some unrelated local thread
-                var name = thread.GetManagedName();
-                if (name == null && !isMain && HasLocalProcess)
-                    name = NativeThreadNames.GetThreadName(ProcessId, threadId);
-                result.Add(new ThreadInfo(threadId, name, isMain));
+                result.Add(new ThreadInfo(threadId, thread.GetManagedName(), threadId == mainThreadId));
             }
         }
         catch (Exception ex) {
@@ -294,7 +282,7 @@ public partial class ManagedDebugger {
     public Task<VariablePage> GetVariablesAsync(int variablesReference, int start, int count) {
         return variableProvider.GetVariablesAsync(variablesReference, start, count);
     }
-    // Only primitive values and 'null' for references can be assigned
+    // A variable, a field or an element takes a primitive value or 'null', a property any expression its setter is invoked with
     public Task<VariableInfo> SetVariableAsync(int variablesReference, string name, string value) {
         return variableProvider.SetVariableAsync(variablesReference, name, value);
     }
@@ -318,45 +306,26 @@ public partial class ManagedDebugger {
         // The frames of the raise are gone by the time of the stop, the module was captured back then
         var moduleName = exceptionModules.GetValueOrDefault(threadId);
         var details = await ReadExceptionDetailsAsync(exception, threadId);
-        var innerExceptionChain = await GetInnerExceptionChainAsync(exception, threadId);
-        return new ExceptionInfo(details.TypeName, details.Message, details.Source, details.StackTrace, details.HResult, kind, moduleName, innerExceptionChain);
+        var innerException = await GetInnerExceptionAsync(exception, threadId);
+        return new ExceptionInfo(details.TypeName, details.Message, details.StackTrace, kind, moduleName, innerException);
     }
-    // The frame dependent parts (type name, recorded trace) are read before the property evaluations, which neuter the frames
+    // The frame dependent parts (type name, recorded trace) are read before the property evaluation, which neuters the frames
     private async Task<InnerExceptionInfo> ReadExceptionDetailsAsync(ICorDebugValue exception, int threadId) {
         var typeName = ValueFormatter.Format(exception, false).TypeName;
         var stackTrace = GetExceptionStackTrace(exception);
         var message = await GetExceptionPropertyAsync(exception, threadId, "Message") ?? string.Empty;
-        var source = await GetExceptionPropertyAsync(exception, threadId, "Source");
-        var hresult = int.Parse(await GetExceptionPropertyAsync(exception, threadId, "HResult") ?? "0");
-        return new InnerExceptionInfo(typeName, message, source, stackTrace, hresult);
+        return new InnerExceptionInfo(typeName, message, stackTrace);
     }
-    // The whole 'InnerException' chain, the direct inner first - Microsoft's debugger nests them in 'innerException',
-    // shows the innermost exception's recorded trace in place of the reported one and names it in the
-    // description of the stop. An AggregateException contributes its first inner, the property's value
-    private async Task<List<InnerExceptionInfo>> GetInnerExceptionChainAsync(ICorDebugValue exception, int threadId) {
-        var chain = new List<InnerExceptionInfo>();
-        var handles = new List<ICorDebugHandleValue>();
+    // The exception wrapped by the reported one, null without one. An AggregateException contributes its first inner, the property's value
+    private async Task<InnerExceptionInfo?> GetInnerExceptionAsync(ICorDebugValue exception, int threadId) {
+        var inner = await FuncEval.GetPropertyValueAsync(exception, GetILFrame(threadId, 0), "InnerException");
         try {
-            var current = exception;
-            // The depth guard breaks out of a cyclic chain
-            for (var depth = 0; depth < 32; depth++) {
-                var frame = GetILFrame(threadId, 0);
-                var inner = await FuncEval.GetPropertyValueAsync(current, frame, "InnerException");
-                if (inner == null || (inner is ICorDebugReferenceValue reference && reference.IsNull())) {
-                    if (inner is ICorDebugHandleValue nullHandle)
-                        nullHandle.TryDispose();
-                    break;
-                }
-                if (inner is ICorDebugHandleValue handle)
-                    handles.Add(handle);
-
-                chain.Add(await ReadExceptionDetailsAsync(inner, threadId));
-                current = inner;
-            }
-            return chain;
+            if (inner == null || (inner is ICorDebugReferenceValue reference && reference.IsNull()))
+                return null;
+            return await ReadExceptionDetailsAsync(inner, threadId);
         }
         finally {
-            foreach (var handle in handles)
+            if (inner is ICorDebugHandleValue handle)
                 handle.TryDispose();
         }
     }
@@ -597,7 +566,6 @@ public partial class ManagedDebugger {
         await attachTask;
         DebuggerLoggingService.LogMessage($"Attached to process: {processId}");
         ProcessId = processId;
-        SendBreakpointStatus();
     }
     // Runs inside dbgshim's runtime startup callback, while the debuggee's runtime is still parked in its startup handshake
     private void AttachToRuntime(ICorDebug target, int processId) {
@@ -610,11 +578,6 @@ public partial class ManagedDebugger {
     private void EnsureNotStarted() {
         if (corDebug != null)
             throw new InvalidOperationException("The debugger is already attached to a debuggee");
-    }
-    // A breakpoint event for every breakpoint, so the client shows the pending ones as unverified until they bind
-    private void SendBreakpointStatus() {
-        foreach (var breakpoint in breakpointManager.MarkProcessStarted())
-            OnBreakpointChanged?.Invoke(breakpoint);
     }
     // The debuggee's output is forwarded in raw chunks rather than lines, so an unterminated prompt such as
     // 'Enter name: ' reaches the client before the debuggee blocks on reading the answer. The pump runs on a
@@ -683,9 +646,8 @@ public partial class ManagedDebugger {
             var module = GetModule(function.GetModule());
             var info = new StackFrameInfo(frameId, StackFrameKind.Managed, function.GetDisplayName(module.MetadataReader.PeMetadataReader));
             info.ModuleName = module.Name;
-            info.ModulePath = module.Path;
+            info.ModuleId = module.Id;
             info.Location = GetSourceLocation(ilFrame);
-            info.InstructionPointer = frame.GetInstructionPointer(function);
             return info;
         }
         if (frame is ICorDebugInternalFrame internalFrame)

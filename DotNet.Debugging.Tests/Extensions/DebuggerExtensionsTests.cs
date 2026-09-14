@@ -56,7 +56,7 @@ public class DebuggerExtensionsTests {
         Assert.That(new ThreadInfo(1, threadName, isMain).ToDisplayName(), Is.EqualTo(expected));
     }
 
-    [TestCase(StackFrameKind.Managed, "Program.Main(string[] args)", "App.dll", 7, "App.dll!Program.Main(string[] args) Line 7")]
+    [TestCase(StackFrameKind.Managed, "Program.Main(string[] args)", "App.dll", 7, "App.dll!Program.Main(string[] args)")]
     [TestCase(StackFrameKind.Managed, "Program.Main(string[] args)", "App.dll", null, "App.dll!Program.Main(string[] args)")]
     [TestCase(StackFrameKind.Native, "[Native Frame]", null, null, "[Native Frame]")]
     public void ToFrameDisplayNameTest(StackFrameKind kind, string name, string? moduleName, int? line, string expected) {
@@ -65,14 +65,6 @@ public class DebuggerExtensionsTests {
         if (line != null)
             frame.Location = new SourceLocation("Program.cs", line.Value, 1, line.Value, 10);
         Assert.That(frame.ToDisplayName(), Is.EqualTo(expected));
-    }
-
-    [TestCase(1, 0, 0, 0, "1.00.0.0")]
-    [TestCase(10, 0, 1126, 37416, "10.00.1126.37416")]
-    [TestCase(2, 5, -1, -1, "2.05.0.0")]
-    public void ToDisplayVersionTest(int major, int minor, int build, int revision, string expected) {
-        var version = build < 0 ? new Version(major, minor) : new Version(major, minor, build, revision);
-        Assert.That(version.ToDisplayVersion(), Is.EqualTo(expected));
     }
 
     [Test]

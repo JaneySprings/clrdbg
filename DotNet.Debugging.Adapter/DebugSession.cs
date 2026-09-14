@@ -14,7 +14,6 @@ namespace DotNet.Debugging.Adapter;
 public partial class DebugSession : Session {
     private readonly Handles<SourceLocation> gotoHandles = new Handles<SourceLocation>();
     private readonly Handles<PagedVariablesReference> pagingHandles = new Handles<PagedVariablesReference>(1_000_000_000);
-    private readonly Handles<string> moduleHandles = new Handles<string>(StringComparer.InvariantCulture);
     private readonly ExceptionFilterOptions allExceptionsFilter = new ExceptionFilterOptions();
     private readonly ExceptionFilterOptions userUnhandledExceptionsFilter = new ExceptionFilterOptions();
     private readonly ManagedDebugger session;
@@ -77,8 +76,7 @@ public partial class DebugSession : Session {
     private void TargetProcessStarted(int processId) {
         Protocol.SendEvent(new ProcessEvent(debugAgent.Configuration.GetApplicationName()) {
             SystemProcessId = processId,
-            StartMethod = ProcessEvent.StartMethodValue.Launch,
-            IsLocalProcess = true,
+            StartMethod = debugAgent is AttachDebugAgent ? ProcessEvent.StartMethodValue.Attach : ProcessEvent.StartMethodValue.Launch,
         });
     }
     private void TargetExited(int exitCode) {
@@ -101,11 +99,9 @@ public partial class DebugSession : Session {
         var justMyCode = debugAgent.Configuration.JustMyCode;
         if (debugAgent.Configuration.Logging.ModuleLoad)
             OnDebugDataReceived(module.ToLoadedAssemblyMessage(debugAgent.Configuration.GetApplicationName(), session.ProcessId, justMyCode));
-        Protocol.SendEvent(new ModuleEvent(ModuleEvent.ReasonValue.New, module.ToModule(moduleHandles.Create(module.Path), justMyCode)));
+        Protocol.SendEvent(new ModuleEvent(ModuleEvent.ReasonValue.New, module.ToModule(justMyCode)));
     }
     private void BreakpointStatusChanged(Breakpoint breakpoint) {
-        if (breakpoint.Status == BreakpointStatus.SourceMismatch)
-            ReportBreakpointWarning(breakpoint, breakpoint.ToStatusMessage()!);
         Protocol.SendEvent(new BreakpointEvent(BreakpointEvent.ReasonValue.Changed, breakpoint.ToBreakpoint(sourceLinkResolver, sourceFileMapper)));
     }
     private void TargetOutput(string output, bool isError) {

@@ -64,9 +64,9 @@ public class SameLocationBreakpointTests : BaseDebugTestFixture {
         var functionBreakpoint = Host.SendRequestSync(new SetFunctionBreakpointsRequest() { Breakpoints = [new FunctionBreakpoint() { Name = "Adder.Plus" }] }).Breakpoints[0];
         ConfigurationDone();
 
-        // A function breakpoint is reported as not found until its module loads, then with the location it bound to
-        var notFound = WaitForEvent<BreakpointEvent>(it => it.Breakpoint.Id == functionBreakpoint.Id && !it.Breakpoint.Verified && it.Breakpoint.Message != "The breakpoint is pending and will be resolved when debugging starts.");
-        Assert.That(notFound.Breakpoint.Message, Is.EqualTo("The function cannot be found: Adder.Plus"));
+        // A function breakpoint is unbound until its module loads, then reported with the location it bound to
+        Assert.That(functionBreakpoint.Verified, Is.False);
+        Assert.That(functionBreakpoint.Message, Is.EqualTo("The breakpoint is not bound yet: no loaded module with symbols has a function matching 'Adder.Plus'."));
         var bound = WaitForEvent<BreakpointEvent>(it => it.Breakpoint.Id == functionBreakpoint.Id && it.Breakpoint.Verified);
         Assert.That(bound.Breakpoint.Line, Is.EqualTo(entry));
         Assert.That(bound.Breakpoint.Source?.Path, Is.EqualTo(ProgramFilePath));

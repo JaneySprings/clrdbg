@@ -30,8 +30,8 @@ public class UnhandledExceptionTests : BaseDebugTestFixture {
         LaunchWithExceptionFilters("user-unhandled");
 
         var stopped = WaitForStopped(StoppedEvent.ReasonValue.Exception);
-        Assert.That(stopped.Text, Is.EqualTo("An unhandled exception of type 'System.InvalidOperationException' occurred in System.Private.CoreLib.dll"),
-            "The 'unhandled' stop names the module of the last rethrow - the core library's await machinery");
+        Assert.That(stopped.Text, Is.EqualTo($"An unhandled exception of type 'System.InvalidOperationException' occurred in {ProjectName}.dll"),
+            "The 'unhandled' stop names the user's module: the last rethrow happens in the core library's await machinery, which is hidden from stack traces");
         var info = GetExceptionInfo(stopped.ThreadId!.Value);
         Assert.That(info.BreakMode, Is.EqualTo(ExceptionBreakMode.Unhandled));
         Assert.That(info.Details?.StackTrace, Does.Contain("Worker.ProcessRequest()"));
@@ -52,7 +52,7 @@ public class UnhandledExceptionTests : BaseDebugTestFixture {
 
         Assert.That(stops.Select(it => it.Text), Is.EqualTo(new[] {
             $"Exception thrown: 'System.InvalidOperationException' in {ProjectName}.dll",
-            "An unhandled exception of type 'System.InvalidOperationException' occurred in System.Private.CoreLib.dll",
+            $"An unhandled exception of type 'System.InvalidOperationException' occurred in {ProjectName}.dll",
         }));
     }
 }

@@ -3,8 +3,8 @@ using NUnit.Framework;
 
 namespace DotNet.Debugging.Tests;
 
-// A multidimensional array lists one row per element, named by its index in every dimension the way
-// vsdbg does ('[0, 0]', '[0, 1]', ...), and pages like a single dimensional one. Element access in
+// A multidimensional array lists one row per element, named by its index in every dimension
+// ('[0, 0]', '[0, 1]', ...), and pages like a single dimensional one. Element access in
 // expressions compiles to the array type's pseudo methods, which only exist inside the runtime -
 // the interpreter performs the access on the debug value instead (Evaluation/CilInterpreter)
 public class MultidimensionalArrayTests : BaseDebugTestFixture {
@@ -95,7 +95,7 @@ public class MultidimensionalArrayTests : BaseDebugTestFixture {
         Assert.That(Evaluate("data[1, 2]", threadId).Result, Is.EqualTo("99"));
     }
 
-    // An array created with a lower bound names its elements by the logical index, the way vsdbg does
+    // An array created with a lower bound names its elements by the logical index
     [Test]
     public void ListsTheElementsFromTheLowerBound() {
         var threadId = LaunchToMarker("marker:stop");

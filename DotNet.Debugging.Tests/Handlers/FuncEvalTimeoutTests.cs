@@ -66,7 +66,7 @@ public class FuncEvalTimeoutTests : BaseDebugTestFixture {
         var members = GetVariables(thrower.VariablesReference);
 
         var bad = members.First(it => it.Name.StartsWith("Bad"));
-        Assert.That(bad.Value, Is.EqualTo("'Bad' threw an exception of type 'System.InvalidOperationException'"));
+        Assert.That(bad.Value, Is.EqualTo("Evaluation threw System.InvalidOperationException"));
         Assert.That(bad.VariablesReference, Is.EqualTo(0), "A failed read has nothing to expand");
         Assert.That(bad.PresentationHint?.Attributes, Is.EqualTo(VariablePresentationHint.AttributesValue.FailedEvaluation));
         Assert.That(members.First(it => it.Name.StartsWith("Good")).Value, Is.EqualTo("5"));

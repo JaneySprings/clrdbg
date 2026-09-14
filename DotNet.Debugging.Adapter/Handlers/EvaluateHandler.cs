@@ -7,13 +7,8 @@ public partial class DebugSession {
     protected override EvaluateResponse HandleEvaluateRequest(EvaluateArguments arguments) {
         return Invoke(() => {
             // Console input typed while the debuggee runs is routed into its standard input
-            if (arguments.Context == EvaluateArguments.ContextValue.Repl && InvokeDebugger(() => session.IsRunning && session.WriteStandardInput(arguments.Expression))) {
-                return new EvaluateResponse(string.Empty, 0) {
-                    PresentationHint = new VariablePresentationHint() {
-                        Attributes = VariablePresentationHint.AttributesValue.ReadOnly | VariablePresentationHint.AttributesValue.FailedEvaluation,
-                    },
-                };
-            }
+            if (arguments.Context == EvaluateArguments.ContextValue.Repl && InvokeDebugger(() => session.IsRunning && session.WriteStandardInput(arguments.Expression)))
+                return new EvaluateResponse(string.Empty, 0);
 
             var expression = arguments.Expression?.TrimEnd(';');
             if (string.IsNullOrEmpty(expression))

@@ -111,7 +111,7 @@ internal sealed class ModuleMetadataReader : IDisposable {
     }
 
     // Methods without any sequence points, like the compiler's '<Main>' bridge over an async Main - Just
-    // My Code treats them as non-user code, the way Microsoft's debugger does
+    // My Code treats them as non-user code, there is no source to stop in
     public IEnumerable<int> GetMethodsWithoutSequencePoints() {
         var reader = PdbMetadataReader;
         if (reader == null)
@@ -512,22 +512,8 @@ internal sealed class ModuleMetadataReader : IDisposable {
         var document = reader.GetDocument(documentHandle);
         var documentPath = reader.GetString(document.Name);
         var location = new SourceLocation(documentPath, point.StartLine, point.StartColumn, point.EndLine, point.EndColumn);
-        location.Checksum = GetChecksum(reader, document);
         location.SourceLink = GetSourceLink(documentPath);
         return location;
-    }
-    private static SourceChecksum? GetChecksum(MetadataReader reader, Document document) {
-        var algorithmGuid = reader.GetGuid(document.HashAlgorithm);
-        string algorithm;
-        if (algorithmGuid == sha256AlgorithmGuid)
-            algorithm = "SHA256";
-        else if (algorithmGuid == sha1AlgorithmGuid)
-            algorithm = "SHA1";
-        else
-            return null;
-
-        var hash = reader.GetBlobBytes(document.Hash);
-        return hash.Length == 0 ? null : new SourceChecksum(algorithm, Convert.ToHexStringLower(hash));
     }
     private SourceLinkMap? ReadSourceLinkMap() {
         var reader = PdbMetadataReader;

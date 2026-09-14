@@ -74,8 +74,8 @@ public class ResultsViewTests : BaseDebugTestFixture {
 
         var items = GetVariables(resultsView.VariablesReference);
         Assert.That(items, Has.Count.EqualTo(1), "An empty enumeration shows a single message row instead of nothing");
-        Assert.That(items[0].Name, Is.EqualTo("Empty [string]"));
-        Assert.That(items[0].Value, Is.EqualTo("\"Enumeration yielded no results\""));
+        Assert.That(items[0].Name, Is.EqualTo("Empty"));
+        Assert.That(items[0].Value, Is.EqualTo("Enumeration yielded no results"));
         Assert.That(items[0].VariablesReference, Is.Zero, "The message row has no children");
     }
 

@@ -115,7 +115,7 @@ public class MultiThreadSteppingTests : BaseDebugTestFixture {
                 Assert.That(++guard, Is.LessThan(10), "The loop head was never reached again");
             }
 
-            // A step into a method lands on its opening brace, the way vsdbg does, the body is one more step away
+            // A step into a method lands on its opening brace, the body is one more step away
             stopped = StepInAny(threadId);
             AssertStepStop(stopped, threadId, $"round {round}: step into Compute");
             Assert.That(GetTopStackFrame(threadId).Line, Is.EqualTo(computeEntryLine));
@@ -256,7 +256,7 @@ public class MultiThreadSteppingTests : BaseDebugTestFixture {
                 Assert.That(first.Reason, Is.EqualTo(StoppedEvent.ReasonValue.Breakpoint), $"round {round}");
                 Assert.That(first.ThreadId, Is.Not.EqualTo(threadId), $"round {round}: the breakpoint belongs to the released thread");
                 Assert.That(GetTopStackFrame(first.ThreadId!.Value).Line, Is.EqualTo(releasedLine), $"round {round}");
-                // The interrupted step is abandoned, like vsdbg does: the stepped thread runs on freely
+                // The interrupted step is abandoned: the stepped thread runs on freely
                 second = first;
             }
             // The released thread is stepped next: its step, and nothing left over from the interrupted one, must report

@@ -154,8 +154,8 @@ public class HiddenRegionSteppingTests : BaseDebugTestFixture {
         Assert.That(frame.Line, Is.EqualTo(GetMarkerLine("marker:afterNested")));
     }
 
-    // A step into at the closing brace enters the Dispose call the hidden finally makes, the way vsdbg
-    // does - the resumed step keeps the user's kind rather than falling back to a step over
+    // A step into at the closing brace enters the Dispose call the hidden finally makes - the resumed
+    // step keeps the user's kind rather than falling back to a step over
     [Test]
     public void StepIntoAtTheClosingBraceEntersDispose() {
         var threadId = LaunchToMarker("marker:bracedClose");

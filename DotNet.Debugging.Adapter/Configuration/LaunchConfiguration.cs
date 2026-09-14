@@ -19,9 +19,6 @@ public class LaunchConfiguration : BaseConfiguration {
     public CoreClrMobileDebuggerOptions? MobileOptions { get; }
     public string? RemoteHostDirectory { get; }
     public string? RemoteTargetDirectory { get; }
-    // TODO: implement
-    public bool SuppressJITOptimizations { get; }
-    public object? PipeTransport { get; }
 
     public LaunchConfiguration(Dictionary<string, JToken> properties) : base(properties) {
         Program = properties.TryGetValue("program").ToClass<string>().ToPlatformPath();

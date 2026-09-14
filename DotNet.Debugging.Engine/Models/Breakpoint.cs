@@ -15,10 +15,8 @@ public class Breakpoint {
     public BreakpointStatus Status { get; internal set; }
     // Details of a 'BreakpointStatus.Error'
     public string? Error { get; internal set; }
-    // The module whose equally named document was rejected, for 'BreakpointStatus.SourceMismatch'
-    public string? SourceMismatchModule { get; internal set; }
     public int HitCount { get; internal set; }
-    // Where the breakpoint is bound (a function breakpoint: its first binding), with the document's checksum and Source Link
+    // Where the breakpoint is bound (a function breakpoint: its first binding), with the document's Source Link
     public SourceLocation? Location { get; internal set; }
 
     public bool Verified => Status == BreakpointStatus.Bound;

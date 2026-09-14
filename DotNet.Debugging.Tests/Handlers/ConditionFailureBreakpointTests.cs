@@ -3,8 +3,8 @@ using NUnit.Framework;
 
 namespace DotNet.Debugging.Tests;
 
-// A condition that cannot be evaluated stops rather than passing the breakpoint silently: the breakpoint is reported
-// again with the failure as its message, a breakpoint warning goes to the debug output, the stop carries no text
+// A condition that cannot be evaluated stops rather than passing the breakpoint silently: the failure goes to the
+// debug output with its location, the stop carries no text
 public class ConditionFailureBreakpointTests : BaseDebugTestFixture {
     public ConditionFailureBreakpointTests() : base(nameof(ConditionFailureBreakpointTests)) { }
 
@@ -43,12 +43,8 @@ public class ConditionFailureBreakpointTests : BaseDebugTestFixture {
     }
 
     private void ExpectFailedConditionStop(int breakpointId, string marker, string message) {
-        var reported = WaitForEvent<BreakpointEvent>(it => it.Breakpoint.Id == breakpointId && it.Breakpoint.Message != null && it.Breakpoint.Message.StartsWith("The breakpoint condition"));
-        Assert.That(reported.Breakpoint.Message, Is.EqualTo(message));
-        Assert.That(reported.Breakpoint.Verified, Is.True, "The breakpoint stays bound, the failure is its message");
-        Assert.That(reported.Breakpoint.Line, Is.EqualTo(GetMarkerLine(marker)));
-        var output = WaitForEvent<OutputEvent>(it => it.Category == OutputEvent.CategoryValue.Console && it.Output.StartsWith("Breakpoint warning"));
-        Assert.That(output.Output, Is.EqualTo($"Breakpoint warning: {message} - {ProgramFilePath}:{GetMarkerLine(marker)}{Environment.NewLine}"));
+        var output = WaitForEvent<OutputEvent>(it => it.Category == OutputEvent.CategoryValue.Console && it.Output.StartsWith("The breakpoint condition"));
+        Assert.That(output.Output, Is.EqualTo($"{message} ({ProgramFilePath}:{GetMarkerLine(marker)}){Environment.NewLine}"));
 
         var stopped = WaitForStopped(StoppedEvent.ReasonValue.Breakpoint);
         Assert.That(GetTopStackFrame(stopped.ThreadId!.Value).Line, Is.EqualTo(GetMarkerLine(marker)));

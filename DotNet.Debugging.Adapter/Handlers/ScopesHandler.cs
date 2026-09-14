@@ -13,7 +13,6 @@ public partial class DebugSession {
                     Name = "Locals",
                     PresentationHint = DebugProtocol.Scope.PresentationHintValue.Locals,
                     VariablesReference = localsReference,
-                    Expensive = false
                 });
             }
             return new ScopesResponse(scopes);

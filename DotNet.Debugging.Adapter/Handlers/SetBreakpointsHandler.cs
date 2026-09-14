@@ -2,7 +2,6 @@ using DotNet.Debugging.Adapter.Extensions;
 using DotNet.Debugging.Engine.Models;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
-using Breakpoint = DotNet.Debugging.Engine.Models.Breakpoint;
 
 namespace DotNet.Debugging.Adapter;
 
@@ -27,14 +26,8 @@ public partial class DebugSession {
     }
 
     private void ReportFailedCondition(FailedCondition failedCondition) {
-        var message = failedCondition.ToDisplayMessage();
-        var breakpoint = failedCondition.Breakpoint.ToBreakpoint(sourceLinkResolver, sourceFileMapper);
-        breakpoint.Message = message;
-        Protocol.SendEvent(new BreakpointEvent(BreakpointEvent.ReasonValue.Changed, breakpoint));
-        ReportBreakpointWarning(failedCondition.Breakpoint, message);
-    }
-    private void ReportBreakpointWarning(Breakpoint breakpoint, string message) {
+        var breakpoint = failedCondition.Breakpoint;
         var filePath = sourceFileMapper.ToLocalPath(breakpoint.Location?.FilePath ?? breakpoint.FilePath ?? string.Empty);
-        OnDebugDataReceived(string.Format(Resources.MsgBreakpointWarning, message, filePath, breakpoint.Line));
+        OnDebugDataReceived($"{failedCondition.ToDisplayMessage()} ({filePath}:{breakpoint.Line})");
     }
 }

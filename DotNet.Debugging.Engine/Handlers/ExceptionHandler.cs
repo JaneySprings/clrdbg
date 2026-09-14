@@ -17,9 +17,8 @@ public partial class ManagedDebugger {
             ContinueProcess();
             return;
         }
-        // With Just My Code the first chance stop is deferred to the USER_FIRST_CHANCE dispatch callback,
-        // where Microsoft's debugger stops: the exception's recorded stack trace has reached user code
-        // there. An exception that never reaches user code does not stop at all under Just My Code
+        // With Just My Code the first chance stop is deferred to the USER_FIRST_CHANCE dispatch callback, when the
+        // dispatch has reached user code. An exception that never reaches user code does not stop at all under Just My Code
         if (!callbackEvent.Unhandled && JustMyCode) {
             ContinueProcess();
             return;
@@ -52,8 +51,8 @@ public partial class ManagedDebugger {
                 break;
             case CorDebugExceptionCallbackType.DEBUG_EXCEPTION_USER_FIRST_CHANCE:
                 exceptionThreads.Add(threadId);
-                // Every dispatch of the exception entering user code stops again, the way Microsoft's
-                // debugger re-breaks on each rethrow of an exception propagating through an async chain
+                // Every dispatch of the exception entering user code stops again: an exception propagating
+                // through an async chain is rethrown at each await, and each rethrow is a new chance to look at it
                 if (JustMyCode && OnExceptionThrown != null) {
                     RaiseExceptionStop(threadId, ExceptionStopKind.FirstChance);
                     return;
@@ -123,11 +122,9 @@ public partial class ManagedDebugger {
             return null;
         }
     }
-    // The module the exception is attributed to in "Exception thrown: '...' in <module>": the topmost stack
-    // frame whose type is not [StackTraceHidden]. Microsoft's debugger attributes a fault raised through the runtime's
-    // throw helper (a hidden type) to the user method that faulted, yet names the core library when its
-    // await machinery rethrows - those methods carry the attribute themselves, and still count. The mirror
-    // image of the recorded trace, which drops method-hidden frames and keeps type-hidden ones
+    // The module the exception is attributed to in "Exception thrown: '...' in <module>": that of the topmost frame
+    // not hidden from stack traces. The runtime raises a fault through a hidden throw helper and rethrows an awaited
+    // task's exception through hidden await machinery, both are charged to the method beneath them
     private string? GetExceptionModuleName(ICorDebugThread thread) {
         try {
             string? fallback = null;
@@ -139,8 +136,7 @@ public partial class ManagedDebugger {
                 if (module == null)
                     continue;
                 fallback ??= module.Name;
-                var metadataImport = module.Module.GetMetaDataInterface<IMetaDataImport>();
-                if (!metadataImport.HasAttribute(metadataImport.GetMethodProps(function.GetToken()).pClass, AttributeNames.StackTraceHidden))
+                if (!module.Module.GetMetaDataInterface<IMetaDataImport>().IsStackTraceHidden(function.GetToken()))
                     return module.Name;
             }
             return fallback;
@@ -150,12 +146,10 @@ public partial class ManagedDebugger {
             return null;
         }
     }
-    // The stack trace recorded in the exception object, the list Microsoft's debugger shows: the runtime appends the frames as
-    // the dispatch walks them (including the dispatch in flight), a rethrow resets the list, and frames of
-    // completed dispatches stay - no walk of the thread's stack could see those anymore. Reading it through
-    // ICorDebugExceptionObjectValue also sees the sources, which an evaluation of the StackTrace property cannot.
-    // Frames whose method is marked [StackTraceHidden] are dropped the way Microsoft's debugger drops them
-    // (a method hidden through its type alone, like the runtime's throw helpers, stays listed)
+    // The stack trace recorded in the exception object: the runtime appends the frames as the dispatch walks them
+    // (including the dispatch in flight), a rethrow resets the list, and frames of completed dispatches stay - no
+    // walk of the thread's stack could see those anymore. Reading it through ICorDebugExceptionObjectValue also
+    // sees the sources, which an evaluation of the StackTrace property cannot. Frames hidden from stack traces are left out
     private string? GetExceptionStackTrace(ICorDebugValue exception) {
         try {
             if (exception.UnwrapDebugValue() is not ICorDebugExceptionObjectValue exceptionObject)
@@ -165,7 +159,7 @@ public partial class ManagedDebugger {
                 // A frame without a module cannot be resolved (e.g. a dynamic method)
                 if (frame.pModule == null)
                     continue;
-                if (frame.pModule.GetMetaDataInterface<IMetaDataImport>().HasAttribute(frame.methodDef, AttributeNames.StackTraceHidden))
+                if (frame.pModule.GetMetaDataInterface<IMetaDataImport>().IsStackTraceHidden(frame.methodDef))
                     continue;
                 lines.Add(FormatStackTraceLine(frame.pModule, frame.methodDef, GetRecordedFrameLocation(frame)));
             }
@@ -176,7 +170,7 @@ public partial class ManagedDebugger {
             return null;
         }
     }
-    // '   at Namespace.Type.Method(Int32 n) in /path/Program.cs:line 50', the source part only with symbols.
+    // '   at Namespace.Type.Method(int n) in /path/Program.cs:line 50', the source part only with symbols.
     // The reflection reader qualifies a nested type with its enclosing chain ('SafeExtensions.<InvokeAsync>d__6'),
     // the form the async state machine frames of a recorded trace are shown in
     private string FormatStackTraceLine(ICorDebugModule corModule, MethodDefToken methodDef, SourceLocation? location) {
@@ -188,7 +182,7 @@ public partial class ManagedDebugger {
         var reader = module.MetadataReader.PeMetadataReader;
         var method = reader.GetMethodDefinition(MetadataTokens.MethodDefinitionHandle(methodDef));
         var typeName = reader.GetTypeName(method.GetDeclaringType());
-        var parameters = reader.GetParameterList(methodDef, StackTraceSignatureProvider.Instance);
+        var parameters = reader.GetParameterList(methodDef, DisplayNameSignatureProvider.Instance);
         var line = $"   at {typeName}.{reader.GetString(method.Name)}({parameters})";
         if (location != null)
             line += $" in {location.FilePath}:line {location.Line}";

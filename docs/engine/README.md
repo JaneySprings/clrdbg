@@ -4,7 +4,7 @@
 the `ICorDebug` API that [`DotNet.Debugging.CorApi`](../corapi/README.md) projects into C#,
 and exposes what a client needs — stops, threads, frames, variables, evaluation, breakpoints —
 as plain managed objects. It knows nothing about the Debug Adapter Protocol: the DAP shaping
-(presentation hints, `Module.dll!Type.Method Line N` frame names, breakpoint messages, paging)
+(presentation hints, `Module.dll!Type.Method(params)` frame names, breakpoint messages, paging)
 lives in `DotNet.Debugging.Adapter`, which maps the engine's models with `ToXxx()` extension
 methods in `Adapter/Extensions/`.
 
@@ -22,8 +22,8 @@ Client (VS Code) ──DAP──> DotNet.Debugging.Adapter ──models/events�
 | `Stepping/` | `StepController` (the `ICorDebugStepper` of a step, the rules deciding where a completed step stops) and `AsyncStepper` (steps across `await` points carried by breakpoints). |
 | `Variables/` | `VariableProvider` (locals, arguments, members, array elements, groups, `DebuggerTypeProxy`), `ValueFormatter` and `TypeNameFormatter` (value and type text the way the C# debugger shows them), `VariableWriter` (assignments), `VariableManager` / `FrameReferenceManager` (the handles issued to the client and the debuggee handles kept alive behind them). |
 | `Evaluation/` | The expression evaluator: `ExpressionCompiler` compiles C# with the Roslyn expression compiler (the [`DotNet.Debugging.Evaluation`](../evaluation/README.md) project) against the loaded modules' metadata, `CilInterpreter` executes the emitted CIL, running anything that touches the debuggee through `FuncEvalRunner` (`ICorDebugEval`); the code the expression itself declares (lambdas, closures, anonymous types) runs as host values (`HostValues`), with `LinqEmulator` running the System.Linq operators handed a lambda and `SpanEmulator` the span forms the compiler lowers to (`string + char`, array literals bound to `MemoryExtensions`). |
-| `Metadata/` | `ModuleMetadataReader` (PE metadata + portable PDB: sequence points, local names, async stepping info, Source Link, checksums), `SequencePointResolver` (source position → IL offset), `SourceLinkMap`, signature providers. |
-| `Interop/` | `DbgShimHost` (runtime startup registration and the remote transport through dbgshim), `DiagnosticsClientHelper` (resuming a diagnostics-suspended runtime), `NativeThreadNames` (OS thread names). |
+| `Metadata/` | `ModuleMetadataReader` (PE metadata + portable PDB: sequence points, local names, async stepping info, Source Link, document hashes for `requireExactSource`), `SequencePointResolver` (source position → IL offset), `SourceLinkMap`, signature providers. |
+| `Interop/` | `DbgShimHost` (runtime startup registration and the remote transport through dbgshim), `DiagnosticsClientHelper` (resuming a diagnostics-suspended runtime). |
 | `Models/` | The objects handed to the host: `StopInfo`, `ExceptionStopInfo`, `ThreadInfo`, `StackFrameInfo`, `SourceLocation`, `VariableInfo`, `Breakpoint`, `ModuleInfo`, `ExceptionInfo`, `LaunchRequest`, `RemoteAttachInfo`, the request objects. |
 | `Enums/` | `StopReason`, `StepKind`, `BreakpointStatus`, `VariableKind`, `VariableVisibility`, `ExceptionStopKind`, `StackFrameKind`, `ConsoleType`. |
 | `Extensions/` | The helpers the components use but do not own, as extension methods grouped by receiver type: over `CorApi` objects (`CorDebugValueExtensions` — value unwrapping, field lookup by name, primitive reads; `CorDebugTypeExtensions` — base type walks, enum/exception/enumerable checks; `CorDebugThreadExtensions` — managed frames, thread name; `CorDebugFrameExtensions`, `CorDebugILFrameExtensions`, `CorDebugFunctionExtensions`, `CorDebugModuleExtensions`, `CorDebugEvalExtensions`, `CorDebugCodeExtensions`), over `IMetaDataImport` (`MetadataImportExtensions` — attributes, type and property lookup) and the `System.Reflection.Metadata` readers (`MetadataReaderExtensions` — type names, parameter lists, assembly identity), over the interpreter's values and opcodes (`CilValueExtensions`, `OpCodeExtensions` — the host arithmetic, comparisons and conversions of the CIL opcodes, `HostSequenceExtensions`), plus `EnumExtensions`, `SequencePointExtensions`, `BreakpointExtensions` (hit conditions) and `StringExtensions`. A class keeps only the methods that work on its own state. |
@@ -54,7 +54,7 @@ await debugger.InvokeAsync(async () => {
     return true;
 });
 
-var frames = await Invoke(() => debugger.GetStackFrames(threadId));              // StackFrameInfo: Name, ModuleName, Location, InstructionPointer
+var frames = await Invoke(() => debugger.GetStackFrames(threadId));              // StackFrameInfo: Name, ModuleName, ModuleId, Location
 var reference = await Invoke(() => debugger.GetLocalsReference(frames[0].Id));   // 0 when the frame has nothing to show
 var page = await debugger.InvokeAsync(() => debugger.GetVariablesAsync(reference, 0, 25));   // VariablePage: TotalCount and one page of VariableInfo (Name, Value, Type, Kind, Visibility, VariablesReference)
 var result = await debugger.InvokeAsync(() => debugger.EvaluateAsync("items.Count * 2", frames[0].Id));
@@ -83,8 +83,8 @@ DAP numbers: a frame is re-obtained from its thread and depth on every use becau
 objects are neutered whenever the debuggee runs, and a variables reference keeps the strong
 `ICorDebugHandleValue` behind an expanded value alive until the next continue clears it.
 
-**Statuses, not messages.** A `Breakpoint` exposes `BreakpointStatus` (`Pending`, `NotProcessed`,
-`NoSymbols`, `SourceMismatch`, `NoMatchingFunctions`, `Bound`, `Error` with `Error` text); a `VariableInfo` exposes
+**Statuses, not messages.** A `Breakpoint` exposes `BreakpointStatus` (`Unbound`, `SourceMismatch`,
+`Bound`, `Error` with `Error` text); a `VariableInfo` exposes
 `Kind`, `Visibility` and `IsError`; a `StackFrameInfo` exposes `Kind`, `ModuleName`, the method
 signature and a `SourceLocation`. The user-facing strings and the composed display names are the
 adapter's (`Resources`, `DebuggerExtensions`, `ServerExtensions`).

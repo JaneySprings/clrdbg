@@ -122,11 +122,8 @@ exits, and `ICorDebugProcess.GetThread` is not implemented by the remote (mobile
 runtime's own threads — the finalizer, the tiered compilation worker — have none while idle, whether
 or not they raised `CreateThread` (the process enumerates some that never did), and a client could
 show nothing for them; while the process runs the frames cannot be walked, and every thread is
-listed. Thread names are read without running code: the managed `Thread._name` field of the thread object, then —
-for every thread but the main one, whose OS name is the executable's, and only for a process running
-on this machine (a remote attach asks the OS solely for a Mac Catalyst platform) — the OS thread name
-(`NativeThreadNames`: `proc_pidinfo` on macOS, `/proc/<pid>/task/<tid>/comm` on Linux,
-`GetThreadDescription` on Windows). `ThreadInfo.IsMain` lets the host label an unnamed main thread.
+listed. Thread names are read without running code, from the managed `Thread._name` field of the thread
+object. `ThreadInfo.IsMain` lets the host label an unnamed main thread.
 
 ## 5. Exit and disposal
 

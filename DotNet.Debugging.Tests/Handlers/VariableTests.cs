@@ -18,7 +18,8 @@ public class VariableTests : BaseDebugTestFixture {
         custom.Add("second");
         var legacy = new LegacyCollection();
         var matches = System.Text.RegularExpressions.Regex.Matches("aa baa", "a+");
-        Console.WriteLine($"{count} {title} {numbers.Length} {item.PublicProperty} {builder.Length} {custom} {legacy} {matches.Count}"); // marker:stop
+        var owner = new Owner();
+        Console.WriteLine($"{count} {title} {numbers.Length} {item.PublicProperty} {builder.Length} {custom} {legacy} {matches.Count} {owner.Holder.Flag}"); // marker:stop
         Console.WriteLine("done");
 
         public class SampleClass {
@@ -47,6 +48,20 @@ public class VariableTests : BaseDebugTestFixture {
         public class LegacyCollection : System.Collections.IEnumerable {
             public System.Collections.IEnumerator GetEnumerator() {
                 return new object[] { 1, 2 }.GetEnumerator();
+            }
+        }
+
+        public class Owner {
+            public Holder Holder { get; set; } = new Holder();
+        }
+
+        public class Holder {
+            private int clamped;
+
+            public bool Flag { get; set; }
+            public int Clamped {
+                get => clamped;
+                set => clamped = Math.Min(value, 10);
             }
         }
         """;
@@ -251,6 +266,41 @@ public class VariableTests : BaseDebugTestFixture {
         });
         Assert.That(response.Value, Is.EqualTo("77"));
         Assert.That(Evaluate("item.PublicField", threadId).Result, Is.EqualTo("77"));
+    }
+
+    [Test]
+    public void SetNestedPropertyTest() {
+        var threadId = LaunchToMarker();
+        var owner = GetLocalVariables(threadId).First(it => it.Name == "owner [Owner]");
+        var holder = GetVariables(owner.VariablesReference).First(it => it.Name == "Holder [Holder]");
+
+        var response = Host.SendRequestSync(new SetVariableRequest() {
+            VariablesReference = holder.VariablesReference,
+            Name = "Flag [bool]",
+            Value = "true",
+        });
+        Assert.That(response.Value, Is.EqualTo("true"));
+        Assert.That(Evaluate("owner.Holder.Flag", threadId).Result, Is.EqualTo("true"));
+
+        Host.SendRequestSync(new SetVariableRequest() {
+            VariablesReference = holder.VariablesReference,
+            Name = "Clamped [int]",
+            Value = "99",
+        });
+        Assert.That(Evaluate("owner.Holder.Clamped", threadId).Result, Is.EqualTo("10"), "A property is assigned through its setter");
+    }
+
+    [Test]
+    public void SetReadOnlyPropertyFailsTest() {
+        var threadId = LaunchToMarker();
+        var item = GetLocalVariables(threadId).First(it => it.Name == "item [SampleClass]");
+
+        Assert.Throws<Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.ProtocolException>(() => Host.SendRequestSync(new SetVariableRequest() {
+            VariablesReference = item.VariablesReference,
+            Name = "PublicProperty [int]",
+            Value = "5",
+        }));
+        Assert.That(Evaluate("item.PublicProperty", threadId).Result, Is.EqualTo("10"), "A property without a setter cannot be assigned");
     }
 
     [Test]

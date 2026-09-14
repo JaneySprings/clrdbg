@@ -35,11 +35,11 @@ await) and the stepper itself, then decides:
 | Frame after the step | Decision |
 |---|---|
 | Not an IL frame | Stop, no source location. |
-| Module without symbols, reached by `STEP_CALL` (a step into) | Step **out** again, like a filtered method: vsdbg does not stop where no source can be shown. (Only reachable with `JustMyCode` off.) |
+| Module without symbols, reached by `STEP_CALL` (a step into) | Step **out** again, like a filtered method: there is no source to show a stop in. (Only reachable with `JustMyCode` off.) |
 | Module without symbols, reached otherwise | Stop, no source location — the client shows the frame as is. |
 | Symbols, but no sequence point at the IP | Step **into** again: compiler-generated code such as an async state machine's glue. |
 | IP unmapped / no mapping info | Error — logged, continued. |
-| A method (or declaring type) marked `DebuggerHidden`/`DebuggerStepThrough` — plus `DebuggerNonUserCode` when `JustMyCode` is on, vsdbg ignores it otherwise — at any offset | Step **into** again, marked as skipping: the step lands in the first user code the method calls or leaves it altogether. |
+| A method (or declaring type) marked `DebuggerHidden`/`DebuggerStepThrough` — plus `DebuggerNonUserCode` when `JustMyCode` is on, with it off the attribute has no effect — at any offset | Step **into** again, marked as skipping: the step lands in the first user code the method calls or leaves it altogether. |
 | `STEP_CALL` into a property accessor or an operator method (by the `get_`/`set_`/`op_` name after any explicit interface prefix, `IShape.get_Area`), with `EnableStepFiltering` (default on) | Step **out** again, marked as skipping — "step over properties and operators". |
 | `STEP_CALL` and the IP is before the next sequence point | Step **over** the callee's prolog to reach its first statement. |
 | IP in a hidden region that is cleanup between two statements: inside a `finally` handler (the one a `using`/`lock` compiles to), the plumbing between two nested finallys while a crossing is under way, or hidden code with an await still ahead of it (the hoisted `DisposeAsync` of `await using`/`await foreach`) | Step again with the user's kind (a step out continues as a step over), marked as crossing. Hidden code past its await's resume point is where a step out of an async method ends and stands. |

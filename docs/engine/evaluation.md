@@ -55,9 +55,7 @@ plus the shim's own guess for the two errors Roslyn's retry does not cover: an u
 and leaving the error standing —
 `ExpressionEvaluator` loads it into the debuggee (`Assembly.Load`, a module event follows) and compiles
 again, once per assembly; a program that never used LINQ can still evaluate `strings.Where(...)` or
-`Enumerable.Range(1, 3)`.
-Deliberate divergence: Microsoft's debugger reads the missing assembly's metadata from disk and
-interprets its IL itself. Results are cached in an
+`Enumerable.Range(1, 3)`. Results are cached in an
 LRU of 256 entries keyed by context kind, module, method token, whether an exception is present and
 the text; a method-context entry also records the `ReuseConstraints` Roslyn computed
 (the IL span in which the same locals are in scope) and serves every IL offset inside it, so stepping
@@ -75,7 +73,7 @@ from `System.Reflection.Emit.OpCodes`, operands and branch targets resolved to i
 | `Value` — a host primitive, string or `ResolvedCilType` | Constants, arithmetic results, `ldtoken`, interpolated-string builders. |
 | `Value` — a `HostObject`, `HostDelegate`, `HostFunction`, `HostSequence` or `HostSpan` (`HostValues.cs`) | What only exists in the debugger: an instance of a type the expression assembly declares (a closure, a display class, an anonymous type), a delegate the expression created, the function `ldftn` pushed, a sequence a System.Linq operator computed here, a span the expression built. See *Code the expression declares* and *Spans* below. |
 | `CorValue` — a debuggee `ICorDebugValue` | Everything read from the debuggee; reference values are pinned with strong handles (`EvaluationHandleScope.Root`) so they survive later func evals. |
-| `Location` — an `ICilLocation` | Addresses: a debuggee slot (`CorDebugLocation`: local, argument, field, element), a host temporary (`TemporaryLocation`), a synthetic variable (`SyntheticVariableLocation`, a one-element array allocated in the debuggee) or a slot the runtime cannot read at this instruction (`UnavailableLocation`, optimized away - reading it fails with vsdbg's message). A by-reference slot (a `ref` parameter or local, the `this` of a struct method) reads as the location it points to, which the IL then dereferences with `ldind`/`ldobj`. |
+| `Location` — an `ICilLocation` | Addresses: a debuggee slot (`CorDebugLocation`: local, argument, field, element), a host temporary (`TemporaryLocation`), a synthetic variable (`SyntheticVariableLocation`, a one-element array allocated in the debuggee) or a slot the runtime cannot read at this instruction (`UnavailableLocation`, optimized away - reading it fails with a message saying so). A by-reference slot (a `ref` parameter or local, the `this` of a struct method) reads as the location it points to, which the IL then dereferences with `ldind`/`ldobj`. |
 
 The method's arguments are the frame's arguments (or the root object), its first locals are the
 frame's locals — so `x = 5` in the evaluate window writes the real local — and the remaining slots

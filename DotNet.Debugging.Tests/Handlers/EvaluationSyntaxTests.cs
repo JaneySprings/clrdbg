@@ -121,7 +121,7 @@ public class EvaluationSyntaxTests : BaseDebugTestFixture {
             ("(long)int.MaxValue + 1", "2147483648"),
             ("checked(count * 1000)", "42000"),
             ("unchecked((byte)300)", "44"),
-            // Constants fold unchecked: the expression compiler compiles without overflow checks, like Microsoft's debugger
+            // Constants fold unchecked: the expression compiler compiles without overflow checks
             ("(sbyte)200", "-56"),
             ("count == 42 ? \"yes\" : \"no\"", "\"yes\""),
             ("count > 40 && count < 50 ? count * 2 : 0", "84"));

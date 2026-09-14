@@ -15,43 +15,40 @@ condition, log message) or a `FunctionBreakpointRequest` (name, condition, hit c
 | `Id` | Session-unique, increasing. Replacing a file's breakpoints issues new ids. |
 | `FilePath` / `FunctionName` | One of the two is set; `IsFunctionBreakpoint` tells them apart. |
 | `Line`, `Column`, `EndLine`, `EndColumn` | The requested line until bound, the resolved statement span afterwards. |
-| `Status` | `Pending` (no debuggee yet), `NotProcessed` (debuggee running, no module resolved it yet — "The function cannot be found" for a function breakpoint), `NoSymbols` (no loaded module with symbols covers the document), `SourceMismatch` (a module has an equally named document whose content differs from the local file — reported with `SourceMismatchModule`, the adapter prints a warning), `InHiddenMethod` (the location is in a `[DebuggerHidden]` method or type, refused in every mode), `InStepThroughMethod` (a `[DebuggerStepThrough]` one, refused under Just My Code), `NoMatchingFunctions`, `Bound`, `Error` (+ `Error` text). `Verified` is `Status == Bound`. |
-| `Location` | The bound `SourceLocation`: document path as in the PDB, span, checksum, Source Link URL — for a function breakpoint that of its first binding, which is what it reports. |
+| `Status` | `Unbound` (no loaded module with symbols contains the location — or, for a function breakpoint, has a matching function — yet), `SourceMismatch` (a module has an equally named document whose content differs from the local file), `Bound`, `Error` (+ `Error` text). `Verified` is `Status == Bound`. |
+| `Location` | The bound `SourceLocation`: document path as in the PDB, span, Source Link URL — for a function breakpoint that of its first binding, which is what it reports. |
 | `HitCount` | Incremented on every hit, before the hit condition is checked. |
 | `Bindings` (internal) | The `BreakpointBinding`s behind it (runtime breakpoint, module, method, IL offset) — one for a source breakpoint, one per matching method for a function breakpoint. Breakpoints resolving to one location share a single runtime breakpoint, so the runtime reports the location once for all of them. `Line` is the bound line, the requested one until then. |
 
-The status is the engine's statement of fact; the adapter turns it into vsdbg's messages
-("The breakpoint is pending and will be resolved when debugging starts.", "Breakpoint has not been
-processed by the debugger.", …) in `Resources`.
+The status is the engine's statement of fact; the adapter turns it into a message the client shows
+with the unverified breakpoint (`Resources`, `DebuggerExtensions.ToStatusMessage`).
 
 ## Setting and binding
 
 `SetBreakpoints(file, requests)` deactivates and drops the file's previous breakpoints and creates the
-new ones; `SetFunctionBreakpoints` does the same for all function breakpoints. Without a process they
-stay `Pending`; with one, binding is attempted immediately, and again whenever a module loads
-(`BindPending(module)`), which is how breakpoints set before the launch bind as the debuggee starts.
-When the attach lands every breakpoint is reported once more (`Pending` → `NotProcessed`) so the
-client shows them unverified until their module arrives.
+new ones; `SetFunctionBreakpoints` does the same for all function breakpoints. Binding is attempted
+against the loaded modules at once (none before the launch, the breakpoint stays `Unbound`), and again
+whenever a module loads (`BindPending(module)`), which is how breakpoints set before the launch bind as
+the debuggee starts.
 
 Binding a source breakpoint (`TryBind`) asks each module with symbols to resolve it:
 
 1. `ModuleMetadataReader.FindDocument` looks the document up by full path (case-insensitive, `\`
    normalized to `/`), falling back to a file-name match for PDBs built from another location. A
-   file-name match is verified against the PDB's document checksum: one whose content matches counts as
+   file-name match is verified against the PDB's document hash: one whose content matches counts as
    exact, one that differs is rejected with `ManagedDebugger.RequireExactSource` on (the default) and
    makes the breakpoint `SourceMismatch` when nothing else resolves it. A binding made by file name
    alone is later moved to a module whose document matches exactly (`TryRebind`).
-2. `SequencePointResolver.Resolve` chooses the sequence point (below). A method that must never
-   stop refuses the breakpoint the way Microsoft's debugger refuses it (`GetAttributeRejection`): a
-   `[DebuggerHidden]` method or type always, a `[DebuggerStepThrough]` one under Just My Code — the
-   breakpoint is reported with the status's message; a `[DebuggerNonUserCode]` method takes it.
+2. `SequencePointResolver.Resolve` chooses the sequence point (below). The debugger attributes
+   (`[DebuggerHidden]`, `[DebuggerStepThrough]`, `[DebuggerNonUserCode]`) steer stepping and exception
+   stops, not breakpoints: a method carrying one takes a breakpoint like any other.
 3. `CreateBinding`: the runtime breakpoint another breakpoint already holds at that module, method
    and IL offset (a function breakpoint on the method, another breakpoint on the statement), or a new
    `ICorDebugFunction.GetILCode().CreateBreakpoint(ilOffset)` + `Activate(true)`; the breakpoint takes
    the resolved `Location`, and `OnBreakpointChanged` reports it.
 
 A module that fails with an exception marks the breakpoint `Error`; when no loaded module contains
-the document the breakpoint stays `NoSymbols` until a later module does.
+the document the breakpoint stays `Unbound` until a later module does.
 
 ### Choosing the sequence point
 
@@ -67,7 +64,7 @@ Then:
 | Situation | Choice |
 |---|---|
 | No method covers the position (blank line, comment, closing brace) | The `First` point with the earliest start across methods — the breakpoint snaps to the next line with code, and the client sees the adjusted line. |
-| A whole line covered only by statements starting above it, and another method has a statement at or below the line inside one of them (a blank line in the body of a multi-line lambda: the delegate assignment's point spans the whole lambda text) | That method's `First` point — the lambda's next statement, the way Microsoft's debugger binds it, rather than up to the start of the spanning statement. |
+| A whole line covered only by statements starting above it, and another method has a statement at or below the line inside one of them (a blank line in the body of a multi-line lambda: the delegate assignment's point spans the whole lambda text) | That method's `First` point — the lambda's next statement, where the user put the breakpoint, rather than up to the start of the spanning statement. |
 | Exactly one method covers it | Its `Covering` point. |
 | Several cover it, one `Covering` starts later than the others | That one — the innermost lambda, whose own statement starts after the enclosing statement (e.g. the delegate assignment) that spans it. |
 | Several `Covering` points start at the same position (`items.Select(i => i * 2)` on one line) | netcoredbg's containment rule: if the nested method's range lies inside the outer's first statement the call site wins; otherwise, if the outer's first statement ends after the nested's, the lambda body wins. |
@@ -95,8 +92,8 @@ an empty parameter) is an `ArgumentException` and becomes `BreakpointStatus.Erro
 iterator method, which has no sequence points of its own, that of its state machine's `MoveNext`, found
 through the PDB's kickoff-method link); the parameter list normalizes `ref`/`out`/`in`, arrays and
 pointers to their signature names (`System.Int32&`, `System.String[]`); a breakpoint therefore accumulates
-`Bindings` across modules and overloads, becomes `Bound` with the first one, and reports
-`NoMatchingFunctions` when the process is running and nothing matched anywhere.
+`Bindings` across modules and overloads, becomes `Bound` with the first one, and stays `Unbound`
+while nothing matched anywhere.
 
 ## When a breakpoint is hit
 
@@ -134,10 +131,9 @@ debuggee or moving on:
    that throws, a timeout, a result that is no `bool` — *stops*, the way a breakpoint without a
    condition would, and the stop carries a `FailedCondition` (the breakpoint and the reason: the
    compiler's error, "X was thrown", "the result is not a boolean") for the host to show — the adapter
-   re-reports the breakpoint with "The breakpoint condition '…' could not be evaluated: <reason>" as
-   its message and prints the same as a "Breakpoint warning" line to the debug output, like a binding
-   warning, before the stop (Microsoft's debugger does the same with its own wording): passed silently,
-   a breakpoint the user asked for would go missing with nothing to say why.
+   prints "The breakpoint condition '…' could not be evaluated: <reason>" with the location to the
+   debug output before the stop: passed silently, a breakpoint the user asked for would go missing
+   with nothing to say why.
 10. A log message: every `{expression}` is evaluated and replaced by its display value (left as-is
     when it fails), `OnLogPoint` receives the text and the debuggee continues — through
     `ContinueAfterEvaluation`, like a condition that is not met.

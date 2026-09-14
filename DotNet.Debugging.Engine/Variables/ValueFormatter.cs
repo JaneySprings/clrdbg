@@ -160,8 +160,6 @@ internal static class ValueFormatter {
             var typeTemplate = CustomAttributeReader.ReadNamedStringArgument(displayData, displaySize, "Type");
             return new FormattedValue(typeName, display, true, proxyTypeName, nameTemplate, typeTemplate);
         }
-        if (exactType.IsExceptionType())
-            return new FormattedValue(typeName, ToStringTemplate, true, proxyTypeName);
         if (typeName == "decimal")
             return new FormattedValue(typeName, FormatDecimal(objectValue));
         if (exactType.OverridesToString())

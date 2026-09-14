@@ -33,10 +33,8 @@ public class StandardInputTests : BaseDebugTestFixture {
             Context = EvaluateArguments.ContextValue.Repl,
         });
 
-        // Microsoft's debugger answers console input with an empty result marked 'failedEvaluation', so nothing is printed for it
+        // Console input is answered with an empty result, so nothing is printed for it
         Assert.That(response.Result, Is.Empty);
-        Assert.That(response.PresentationHint?.Attributes, Is.Not.Null);
-        Assert.That(response.PresentationHint!.Attributes!.Value.HasFlag(VariablePresentationHint.AttributesValue.FailedEvaluation), Is.True);
         WaitForEvent<OutputEvent>(it => it.Output.Contains("echo:hello stdin", StringComparison.Ordinal));
     }
 }

@@ -18,10 +18,11 @@ public class ModuleInfo : IDisposable {
     // The external PDB the symbols were read from, null for embedded or missing symbols
     public string? SymbolFilePath => MetadataReader.SymbolFilePath;
 
+    // Tells the modules of a session apart; a base address could not, dynamic modules have none
+    public int Id { get; }
+
     internal ICorDebugModule Module { get; }
     internal ModuleMetadataReader MetadataReader { get; private set; }
-    // Tells the modules of a session apart; a base address could not, dynamic modules have none
-    internal int Id { get; }
 
     internal ModuleInfo(int id, ICorDebugModule module, string path, ModuleMetadataReader metadataReader, bool isUserCode) {
         Id = id;

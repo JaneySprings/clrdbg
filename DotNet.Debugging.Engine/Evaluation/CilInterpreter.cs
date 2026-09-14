@@ -331,7 +331,7 @@ internal class CilInterpreter {
                     else if (op == OpCodes.Isinst)
                         stack.Push(CilValue.Null());
                     else
-                        throw new InvalidCastException($"InvalidCastException: Cannot cast the debuggee value to '{GetTypeDisplayName(targetType)}'");
+                        throw new EvaluationThrewException("System.InvalidCastException");
                     continue;
                 }
                 if (op == OpCodes.Box) {
@@ -367,7 +367,7 @@ internal class CilInterpreter {
                     }
                     var boxed = source.GetBoxedValue();
                     if (!IsUnboxCompatible(boxed.GetObject(), targetType))
-                        throw new InvalidCastException($"InvalidCastException: Cannot unbox the debuggee value to '{GetTypeDisplayName(targetType)}'");
+                        throw new EvaluationThrewException("System.InvalidCastException");
                     // The box's object is a VALUETYPE to the runtime: a primitive is read into a host value for the arithmetic
                     stack.Push(CilValue.FromCorValue(boxed.GetObject()).UnboxPrimitive());
                     continue;
@@ -570,7 +570,7 @@ internal class CilInterpreter {
         if (receiverValue != null) {
             var receiver = receiverValue.DereferenceLocation();
             if (receiver.IsNull)
-                throw new NullReferenceException();
+                throw new EvaluationThrewException("System.NullReferenceException");
             callArguments[0] = await MaterializeReceiverAsync(receiver, context, constrainedType, resolver, handles);
         }
 
@@ -812,7 +812,7 @@ internal class CilInterpreter {
 
         var boxed = source.GetBoxedValue();
         if (!IsUnboxCompatible(boxed.GetObject(), underlyingType))
-            throw new InvalidCastException($"InvalidCastException: Cannot unbox the debuggee value to a nullable of '{GetTypeDisplayName(underlyingType)}'");
+            throw new EvaluationThrewException("System.InvalidCastException");
 
         var nullableObject = nullable.CorValue!.UnwrapDebugValueToObject();
         var corClass = nullableObject.GetClass();
@@ -1045,7 +1045,7 @@ internal class CilInterpreter {
             return await CallRuntimeMethodAsync(runtimeMethod, runtimeMethod.IsStatic ? null : target, arguments, resolver, context, handles);
         }
         if (delegateValue.IsNull)
-            throw new NullReferenceException();
+            throw new EvaluationThrewException("System.NullReferenceException");
         var invoke = resolver.ResolveDelegateInvoke(delegateValue.CorValue!.GetExactType());
         return await CallRuntimeMethodAsync(invoke, delegateValue, arguments, resolver, context, handles);
     }
@@ -1194,9 +1194,6 @@ internal class CilInterpreter {
         if (position < 0 || position >= array.GetCount())
             throw new EvaluationThrewException("System.IndexOutOfRangeException");
         return array.GetElementAtPosition(checked((int)position));
-    }
-    private static string GetTypeDisplayName(ResolvedCilType type) {
-        return type.RuntimeType != null ? type.RuntimeType.FullName : "the requested type";
     }
 
     private class ByRefArgument {

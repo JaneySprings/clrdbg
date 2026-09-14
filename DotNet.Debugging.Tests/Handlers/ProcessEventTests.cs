@@ -28,7 +28,6 @@ public class ProcessEventTests : BaseDebugTestFixture {
 
         Assert.That(reported.SystemProcessId, Is.EqualTo(PrintedProcessId()));
         Assert.That(reported.StartMethod, Is.EqualTo(ProcessEvent.StartMethodValue.Launch));
-        Assert.That(reported.IsLocalProcess, Is.True);
         Assert.That(reported.Name, Is.EqualTo(Path.GetFileName(ProgramPath)));
     }
 
@@ -52,7 +51,6 @@ public class ProcessEventTests : BaseDebugTestFixture {
 
         Assert.That(reported.SystemProcessId, Is.GreaterThan(0));
         Assert.That(reported.StartMethod, Is.EqualTo(ProcessEvent.StartMethodValue.Launch));
-        Assert.That(reported.IsLocalProcess, Is.True);
         Assert.That(reported.Name, Is.EqualTo(Path.GetFileName(ProgramPath)));
         // A terminal debuggee prints to the terminal, so its process is checked directly rather than through OutputEvents
         Assert.That(() => System.Diagnostics.Process.GetProcessById(reported.SystemProcessId!.Value), Throws.Nothing);

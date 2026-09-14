@@ -28,9 +28,6 @@ debuggee on `configurationDone` rather than on `launch`.
   the host launch the on-device app, and the `ICorDebugProcess` arrives later through the
   `CreateProcess` callback (`ProcessHandler`) instead of being returned.
 
-Once attached, every known breakpoint is reported again (`SendBreakpointStatus`): the ones that
-were `Pending` become `NotProcessed` until a module binds them.
-
 ## 2. The callback loop
 
 The runtime raises `ICorDebug` callbacks on its own thread and stays stopped until the debugger
@@ -83,8 +80,7 @@ all function breakpoints. Binding (`BreakpointManager.TryBind`) asks every modul
   start (which naturally selects the innermost lambda), netcoredbg's containment rule when several
   start at the same position, and the next line with code when none covers it;
 - the `ICorDebugFunctionBreakpoint` is created at that IL offset and the `Breakpoint` gets the
-  resolved `Line`/`Column`/`EndLine`/`EndColumn` and a `Location` carrying the document's checksum
-  and Source Link.
+  resolved `Line`/`Column`/`EndLine`/`EndColumn` and a `Location` carrying the document's Source Link.
 
 Function breakpoints parse `Namespace.Type<T>.Method<U>(int, string)` into a
 `FunctionBreakpointPattern` and bind every matching method of every module, at its first sequence
@@ -146,9 +142,9 @@ Exceptions come through two callbacks, and which one raises the first-chance sto
 `JustMyCode` (default on). `Exception` arrives at the raise itself, first chance or unhandled: it
 always raises `OnExceptionThrown` with `Unhandled`, but a first-chance one only with Just My Code
 *off* — with it on, the first-chance stop is deferred to `Exception2`'s `USER_FIRST_CHANCE`
-notification, where Microsoft's debugger stops: the exception's recorded stack trace has reached user
-code there, and every dispatch entering user code stops again (the way vsdbg re-breaks on each rethrow
-of an exception propagating through an async chain). An exception that never reaches user code does
+notification, when the dispatch has reached user code, and every dispatch entering user code stops
+again (an exception propagating through an async chain is rethrown at each await, and each rethrow is
+a new chance to look at it). An exception that never reaches user code does
 not stop at all under Just My Code — the reason a "break on all exceptions" filter stays quiet for one
 thrown and caught inside a library. `Exception2` also follows the dispatch for the third kind: a
 first-chance notification in a user-code frame marks the thread, and when the catch handler is found
@@ -167,16 +163,12 @@ process stopped right after a continue issued inside a callback.
 
 - `GetThreads` lists the threads announced through `CreateThread` that have managed frames (the
   runtime's own threads — the finalizer, the tiered compilation worker — have none while idle and stay
-  out, as they do in Microsoft's debugger; while the process runs the frames cannot be walked and every
-  thread is listed), names them from the managed `Thread._name` field (read directly, no evaluation)
-  or, except for the main thread, the OS thread name (`NativeThreadNames`, for a process on this
-  machine: a launched or locally attached one, or a Mac Catalyst app behind the remote transport —
-  a device's thread ids would name unrelated local threads), and marks the first thread as main so
-  the host can label it.
+  out; while the process runs the frames cannot be walked and every thread is listed), names them
+  from the managed `Thread._name` field (read directly, no evaluation), and marks the first thread
+  as main so the host can label it.
 - `GetStackFrames` walks the managed chains of the thread; each `StackFrameInfo` carries the
-  `Namespace.Type.Method(params)` signature read from metadata, the module, the `SourceLocation`
-  (with checksum and Source Link) and the native instruction pointer; internal and native frames
-  are reported by kind.
+  `Namespace.Type.Method(params)` signature read from metadata, the module's name and id and the
+  `SourceLocation` (with Source Link); internal and native frames are reported by kind.
 - `GetLocalsReference(frameId)` returns the reference of the frame's scope, zero when there is
   nothing to show. `GetVariablesAsync` then goes through `VariableProvider`:
   the current `$exception`, `this` and the arguments (for lambdas and async methods `this` is the

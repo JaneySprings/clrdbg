@@ -135,7 +135,7 @@ internal class StepController {
         var module = debugger.FindModule(function.GetModule());
         if (module == null || !module.HasSymbols) {
             // A step into a method without symbols (Just My Code off) leaves it right away, like a
-            // filtered one - vsdbg does not stop where no source can be shown either
+            // filtered one: there is no source to show a stop in
             if (reason == CorDebugStepReason.STEP_CALL) {
                 isSkippingFilteredMethod = true;
                 CreateStepper(thread, StepKind.Out);
@@ -185,8 +185,8 @@ internal class StepController {
         // handler even though its offsets lie inside the range), the plumbing between two nested finallys
         // (which belongs to no handler, a crossing under way covers it), or the hoisted DisposeAsync of an
         // 'await using' or 'await foreach' (recognized by its await still lying ahead in the hidden code).
-        // The step keeps the user's kind - a step into enters a Dispose call the region makes, the way
-        // vsdbg does; a step out already left its frame and covers the region like a step over. Hidden
+        // The step keeps the user's kind - a step into enters a Dispose call the region makes; a step
+        // out already left its frame and covers the region like a step over. Hidden
         // code past its await's resume point is different: that is where a step out of an async method
         // ends, the mapping reports the awaiting statement there, and such a stop stands
         if (module.MetadataReader.IsInHiddenRegion(methodToken, ip.pnOffset)

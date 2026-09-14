@@ -64,12 +64,10 @@ internal static class MetadataImportExtensions {
     public static bool HasAttribute(this IMetaDataImport metadataImport, MetadataToken token, string attributeName) {
         return metadataImport.TryGetCustomAttributeByName(token, attributeName, out _, out _) == Cor.S_OK;
     }
-    public static bool HasAnyAttribute(this IMetaDataImport metadataImport, MetadataToken token, string[] attributeNames) {
-        foreach (var attributeName in attributeNames) {
-            if (metadataImport.HasAttribute(token, attributeName))
-                return true;
-        }
-        return false;
+    // Whether the method, or the type declaring it, is marked [StackTraceHidden]
+    public static bool IsStackTraceHidden(this IMetaDataImport metadataImport, MethodDefToken methodToken) {
+        return metadataImport.HasAttribute(methodToken, AttributeNames.StackTraceHidden)
+            || metadataImport.HasAttribute(metadataImport.GetMethodProps(methodToken).pClass, AttributeNames.StackTraceHidden);
     }
     public static DebuggerBrowsableState? GetDebuggerBrowsableState(this IMetaDataImport metadataImport, MetadataToken token) {
         if (metadataImport.TryGetCustomAttributeByName(token, AttributeNames.DebuggerBrowsable, out var data, out var size) != Cor.S_OK)

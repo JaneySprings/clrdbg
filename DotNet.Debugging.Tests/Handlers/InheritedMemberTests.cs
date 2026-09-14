@@ -96,15 +96,17 @@ public class InheritedMemberTests : BaseDebugTestFixture {
         Assert.That(members.Where(it => it.Name.StartsWith("Type ")).ToList(), Has.Count.EqualTo(1));
     }
 
-    // An implicit interface implementation is the class's own property, an explicit one is listed with the
-    // public members under its interface-qualified name, the way Microsoft's debugger shows it for a type with symbols
+    // An implicit interface implementation is the class's own property, an explicit one is a private member listed
+    // under its interface-qualified name, reachable through a cast to the interface
     [Test]
     public void InterfaceImplementationTest() {
         var threadId = LaunchToMarker();
         var members = GetMembers(threadId, "sheet");
 
         Assert.That(members.Where(it => it.Name.StartsWith("Index ")).ToList(), Has.Count.EqualTo(1));
-        var label = members.FirstOrDefault(it => it.Name.StartsWith("Docs.IPart.Label "));
+        Assert.That(members.Any(it => it.Name.StartsWith("Docs.IPart.Label ")), Is.False, "An explicit implementation is not a public member");
+        var nonPublic = members.First(it => it.Name == "Non-Public members");
+        var label = GetVariables(nonPublic.VariablesReference).FirstOrDefault(it => it.Name.StartsWith("Docs.IPart.Label "));
         Assert.That(label, Is.Not.Null);
         Assert.That(label!.Value, Is.EqualTo("\"part\""));
         Assert.That(label.EvaluateName, Is.EqualTo("((Docs.IPart)sheet).Label"));

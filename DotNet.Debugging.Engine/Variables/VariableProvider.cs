@@ -43,9 +43,12 @@ internal class VariableProvider {
     private const string ResultsViewGroup = "Results View";
     private const string ResultsViewMessage = "Expanding the Results View will enumerate the IEnumerable";
     private const string ResultsViewEmptyName = "Empty";
-    private const string ResultsViewEmptyMessage = "\"Enumeration yielded no results\"";
-    // The implicit evaluations (ToString, DebuggerDisplay) of one variables request share this time budget,
-    // so a single slow override cannot stall a whole listing - Microsoft's debugger cuts the formatting off the same way
+    private const string ResultsViewEmptyMessage = "Enumeration yielded no results";
+    // The enumeration of a Results View: the generic form infers the element type, the other lists objects
+    private const string GenericEnumeration = "System.Linq.Enumerable.ToArray({0})";
+    private const string NonGenericEnumeration = "System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Cast<object>({0}))";
+    // The implicit evaluations (ToString, DebuggerDisplay) of one variables request share this time budget, counted
+    // from the start of the page, so a single slow override cannot stall a whole listing
     private const int ImplicitEvalBudgetMilliseconds = 2000;
     // A display fragment showing a value with a display of its own renders it in turn; a display that comes back to
     // its own type (a linked node showing its successor) stops there with the type name
@@ -54,7 +57,6 @@ internal class VariableProvider {
     private readonly ManagedDebugger debugger;
     private readonly VariableManager variableManager;
     private readonly Stopwatch implicitEvalTime = new Stopwatch();
-    private int implicitEvalNesting;
     private bool limitImplicitEvals;
 
     public VariableProvider(ManagedDebugger debugger, VariableManager variableManager) {
@@ -78,7 +80,7 @@ internal class VariableProvider {
         var pageEnd = Math.Clamp(start + count, pageStart, totalCount);
         var variables = new List<VariableInfo>(pageEnd - pageStart);
         limitImplicitEvals = true;
-        implicitEvalTime.Reset();
+        implicitEvalTime.Restart();
         try {
             var position = 0;
             foreach (var slot in slots) {
@@ -117,17 +119,17 @@ internal class VariableProvider {
                 SortMembers(result);
                 break;
             case VariableReferenceKind.StaticMembers:
-                await AddStaticMembersAndGroupAsync(reference, result);
-                break;
-            case VariableReferenceKind.NonPublicStaticMembers:
-                await AddMembersAsync(reference.Value!, reference.Value!.UnwrapDebugValueToObject().GetExactType(), MemberFilter.NonPublic, listStatics: true, reference, result);
+                await AddMembersAsync(reference.Value!, reference.Value!.UnwrapDebugValueToObject().GetExactType(), MemberFilter.All, listStatics: true, reference, result);
                 SortMembers(result);
                 break;
         }
     }
+    // A variable, a field or an element is written in place, a property through its setter
     public async Task<VariableInfo> SetVariableAsync(int referenceId, string name, string text) {
         var reference = variableManager.Get(referenceId) ?? throw new InvalidOperationException("The variables reference was not found");
-        var target = FindVariableValue(reference, name) ?? throw new InvalidOperationException($"Variable '{name}' not found or setting its value is not supported");
+        var target = FindVariableValue(reference, name);
+        if (target == null)
+            return await SetPropertyAsync(reference, name, text);
         VariableWriter.Write(target, text);
 
         // An element name ('[0]') appends to the parent expression without a dot
@@ -139,6 +141,56 @@ internal class VariableProvider {
         else
             evaluateName = $"{reference.EvaluateName}.{name}";
         return await CreateVariableAsync(name, target, reference.ThreadId, reference.FrameDepth, evaluateName, useDisplayName: reference.Kind != VariableReferenceKind.Scope);
+    }
+    // Assigns a property the way an expression does, evaluating 'parent.Property = text' in the frame: the setter runs
+    // in the debuggee and the text is any expression the frame evaluates
+    private async Task<VariableInfo> SetPropertyAsync(VariableReference reference, string name, string text) {
+        ListedProperty? property = null;
+        string? declaringTypeName = null;
+        if (reference.Value != null)
+            property = FindListedProperty(reference, name, out declaringTypeName);
+        if (property == null)
+            throw new InvalidOperationException($"Variable '{name}' not found or setting its value is not supported");
+
+        var evaluateName = property.GetEvaluateName(reference.EvaluateName, declaringTypeName);
+        var context = new EvaluationContext(debugger.GetThread(reference.ThreadId), reference.ThreadId, reference.FrameDepth);
+        using var evaluation = await debugger.GetEvaluator().EvaluateAsync($"{evaluateName} = {text}", context);
+        if (evaluation.Error != null)
+            throw new EvaluationException(evaluation.Error);
+
+        var variable = await CreateVariableAsync(name, evaluation.Value!, reference.ThreadId, reference.FrameDepth, evaluateName, VariableKind.Property, property.Visibility, useDisplayName: true);
+        // A value with children stays alive behind its variables reference
+        if (variable.VariablesReference != 0)
+            evaluation.KeepHandle();
+        return variable;
+    }
+    // The property the listing shows under 'name' on the value's type or a base type, with the name of the type
+    // declaring it: the members are named and hidden by the rules of the listing (a hidden one goes by
+    // 'Name (Namespace.Type)'), so the name the client sends back finds the property it saw
+    private ListedProperty? FindListedProperty(VariableReference reference, string name, out string? declaringTypeName) {
+        declaringTypeName = null;
+        var listStatics = reference.Kind == VariableReferenceKind.StaticMembers;
+        var seenNames = new Dictionary<string, bool>(StringComparer.Ordinal);
+        for (var type = reference.Value!.UnwrapDebugValueToObject().GetExactType(); type != null && !type.IsRootType(); type = type.GetBaseType()) {
+            var corClass = type.GetClass();
+            var typeToken = corClass.GetToken();
+            var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
+            var hasSymbols = debugger.FindModule(corClass.GetModule())?.HasSymbols == true;
+            // The fields take part in the name hiding, whichever members this lookup is after
+            ListFields(metadataImport, typeToken, listStatics, seenNames, hasSymbols, out _);
+            var properties = ListProperties(metadataImport, typeToken, listStatics, seenNames, hasSymbols, out _);
+            // The listing holds no property of a byref-like type
+            if (metadataImport.HasAttribute(typeToken, AttributeNames.IsByRefLike))
+                continue;
+
+            var typeName = TypeNameFormatter.TryGetTypeName(type);
+            var property = properties.FirstOrDefault(it => it.GetDisplayName(typeName) == name);
+            if (property != null) {
+                declaringTypeName = typeName;
+                return property;
+            }
+        }
+        return null;
     }
     // 'useDisplayName': the 'Name' of the value's DebuggerDisplay attribute replaces the name of a member or an element
     // (a dictionary's '[key]' entries), never that of a variable of the scope or of an evaluated expression
@@ -169,18 +221,11 @@ internal class VariableProvider {
                 text = $"{{{formatted.TypeName}}}";
             }
             else {
-                try {
-                    text = await RenderDisplayAsync(formatted.Value, displayValue, threadId, frameDepth, depth);
-                    if (formatted.TypeTemplate != null)
-                        typeName = await RenderDisplayAsync(formatted.TypeTemplate, displayValue, threadId, frameDepth, depth);
-                    if (formatted.NameTemplate != null)
-                        name = await RenderDisplayAsync(formatted.NameTemplate, displayValue, threadId, frameDepth, depth);
-                }
-                catch (EvaluationTimeoutException) {
-                    // Cut off like a value past the budget, the way Microsoft's debugger shows one whose evaluation it aborted
-                    DebuggerLoggingService.LogMessage("DebuggerDisplay evaluation timed out");
-                    text = $"{{{formatted.TypeName}}}";
-                }
+                text = await RenderDisplayAsync(formatted.Value, displayValue, threadId, frameDepth, depth);
+                if (formatted.TypeTemplate != null)
+                    typeName = await RenderDisplayAsync(formatted.TypeTemplate, displayValue, threadId, frameDepth, depth);
+                if (formatted.NameTemplate != null)
+                    name = await RenderDisplayAsync(formatted.NameTemplate, displayValue, threadId, frameDepth, depth);
             }
         }
 
@@ -193,7 +238,7 @@ internal class VariableProvider {
 
     // Every '{expression}' is evaluated in the value's type context and shown the way a variable holding its result is
     // (a string quoted unless ',nq', a nested value through its own DebuggerDisplay or ToString), the text between the
-    // fragments stays; a fragment that fails shows its failure in its own place - the way Microsoft's debugger has it
+    // fragments stays; a fragment that fails shows its failure in its own place
     private async Task<string> RenderDisplayAsync(string template, ICorDebugValue value, int threadId, int frameDepth, int depth) {
         var result = new StringBuilder();
         foreach (var part in DebuggerDisplayTemplate.Parse(template)) {
@@ -205,48 +250,15 @@ internal class VariableProvider {
         return result.ToString();
     }
     private async Task<string> RenderFragmentAsync(DebuggerDisplayPart fragment, ICorDebugValue value, int threadId, int frameDepth, int depth) {
-        BeginImplicitEval();
-        try {
-            var context = new EvaluationContext(debugger.GetThread(threadId), threadId, frameDepth, value);
-            using var evaluation = await debugger.GetEvaluator().EvaluateAsync(fragment.Text, context);
-            if (evaluation.TimedOut)
-                throw new EvaluationTimeoutException();
-            // Shown like the '$exception' variable, '{Type: message ...}'
-            if (evaluation.ThrownException != null)
-                return (await FormatValueAsync(evaluation.ThrownException, threadId, frameDepth, escapeStrings: false, createProxy: false, depth + 1)).Value;
-            if (evaluation.Error != null) {
-                DebuggerLoggingService.LogMessage($"DebuggerDisplay fragment '{fragment.Text}' failed: {evaluation.Error}");
-                return IsNullDereference(evaluation.Failure) ? FormatNullDereference() : evaluation.Error;
-            }
-            if (evaluation.Value == null)
-                return string.Empty;
-            return (await FormatValueAsync(evaluation.Value, threadId, frameDepth, escapeStrings: !fragment.NoQuotes, createProxy: false, depth + 1)).Value;
+        var context = new EvaluationContext(debugger.GetThread(threadId), threadId, frameDepth, value);
+        using var evaluation = await debugger.GetEvaluator().EvaluateAsync(fragment.Text, context);
+        if (evaluation.Error != null) {
+            DebuggerLoggingService.LogMessage($"DebuggerDisplay fragment '{fragment.Text}' failed: {evaluation.Error}");
+            return evaluation.Error;
         }
-        finally {
-            EndImplicitEval();
-        }
-    }
-    // The evaluations nest (a fragment rendering a value renders that value's fragments): the watch runs from the outermost
-    private void BeginImplicitEval() {
-        if (implicitEvalNesting++ == 0)
-            implicitEvalTime.Start();
-    }
-    private void EndImplicitEval() {
-        if (--implicitEvalNesting == 0)
-            implicitEvalTime.Stop();
-    }
-    private static bool IsNullDereference(Exception? failure) {
-        for (var current = failure; current != null; current = current.InnerException) {
-            if (current is NullReferenceException)
-                return true;
-        }
-        return false;
-    }
-    // A fragment that dereferenced null shows the exception its evaluation raises, in the braces a ToString result
-    // gets. Microsoft's debugger adds the frame of the method its expression compiler generated ('at <>x.<>m0(...)'),
-    // which says nothing to a user and is left out
-    private static string FormatNullDereference() {
-        return $"{{{typeof(NullReferenceException).FullName}: {new NullReferenceException().Message}}}";
+        if (evaluation.Value == null)
+            return string.Empty;
+        return (await FormatValueAsync(evaluation.Value, threadId, frameDepth, escapeStrings: !fragment.NoQuotes, createProxy: false, depth + 1)).Value;
     }
 
     private async Task AddScopeVariablesAsync(VariableReference reference, List<VariableSlot> result) {
@@ -398,21 +410,11 @@ internal class VariableProvider {
             result.Add(CreateGroup(NonPublicMembersGroup, nonPublicReference));
         }
     }
-    private async Task AddStaticMembersAndGroupAsync(VariableReference reference, List<VariableSlot> result) {
-        var value = reference.Value!;
-        var type = value.UnwrapDebugValueToObject().GetExactType();
-        var summary = await AddMembersAsync(value, type, MemberFilter.Public, listStatics: true, reference, result);
-        if (summary.HasNonPublicMembers) {
-            var nonPublicReference = variableManager.Create(new VariableReference(VariableReferenceKind.NonPublicStaticMembers, reference.ThreadId, reference.FrameDepth, value, null, reference.EvaluateName));
-            result.Add(CreateGroup(NonPublicMembersGroup, nonPublicReference));
-        }
-        SortMembers(result);
-    }
     // Lists the instance or static members declared by the type and its base types, reporting whether the
     // 'Static members' and 'Non-Public members' groups are needed. 'seenNames' carries the member names met on the
     // way up the hierarchy: a base member is listed under a name a derived member already took only when that
     // member hides it (a field, a 'new' or non-virtual property), and then with its declaring type - an override
-    // is the base property itself, listed once. This is the rule Microsoft's debugger applies
+    // is the base property itself, listed once
     private async Task<MemberSummary> AddMembersAsync(ICorDebugValue value, ICorDebugType type, MemberFilter filter, bool listStatics, VariableReference reference, List<VariableSlot> result, Dictionary<string, bool>? seenNames = null) {
         seenNames ??= new Dictionary<string, bool>(StringComparer.Ordinal);
         var corClass = type.GetClass();
@@ -481,10 +483,9 @@ internal class VariableProvider {
             // virtual or not) hides the base one
             var hidesBaseMembers = !getterAttributes.IsMdVirtual() || getterAttributes.IsMdNewSlot();
             // An accessor that is private yet virtual is an explicit interface implementation (C# has no private
-            // virtual members). Microsoft's debugger lists it with the public members, under its interface-qualified
-            // name, when the type's module has symbols - among the non-public ones of a module without
+            // virtual members): listed under its interface-qualified name, behind 'Non-Public members' like any private member
             var isExplicitImplementation = getterAttributes.IsMdPrivate() && getterAttributes.IsMdVirtual();
-            var isInline = IsListedInline(getterAttributes.ToVisibility(), hasSymbols) || (isExplicitImplementation && hasSymbols);
+            var isInline = IsListedInline(getterAttributes.ToVisibility(), hasSymbols);
             if (TryListMember(seenNames, name, hidesBaseMembers, out var isHidden))
                 result.Add(new ListedProperty(property, getter, getterAttributes, name, isInline, isHidden, isExplicitImplementation));
         }
@@ -503,8 +504,8 @@ internal class VariableProvider {
         return !isHidden || hiddenByDerived;
     }
     // Whether a member is listed with the public ones rather than behind 'Non-Public members'. The internal members
-    // of a module with symbols (the user's own code) are: Microsoft's debugger keeps them behind the group, the
-    // listing reads better with them inline. Those of a module without symbols (a library's internals) stay behind it
+    // of a module with symbols (the user's own code) are, the listing reads better with them inline; those of a
+    // module without symbols (a library's internals) stay behind the group
     private static bool IsListedInline(VariableVisibility visibility, bool hasSymbols) {
         return visibility == VariableVisibility.Public || (hasSymbols && visibility == VariableVisibility.Internal);
     }
@@ -577,17 +578,16 @@ internal class VariableProvider {
                     await AddRootHiddenMemberAsync(name, invokeGetterAsync, reference, result, evaluateName, VariableKind.Property, visibility);
                     continue;
                 }
-                var propertyName = member.Name;
                 result.Add(new VariableSlot(name, async () => {
                     ICorDebugValue? propertyValue;
                     try {
                         propertyValue = await invokeGetterAsync();
                     }
                     catch (EvaluationThrewException ex) {
-                        // A getter that throws is a failed read, worded the way Microsoft's debugger words it - not the exception as the value
+                        // A getter that throws is a failed read, not the exception as the value
                         if (ex.ExceptionValue is ICorDebugHandleValue thrownHandle)
                             thrownHandle.TryDispose();
-                        return VariableInfo.CreateError(name, $"'{propertyName}' threw an exception of type '{ex.ExceptionTypeName}'");
+                        return VariableInfo.CreateError(name, ex.Message);
                     }
                     if (propertyValue == null)
                         return null;
@@ -643,13 +643,13 @@ internal class VariableProvider {
         var value = reference.Value!;
         var context = new EvaluationContext(debugger.GetThread(reference.ThreadId), reference.ThreadId, reference.FrameDepth, value);
         await EnsureSystemLinqLoadedAsync(context);
-        var isGeneric = true;
-        var evaluation = await debugger.GetEvaluator().EvaluateAsync("System.Linq.Enumerable.ToArray(this)", context);
+        var enumeration = GenericEnumeration;
+        var evaluation = await debugger.GetEvaluator().EvaluateAsync(string.Format(enumeration, "this"), context);
         if (evaluation.Error != null) {
             // The value only implements the non generic IEnumerable, so the element type cannot be inferred
             evaluation.Dispose();
-            isGeneric = false;
-            evaluation = await debugger.GetEvaluator().EvaluateAsync("System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Cast<object>(this))", context);
+            enumeration = NonGenericEnumeration;
+            evaluation = await debugger.GetEvaluator().EvaluateAsync(string.Format(enumeration, "this"), context);
         }
         try {
             if (evaluation.Error != null)
@@ -657,14 +657,15 @@ internal class VariableProvider {
             if (evaluation.Value!.UnwrapDebugValue() is not ICorDebugArrayValue arrayValue)
                 throw new InvalidOperationException("The enumeration did not produce an array");
 
-            // The row VS shows through SystemCore_EnumerableDebugView's 'Empty' exception property - without
-            // it an empty enumeration expands to nothing, which reads as a listing that never finished loading
+            // Without a row an empty enumeration expands to nothing, which reads as a listing that never finished loading
             if (arrayValue.GetCount() == 0) {
-                result.Add(new VariableSlot(new VariableInfo(ResultsViewEmptyName, ResultsViewEmptyMessage, "string")));
+                result.Add(new VariableSlot(new VariableInfo(ResultsViewEmptyName, ResultsViewEmptyMessage, string.Empty)));
                 return;
             }
 
-            AddArrayElementSlots(evaluation.Value!, reference, result, GetResultsViewEvaluateName(reference, arrayValue, isGeneric));
+            // The items are addressed through the enumeration that produced them
+            var parentEvaluateName = reference.EvaluateName == null ? null : string.Format(enumeration, reference.EvaluateName);
+            AddArrayElementSlots(evaluation.Value!, reference, result, parentEvaluateName);
             if (evaluation.Value is ICorDebugHandleValue handle) {
                 // The elements point into the array, so the handle stays alive behind the variables references
                 evaluation.KeepHandle();
@@ -675,23 +676,13 @@ internal class VariableProvider {
             evaluation.Dispose();
         }
     }
-    // The enumeration compiles against System.Linq, which the debuggee may not have loaded. Deliberate divergence:
-    // Microsoft's debugger enumerates without loading it (Concord interprets the IL against metadata read from disk), clrdbg loads it
+    // The enumeration compiles against System.Linq, which the debuggee may not have loaded: it is loaded then (a module event follows)
     private async Task EnsureSystemLinqLoadedAsync(EvaluationContext context) {
         if (debugger.Modules.Any(it => string.Equals(it.Name, "System.Linq.dll", StringComparison.OrdinalIgnoreCase)))
             return;
         using var loadResult = await debugger.GetEvaluator().EvaluateAsync("System.Reflection.Assembly.Load(\"System.Linq\")", context);
         if (loadResult.Error != null)
             throw new EvaluationException(loadResult.Error);
-    }
-    // The expression reported for enumerated items: 'new System.Linq.SystemCore_EnumerableDebugView<T>(value).Items'
-    private static string? GetResultsViewEvaluateName(VariableReference reference, ICorDebugArrayValue arrayValue, bool isGeneric) {
-        if (reference.EvaluateName == null)
-            return null;
-        if (!isGeneric)
-            return $"new System.Linq.SystemCore_EnumerableDebugView({reference.EvaluateName}).Items";
-        var elementTypeName = TypeNameFormatter.GetTypeName(arrayValue.GetExactType().GetFirstTypeParameter());
-        return $"new System.Linq.SystemCore_EnumerableDebugView<{elementTypeName}>({reference.EvaluateName}).Items";
     }
     // The elements are one block slot named by their index, so a listing costs nothing per element: only the ones
     // of the requested page are ever named, read and formatted
@@ -913,21 +904,14 @@ internal class VariableProvider {
         group.VariablesReference = variablesReference;
         return new VariableSlot(group);
     }
-    // Ordinal order ('AAA AAB ... aaa aab') with the groups at the end; the elements a 'RootHidden' member was
-    // replaced with compare by their index, so '[2]' stays before '[10]'
+    // Ordinal order ('AAA AAB ... aaa aab') with the groups at the end
     private static void SortMembers(List<VariableSlot> members) {
         members.Sort((left, right) => {
             var rankComparison = GetSortRank(left).CompareTo(GetSortRank(right));
             if (rankComparison != 0)
                 return rankComparison;
-            if (TryGetElementIndex(left.Name, out var leftIndex) && TryGetElementIndex(right.Name, out var rightIndex))
-                return leftIndex.CompareTo(rightIndex);
             return string.CompareOrdinal(left.Name, right.Name);
         });
-    }
-    private static bool TryGetElementIndex(string name, out uint index) {
-        index = 0;
-        return name.StartsWith('[') && name.EndsWith(']') && uint.TryParse(name.AsSpan(1, name.Length - 2), out index);
     }
     private static int GetSortRank(VariableSlot member) {
         return member.Name switch {
@@ -945,8 +929,7 @@ internal class VariableProvider {
     }
 
     // A field or property the listing shows: whether it goes with the public members or behind 'Non-Public members',
-    // and how it is named. One a derived member hides is told apart from it by its declaring type, 'Name (Namespace.Type)',
-    // the way Microsoft's debugger shows it
+    // and how it is named. One a derived member hides is told apart from it by its declaring type, 'Name (Namespace.Type)'
     private abstract class ListedMember {
         public string Name { get; }
         public bool IsInline { get; }

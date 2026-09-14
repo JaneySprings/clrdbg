@@ -79,7 +79,6 @@ public class SourceLinkTests : BaseDebugTestFixture {
         var frame = GetTopStackFrame(threadId);
         Assert.That(frame.Source?.Path?.Replace('\\', '/'), Is.EqualTo($"{MappedSourceRoot}/Program.cs"));
         Assert.That(frame.Source!.SourceReference, Is.GreaterThan(0));
-        Assert.That(frame.Source.VsSourceLinkInfo?.Url, Is.EqualTo($"http://127.0.0.1:{port}/Program.cs"));
         Assert.That(frame.Line, Is.EqualTo(GetMarkerLine("marker:stop")));
         Assert.That(Volatile.Read(ref servedRequests), Is.Zero, "Nothing is downloaded until the client opens the document");
 

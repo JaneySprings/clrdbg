@@ -43,18 +43,15 @@ internal class ExpressionEvaluator {
         catch (Exception ex) {
             // The client gets the message alone, the log keeps the interpreter's stack for a failure that needs a look
             DebuggerLoggingService.LogError($"Evaluation of '{expression}' failed", ex);
-            // A Roslyn wrapper of 'Reflection/' that found a member missing fails in its type initializer, the cause is the message worth showing
-            var cause = ex is TypeInitializationException { InnerException: { } initializationFailure } ? initializationFailure : ex;
             // Roslyn's expression compiler generates no code for a variable a pattern declares ('x is int n') and fails
             // looking the local up; the failure is reported as what it is rather than as a missing dictionary key
-            var message = cause is KeyNotFoundException ? $"Variables declared by a pattern ('x is int n') are not supported in the debugger ({cause.Message})" : cause.Message;
-            return EvaluationResult.FromError(message, ex, ex is EvaluationTimeoutException);
+            var message = ex is KeyNotFoundException ? $"Variables declared by a pattern ('x is int n') are not supported in the debugger ({ex.Message})" : ex.Message;
+            return EvaluationResult.FromError(message, ex);
         }
     }
 
-    // Deliberate divergence: Microsoft's debugger reads a missing assembly's metadata from disk and interprets its IL
-    // itself, clrdbg loads the assembly into the debuggee (a module event follows), as the Results View does. False
-    // when an assembly could not be loaded, the compiler's error stands then
+    // The assembly is loaded into the debuggee (a module event follows), as the Results View does. False when an
+    // assembly could not be loaded, the compiler's error stands then
     private async Task<bool> TryLoadAssembliesAsync(IReadOnlyList<string> assemblyNames, HashSet<string> loadedAssemblies, EvaluationContext context) {
         foreach (var assemblyName in assemblyNames) {
             if (!loadedAssemblies.Add(assemblyName))

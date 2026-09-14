@@ -11,8 +11,6 @@ internal enum VariableReferenceKind {
     StaticMembers,
     // The 'Non-Public members' group of a value
     NonPublicMembers,
-    // The 'Non-Public members' group of a 'Static members' group
-    NonPublicStaticMembers,
     // The value's own members listed under the 'Raw View' group of a DebuggerTypeProxy expansion
     RawMembers,
     // The 'Results View' node of a value implementing IEnumerable, enumerated when expanded

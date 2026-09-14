@@ -41,8 +41,8 @@ public class ExceptionStackTraceTests : BaseDebugTestFixture {
     public void RecordedStackTraceAcrossAsyncRethrowTest() {
         LaunchWithExceptionFilters("all");
 
-        // Break-on-all stops on every dispatch of the exception entering user code, like Microsoft's debugger does -
-        // collect the recorded stack trace reported at each stop until the debuggee runs to completion
+        // Break-on-all stops on every dispatch of the exception entering user code - collect the recorded
+        // stack trace reported at each stop until the debuggee runs to completion
         var stackTraces = new List<string>();
         CollectStopsUntilExit(stopped => stackTraces.Add(GetExceptionInfo(stopped.ThreadId!.Value).Details?.StackTrace ?? string.Empty));
 
@@ -52,11 +52,11 @@ public class ExceptionStackTraceTests : BaseDebugTestFixture {
 
         // 'throw e' in Rethrow resets the recorded trace, which then grows through the async hops - the
         // 'MoveNext' frames of dispatches that already completed, which no walk of the thread's stack can see
-        var rethrown = stackTraces.LastOrDefault(it => it.Contains("ExceptionRelay.Rethrow(Exception e)") && it.Contains("<MiddleAsync>"));
+        var rethrown = stackTraces.LastOrDefault(it => it.Contains("ExceptionRelay.Rethrow(System.Exception e)") && it.Contains("<MiddleAsync>"));
         Assert.That(rethrown, Is.Not.Null, $"No stop reported the rethrown trace. Reported traces:\n{string.Join("\n---\n", stackTraces)}");
-        Assert.That(rethrown, Does.StartWith("   at ExceptionRelay.Rethrow(Exception e)"), "The rethrow site is the most recent recorded frame");
+        Assert.That(rethrown, Does.StartWith("   at ExceptionRelay.Rethrow(System.Exception e)"), "The rethrow site is the most recent recorded frame");
         Assert.That(rethrown, Does.Not.Contain("InnerAsync"), "The rethrow reset the previously recorded frames");
-        Assert.That(rethrown, Does.Not.Contain("ExceptionDispatchInfo"), "The [StackTraceHidden] machinery of the await hops is dropped, like Microsoft's debugger drops it");
+        Assert.That(rethrown, Does.Not.Contain("ExceptionDispatchInfo"), "The [StackTraceHidden] machinery of the await hops is dropped");
         Assert.That(rethrown, Does.Not.Contain("TaskAwaiter"));
     }
 
@@ -66,14 +66,15 @@ public class ExceptionStackTraceTests : BaseDebugTestFixture {
 
         var moduleNames = CollectStopsUntilExit().Select(it => it.Text!.Split(" in ").Last()).ToList();
 
-        // The stop names the module raising the exception at each dispatch: the throw and the 'throw e' rethrow
-        // happen in user code, the hops in between are raised by the core library's await machinery
+        // The stop names the user's module at each dispatch: the throw and the 'throw e' rethrow happen in user
+        // code, and the hops in between are rethrown by the core library's await machinery, which is hidden from
+        // stack traces and charged to the user's async method beneath it
         Assert.That(moduleNames, Is.EqualTo(new[] {
             $"{ProjectName}.dll",
-            "System.Private.CoreLib.dll",
             $"{ProjectName}.dll",
-            "System.Private.CoreLib.dll",
-            "System.Private.CoreLib.dll",
+            $"{ProjectName}.dll",
+            $"{ProjectName}.dll",
+            $"{ProjectName}.dll",
         }));
     }
 
@@ -82,7 +83,7 @@ public class ExceptionStackTraceTests : BaseDebugTestFixture {
         LaunchWithExceptionFilters("user-unhandled");
 
         // Every catch on the way is user code: the explicit handlers and the async state machines' own
-        // catch blocks compiled into 'MoveNext'. Microsoft's debugger reports no user-unhandled stop for this program
+        // catch blocks compiled into 'MoveNext', so there is no user-unhandled stop for this program
         var stops = CollectStopsUntilExit();
         Assert.That(stops.Where(it => it.Reason == StoppedEvent.ReasonValue.Exception), Is.Empty,
             $"An exception caught inside user code (including a state machine's catch) must not stop: {string.Join(" | ", stops.Select(it => it.Text))}");

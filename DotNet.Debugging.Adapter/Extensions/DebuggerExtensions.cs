@@ -18,48 +18,35 @@ public static class DebuggerExtensions {
         var suffixIndex = displayName.LastIndexOf(" [", StringComparison.Ordinal);
         return suffixIndex <= 0 ? displayName : displayName.Substring(0, suffixIndex);
     }
-    // 'Module.dll!Namespace.Type.Method(string[] args) Line 7', the line only when the source is known
+    // 'Module.dll!Namespace.Type.Method(string[] args)'
     public static string ToDisplayName(this StackFrameInfo frame) {
         if (frame.Kind != StackFrameKind.Managed)
             return frame.Name;
-
-        var name = $"{frame.ModuleName}!{frame.Name}";
-        if (frame.Location != null)
-            name += $" Line {frame.Location.Line}";
-        return name;
+        return $"{frame.ModuleName}!{frame.Name}";
     }
     public static string ToDisplayName(this ThreadInfo thread) {
         if (!string.IsNullOrEmpty(thread.Name))
             return thread.Name;
         return thread.IsMain ? "Main Thread" : "<No Name>";
     }
-    // Microsoft's '1.00.0.0' form
-    public static string? ToDisplayVersion(this Version? version) {
-        if (version == null)
-            return null;
-        return $"{version.Major}.{Math.Max(version.Minor, 0):00}.{Math.Max(version.Build, 0)}.{Math.Max(version.Revision, 0)}";
-    }
     public static string? ToStatusMessage(this Breakpoint breakpoint) {
         return breakpoint.Status switch {
-            BreakpointStatus.Pending => Resources.MsgBreakpointPending,
-            BreakpointStatus.NotProcessed => breakpoint.IsFunctionBreakpoint ? string.Format(Resources.MsgBreakpointFunctionNotFound, breakpoint.FunctionName) : Resources.MsgBreakpointNotProcessed,
-            BreakpointStatus.NoSymbols => Resources.MsgBreakpointNoSymbols,
-            BreakpointStatus.InHiddenMethod => Resources.MsgBreakpointInHiddenMethod,
-            BreakpointStatus.InStepThroughMethod => Resources.MsgBreakpointInStepThroughMethod,
-            BreakpointStatus.SourceMismatch => string.Format(Resources.MsgBreakpointSourceMismatch, Path.GetFileName(breakpoint.FilePath), breakpoint.SourceMismatchModule),
-            BreakpointStatus.NoMatchingFunctions => string.Format(Resources.MsgBreakpointNoFunctions, breakpoint.FunctionName),
+            BreakpointStatus.Unbound => breakpoint.IsFunctionBreakpoint ? string.Format(Resources.MsgFunctionBreakpointUnbound, breakpoint.FunctionName) : Resources.MsgBreakpointUnbound,
+            BreakpointStatus.SourceMismatch => Resources.MsgBreakpointSourceMismatch,
             BreakpointStatus.Error => string.Format(Resources.MsgBreakpointError, breakpoint.Error),
             _ => null
         };
     }
     public static string ToLoadedAssemblyMessage(this ModuleInfo module, string processName, int processId, bool justMyCode) {
-        var symbolStatus = Resources.MsgCannotFindPdb;
+        return $"{processName} ({processId}): Loaded '{module.Path}'. {module.ToSymbolStatus(justMyCode, detailed: true)}";
+    }
+    // The detailed form explains a skip in the console line, the module event carries the short one
+    public static string ToSymbolStatus(this ModuleInfo module, bool justMyCode, bool detailed = false) {
         if (module.HasSymbols)
-            symbolStatus = Resources.MsgPdbLoaded;
-        else if (!module.IsUserCode && justMyCode)
-            symbolStatus = Resources.MsgPdbSkipped;
-
-        return $"{processName} ({processId}): Loaded '{module.Path}'. {symbolStatus}";
+            return Resources.MsgPdbLoaded;
+        if (!module.IsUserCode && justMyCode)
+            return detailed ? Resources.MsgPdbSkipped : Resources.MsgPdbSkippedShort;
+        return Resources.MsgCannotFindPdb;
     }
 
     private static string ToShortTypeName(string typeName) {

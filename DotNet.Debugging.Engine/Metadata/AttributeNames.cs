@@ -13,6 +13,6 @@ internal static class AttributeNames {
 
     // Methods the stepper must not stop in, marked directly or through their type
     public static readonly string[] NonUserMethodAttributes = [DebuggerStepThrough, DebuggerHidden];
-    // Just My Code additionally treats [DebuggerNonUserCode] methods as non-user, vsdbg ignores it otherwise
+    // Just My Code additionally treats [DebuggerNonUserCode] methods as non-user; with it off the attribute has no effect
     public static readonly string[] JustMyCodeNonUserMethodAttributes = [DebuggerNonUserCode, DebuggerStepThrough, DebuggerHidden];
 }

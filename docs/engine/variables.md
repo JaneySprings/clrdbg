@@ -17,7 +17,6 @@ stores a `VariableReference`: the thread and frame depth, the `ICorDebugValue`, 
 | `Members` | The members of an object or the elements of an array. |
 | `StaticMembers` | The `Static members` group of a value. |
 | `NonPublicMembers` | The `Non-Public members` group of a value. |
-| `NonPublicStaticMembers` | The `Non-Public members` group inside `Static members`. |
 | `RawMembers` | The value's own members under the `Raw View` group of a `DebuggerTypeProxy` expansion. |
 | `ResultsView` | The `Results View` node of an `IEnumerable` value, enumerated in the debuggee when expanded. |
 
@@ -71,12 +70,14 @@ placeholder over the remote (mobile) transport:
 - **Properties** are read by evaluating their getter with the *reference* value as receiver (a
   dereferenced object cannot be passed to a func eval) and the exact type's type arguments; properties
   without a getter are skipped. A getter that throws is a failed read — an error entry reading
-  `'Name' threw an exception of type 'System.InvalidOperationException'`, the wording of Microsoft's
-  debugger — never the thrown exception presented as the property's value.
+  `Evaluation threw System.InvalidOperationException` — never the thrown exception presented as the
+  property's value.
 - **Visibility.** `Kind` (`Data`/`Property`, plus `Group` for the group nodes below and `ResultsView`)
   and `Visibility` (`Public`/`Private`/`Protected`/`Internal`) come from the field/getter attributes.
   Every type shows its public members inline and groups the non-public ones under `Non-Public members`
-  when they exist. Static members go into a `Static members` group; group nodes have `Kind = Group`.
+  when they exist (an explicit interface implementation is a private member, listed there under its
+  interface-qualified name). Static members, public and non-public alike, go into a `Static members`
+  group; group nodes have `Kind = Group`.
 - **`DebuggerBrowsable`**: `Never` hides the member, `RootHidden` replaces an array-valued member by
   its elements.
 - **`DebuggerTypeProxy`**: the proxy is instantiated in the debuggee (`.ctor(value)`, the
@@ -92,8 +93,8 @@ placeholder over the remote (mobile) transport:
   type and its bases) gets a `Results View` node (`Kind = ResultsView`, the adapter marks it as having
   side effects) whose expansion enumerates the value in the debuggee — `System.Linq.Enumerable.ToArray`
   over it, loading `System.Linq` first when the debuggee has not — and lists the array's elements with
-  `new System.Linq.SystemCore_EnumerableDebugView<T>(value).Items[i]` evaluate names; an empty
-  enumeration shows the `Empty` row ("Enumeration yielded no results") the way VS does. A
+  `System.Linq.Enumerable.ToArray(value)[i]` evaluate names (the `Cast<object>` form for a non-generic
+  `IEnumerable`); an empty enumeration shows an `Empty` row so the node does not look unfinished. A
   `DebuggerTypeProxy` expansion has no `Results View`, its `Raw View` does not either.
 - **Members are read once per type.** Listing a type's members reads the metadata of each field and
   property getter a single time; the static, literal and visibility decisions and the func-eval of a
@@ -136,16 +137,14 @@ formatted like a variable's value — a string quoted unless `,nq`, `true`/`fals
 numbers, a nested object through its own display or `ToString` (nesting stops at `MaxDisplayDepth`
 with `{Type}`), `null` — so `{Amount} {Currency}` shows `12.5 "USD"` and `box of {Value}` shows
 `box of 1 EUR`. A fragment that fails shows its failure in its own place while the others still
-render: a compile error verbatim, code that threw as the exception's `{ToString()}` (the
-`EvaluationResult` carries the thrown object), a null dereference as the braced
-`{System.NullReferenceException: …}` header alone (Microsoft's debugger appends the frame of its
-generated method, `at <>x.<>m0(…)`, which is left out on purpose).
+render: a compile error verbatim, code that threw (a null dereference included) as
+`Evaluation threw System.NullReferenceException`, an evaluation the engine had to abort as
+`Evaluation timed out`.
 The `Type` template replaces the type name (`labelled [RetypedThing]`); the `Name` template replaces
 the name of a *member or element* (a dictionary's `["key"]` entries), never that of a scope variable
-or an evaluated expression. None of this marks the variable as a failed evaluation. A time-out — an
-implicit evaluation the engine had to abort — falls back to `{TypeName}`, like a value past the
-listing's two-second implicit-eval budget, the way Microsoft's debugger shows a value whose evaluation
-it cut off.
+or an evaluated expression. None of this marks the variable as a failed evaluation. Once the
+listing's two-second implicit-eval budget, counted from the start of the page, is spent, the values
+that follow fall back to `{TypeName}` without evaluating anything.
 `TypeNameFormatter` renders types as C#: keywords for primitives, `string[]`/`int[,]`, generic
 instantiations with the arguments consumed by arity along the nesting chain (`Outer<string>.Inner<int>`),
 `System.Nullable<T>` as `T?`, `System.String`/`System.Object`/`System.Decimal` and boxed primitives as

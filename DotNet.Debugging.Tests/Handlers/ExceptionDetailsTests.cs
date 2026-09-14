@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
 using NUnit.Framework;
 
@@ -56,10 +55,9 @@ public class ExceptionDetailsTests : BaseDebugTestFixture {
         """;
     }
 
-    // A divide fault is attributed to the faulting user method on every architecture, but the trace shape
-    // differs: on arm64 the JIT calls a managed throw helper whose type is [StackTraceHidden] - the frame
-    // stays listed (only method-level hiding drops one) and 'Source' follows it to the core library. On
-    // x64 the hardware fault surfaces in the user method itself and no helper frame exists
+    // A divide fault is attributed to the faulting user method on every architecture. On arm64 the JIT raises it
+    // through a managed throw helper whose type is hidden from stack traces, on x64 the hardware fault surfaces in
+    // the user method itself: the reported trace starts at the user method either way
     [Test]
     public void ThrowHelperAttributionTest() {
         LaunchWithExceptionFilters("all");
@@ -68,17 +66,13 @@ public class ExceptionDetailsTests : BaseDebugTestFixture {
         Assert.That(stopped.Text, Is.EqualTo($"Exception thrown: 'System.DivideByZeroException' in {ProjectName}.dll"));
 
         var details = GetExceptionInfo(stopped.ThreadId!.Value).Details;
-        Assert.That(details?.StackTrace, Does.Contain("   at Faulty.Divide(Int32 left, Int32 right) in "), "The faulting user frame carries its source");
-        if (RuntimeInformation.ProcessArchitecture == Architecture.Arm64) {
-            Assert.That(details?.StackTrace, Does.StartWith("   at Internal.Runtime.CompilerHelpers.ThrowHelpers.ThrowDivideByZeroException()"));
-            Assert.That(details?.Source, Is.EqualTo("System.Private.CoreLib"));
-        }
+        Assert.That(details?.StackTrace, Does.StartWith("   at Faulty.Divide(int left, int right) in "), "The faulting user frame carries its source");
+        Assert.That(details?.StackTrace, Does.Not.Contain("ThrowHelpers"), "A throw helper hidden through its type is left out");
     }
 
-    // A wrapper over a wrapper: Microsoft's debugger nests the whole chain in 'innerException', shows the innermost
-    // exception's recorded trace as the top-level trace and names the innermost in the description
+    // A wrapper over a wrapper: the details nest the direct inner exception and the description names it
     [Test]
-    public void WrappedExceptionReportsChainTest() {
+    public void WrappedExceptionReportsInnerTest() {
         LaunchWithExceptionFilters("all");
 
         // The divide fault, the innermost throw, the middle wrapper - then the outermost wrapper
@@ -86,7 +80,7 @@ public class ExceptionDetailsTests : BaseDebugTestFixture {
         Continue(stopped.ThreadId!.Value);
         stopped = WaitForStopped(StoppedEvent.ReasonValue.Exception);
         var innermostStop = GetExceptionInfo(stopped.ThreadId!.Value);
-        Assert.That(innermostStop.ExceptionId, Is.EqualTo("CLR/System.ArgumentOutOfRangeException"));
+        Assert.That(innermostStop.ExceptionId, Is.EqualTo("System.ArgumentOutOfRangeException"));
         Assert.That(innermostStop.Details?.InnerException, Is.Null.Or.Empty, "An exception without an inner one sends no 'innerException'");
         Continue(stopped.ThreadId!.Value);
         stopped = WaitForStopped(StoppedEvent.ReasonValue.Exception);
@@ -94,31 +88,23 @@ public class ExceptionDetailsTests : BaseDebugTestFixture {
 
         stopped = WaitForStopped(StoppedEvent.ReasonValue.Exception);
         var wrapperInfo = GetExceptionInfo(stopped.ThreadId!.Value);
-        Assert.That(wrapperInfo.ExceptionId, Is.EqualTo("CLR/System.InvalidOperationException"));
-        Assert.That(wrapperInfo.Description, Does.StartWith($"Exception thrown: 'System.InvalidOperationException' in {ProjectName}.dll: 'failed to open document'"));
-        Assert.That(wrapperInfo.Description, Does.Contain("\n Inner exceptions found, see $exception in variables window for more details."));
-        Assert.That(wrapperInfo.Description, Does.Contain("\n Innermost exception \t System.ArgumentOutOfRangeException : magic out of range (Parameter 'offset')"),
-            "The description names the innermost exception of the chain, with its property message");
+        Assert.That(wrapperInfo.ExceptionId, Is.EqualTo("System.InvalidOperationException"));
+        Assert.That(wrapperInfo.Description, Is.EqualTo($"Exception thrown: 'System.InvalidOperationException' in {ProjectName}.dll: 'failed to open document'\nInner exception: System.FormatException: bad header"),
+            "The description names the wrapped exception, with its property message");
 
-        var middle = wrapperInfo.Details?.InnerException?.SingleOrDefault();
-        Assert.That(middle, Is.Not.Null, "The direct inner exception is nested in the details");
-        Assert.That(middle!.FullTypeName, Is.EqualTo("System.FormatException"));
-        Assert.That(middle.Message, Is.EqualTo("bad header"));
-        Assert.That(middle.StackTrace, Does.StartWith("   at Faulty.ReadHeader()"), "Each level of the chain carries its own recorded trace");
-
-        var innermost = middle.InnerException?.SingleOrDefault();
-        Assert.That(innermost, Is.Not.Null, "The chain nests level by level");
-        Assert.That(innermost!.FullTypeName, Is.EqualTo("System.ArgumentOutOfRangeException"));
-        Assert.That(innermost.StackTrace, Does.StartWith("   at Faulty.DecodeMagic()"));
-        Assert.That(innermost.InnerException, Is.Null.Or.Empty);
+        var inner = wrapperInfo.Details?.InnerException?.SingleOrDefault();
+        Assert.That(inner, Is.Not.Null, "The direct inner exception is nested in the details");
+        Assert.That(inner!.FullTypeName, Is.EqualTo("System.FormatException"));
+        Assert.That(inner.Message, Is.EqualTo("bad header"));
+        Assert.That(inner.StackTrace, Does.StartWith("   at Faulty.ReadHeader()"), "The inner exception carries its own recorded trace");
+        Assert.That(inner.InnerException, Is.Null.Or.Empty, "Only the direct inner exception is read, the rest of the chain is reachable through $exception");
 
         Assert.That(wrapperInfo.Details?.Message, Is.EqualTo("failed to open document"), "The details describe the wrapper");
-        Assert.That(wrapperInfo.Details?.StackTrace, Is.EqualTo(innermost.StackTrace), "The top-level trace is the innermost exception's recorded trace, like Microsoft's debugger shows");
+        Assert.That(wrapperInfo.Details?.StackTrace, Does.StartWith("   at Faulty.OpenDocument()"), "The top-level trace is the wrapper's own");
     }
 
-    // An AggregateException follows the plain 'InnerException' chain (its first inner). Microsoft's
-    // debugger shows the bare '_message' field in the description, we show the 'Message' property
-    // everywhere - an accepted difference, the property appends the inner messages
+    // An AggregateException reports its first inner, the 'InnerException' property. The description shows the
+    // 'Message' property, which appends the inner messages
     [Test]
     public void AggregateExceptionTest() {
         LaunchWithExceptionFilters("all");
@@ -128,15 +114,14 @@ public class ExceptionDetailsTests : BaseDebugTestFixture {
         while (true) {
             stopped = WaitForStopped(StoppedEvent.ReasonValue.Exception);
             info = GetExceptionInfo(stopped.ThreadId!.Value);
-            if (info.ExceptionId == "CLR/System.AggregateException")
+            if (info.ExceptionId == "System.AggregateException")
                 break;
             Continue(stopped.ThreadId!.Value);
         }
 
-        Assert.That(info.Description, Does.StartWith($"Exception thrown: 'System.AggregateException' in {ProjectName}.dll: 'both failed (first boom) (second boom)'"));
-        Assert.That(info.Description, Does.Contain("\n Innermost exception \t System.InvalidOperationException : first boom"));
+        Assert.That(info.Description, Is.EqualTo($"Exception thrown: 'System.AggregateException' in {ProjectName}.dll: 'both failed (first boom) (second boom)'\nInner exception: System.InvalidOperationException: first boom"));
         Assert.That(info.Details?.Message, Is.EqualTo("both failed (first boom) (second boom)"), "The details show the full property message");
-        Assert.That(info.Details?.StackTrace, Is.Null, "The innermost exception was never thrown, so the substituted trace is absent");
+        Assert.That(info.Details?.StackTrace, Does.StartWith("   at Faulty.ThrowAggregate()"));
 
         var inner = info.Details?.InnerException?.SingleOrDefault();
         Assert.That(inner, Is.Not.Null, "Only the first inner - the 'InnerException' property - is listed");

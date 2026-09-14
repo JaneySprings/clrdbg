@@ -21,23 +21,17 @@ public static class Resources {
     public const string MsgPdbSkipped = "Skipped loading symbols. Module is optimized and the debugger option 'Just My Code' is enabled.";
     public const string MsgPdbSkippedShort = "Skipped loading symbols.";
 
-    public const string MsgBreakpointPending = "The breakpoint is pending and will be resolved when debugging starts.";
-    public const string MsgBreakpointNotProcessed = "Breakpoint has not been processed by the debugger.";
-    public const string MsgBreakpointNoSymbols = "The breakpoint will not currently be hit. No symbols have been loaded for this document.";
-    public const string MsgBreakpointSourceMismatch = "A copy of {0} was found in {1}, but the current source code is different from the version built into {1}.\r\nTo allow this breakpoint to be hit: Add '\"requireExactSource\": false' to launch.json and restart debugging.";
-    public const string MsgBreakpointNoFunctions = "No functions matching '{0}' were found.";
-    public const string MsgBreakpointError = "Error binding breakpoint: {0}";
-    public const string MsgBreakpointFunctionNotFound = "The function cannot be found: {0}";
-    public const string MsgBreakpointInHiddenMethod = "Breakpoints cannot be set in method or class with the 'DebuggerHidden' attribute.";
-    public const string MsgBreakpointInStepThroughMethod = "Breakpoints cannot be set in method or classes with the 'DebuggerStepThrough' attribute when the debugger option 'Just My Code' is enabled.";
+    public const string MsgBreakpointUnbound = "The breakpoint is not bound yet: no loaded module with symbols contains this location.";
+    public const string MsgFunctionBreakpointUnbound = "The breakpoint is not bound yet: no loaded module with symbols has a function matching '{0}'.";
+    public const string MsgBreakpointSourceMismatch = "The breakpoint is not bound: the source file differs from the one the module was built from. Set 'requireExactSource' to false in the launch configuration to bind it anyway.";
+    public const string MsgBreakpointError = "The breakpoint could not be bound: {0}";
     public const string MsgBreakpointConditionFailed = "The breakpoint condition '{0}' could not be evaluated: {1}";
-    public const string MsgBreakpointWarning = "Breakpoint warning: {0} - {1}:{2}";
 
     public const string MsgExceptionThrown = "Exception thrown: '{0}' in {1}";
     public const string MsgExceptionUnhandled = "An unhandled exception of type '{0}' occurred in {1}";
     public const string MsgExceptionUserUnhandled = "An exception of type '{0}' occurred in {1} but was not handled in user code";
     // Appended to the exception description when the reported exception wraps another one
-    public const string MsgExceptionInnerFound = "\n Inner exceptions found, see $exception in variables window for more details.\n Innermost exception \t {0} : {1}";
+    public const string MsgExceptionInner = "\nInner exception: {0}: {1}";
 
     // public const string MsgMissingRuntimeId = $"Missing required property: 'runtimeIdentifier'.";
     public const string MsgMissingAssets = "Missing required property: 'assets'.";

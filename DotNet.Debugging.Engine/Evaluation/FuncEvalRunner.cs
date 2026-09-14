@@ -12,7 +12,7 @@ namespace DotNet.Debugging.Engine.Evaluation;
 internal class FuncEvalRunner {
     // An evaluation that does not complete in time is aborted: the wait holds the engine's lock, so a getter that
     // blocks (a lock nothing releases, a read that never returns) would otherwise wedge every later request for
-    // the rest of the session. Microsoft's debugger cuts evaluations off the same way
+    // the rest of the session
     private const int EvalTimeoutMilliseconds = 5000;
     // An abort completes the evaluation once its thread reaches a safe point; a thread that never does is aborted rudely
     private const int AbortTimeoutMilliseconds = 5000;

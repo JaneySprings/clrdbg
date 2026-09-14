@@ -12,7 +12,7 @@ internal interface ICilLocation {
 
 // A frame slot the runtime cannot read at the current instruction, the variable was optimized away
 internal class UnavailableLocation : ICilLocation {
-    public const string Message = "Cannot obtain value of the local variable or argument because it is not available at this instruction pointer, possibly because it has been optimized away.";
+    public const string Message = "The value is not available at this instruction, it may have been optimized away";
 
     public CilValue Read() {
         throw new EvaluationException(Message);

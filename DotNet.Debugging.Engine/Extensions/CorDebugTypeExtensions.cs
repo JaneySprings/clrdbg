@@ -59,17 +59,6 @@ internal static class CorDebugTypeExtensions {
         var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
         return metadataImport.GetTypeDefProps(corClass.GetToken()).szTypeDef == "System.Enum";
     }
-    public static bool IsExceptionType(this ICorDebugType type) {
-        var current = type;
-        while (current != null) {
-            var corClass = current.GetClass();
-            var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();
-            if (metadataImport.GetTypeDefProps(corClass.GetToken()).szTypeDef == "System.Exception")
-                return true;
-            current = current.GetBaseType();
-        }
-        return false;
-    }
     public static bool IsRootType(this ICorDebugType type) {
         var corClass = type.GetClass();
         var metadataImport = corClass.GetModule().GetMetaDataInterface<IMetaDataImport>();

@@ -34,7 +34,7 @@ cannot bind to it, and the stepper does not stop in it with `JustMyCode`.
 |---|---|
 | `Path`, `Name` | `ICorDebugModule.GetName`. |
 | `IsUserCode` | The JIT flags: `CORDEBUG_JIT_DISABLE_OPTIMIZATION` or `CORDEBUG_JIT_ENABLE_ENC` mean the assembly was built for debugging by the user — the Just My Code heuristic. User modules with symbols get `SetJMCStatus(true)` when `JustMyCode` is on, with the methods that opt out (no sequence points, or `[DebuggerNonUserCode]`/`[DebuggerStepThrough]`/`[DebuggerHidden]` on them or their type) set back per method. |
-| `Version` | The file version (`FileVersionInfo`), falling back to the assembly version from metadata; the adapter formats it as vsdbg does (`1.00.0.0`). |
+| `Version` | The file version (`FileVersionInfo`), falling back to the assembly version from metadata. |
 | `HasSymbols`, `SymbolFilePath` | From the reader. |
 | `IsDynamic` | `ICorDebugModule.IsDynamic`: a module the debuggee emitted at run time — no file, no image, no base address. |
 | `Module`, `MetadataReader`, `Id` (internal) | The `ICorDebugModule` and the reader behind the info. Modules are looked up (`GetModule`/`FindModule`) by the `ICorDebugModule` object itself — the COM wrappers are one per runtime object for as long as they are held, and a base address could not serve as the key, a dynamic module has none. `Id` is a session-unique number for caches keyed by module. |
@@ -59,8 +59,8 @@ keyed by it, as a new module changes what an expression may bind to.
 | `GetAssemblyVersion()` | The assembly definition. | `ModuleInfo.Version`. |
 | `PeMetadataReader`, `PdbMetadataReader`, `Mvid` | The raw readers. | The expression compiler and resolver, function breakpoints, frame signatures. |
 
-Document checksums are reported with their algorithm — SHA-1 (`ff1816ec-…`) or SHA-256
-(`8829d00f-…`), other algorithms are dropped — so a client can detect edited sources.
+Document hashes — SHA-1 (`ff1816ec-…`) or SHA-256 (`8829d00f-…`), other algorithms never match — are
+compared with the local file's content when a document is matched by file name alone.
 
 Paths are compared with `\` normalized to `/` and case-insensitively; a PDB built on another machine
 (or with `PathMap`) still finds its documents by file name. A file-name match whose checksum equals

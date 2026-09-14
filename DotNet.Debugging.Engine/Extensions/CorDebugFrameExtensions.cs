@@ -4,18 +4,6 @@ using DotNet.Debugging.CorApi.Extensions;
 namespace DotNet.Debugging.Engine.Extensions;
 
 internal static class CorDebugFrameExtensions {
-    // The native address the frame is executing at: the start of the jitted code plus the native offset
-    public static ulong? GetInstructionPointer(this ICorDebugFrame frame, ICorDebugFunction function) {
-        try {
-            if (frame is not ICorDebugNativeFrame nativeFrame)
-                return null;
-            return function.GetNativeCode().GetAddress().Value + (ulong)nativeFrame.GetIP();
-        }
-        catch {
-            // Not jitted yet, or no native view of the frame
-            return null;
-        }
-    }
     public static string GetDisplayName(this ICorDebugInternalFrame frame) {
         return frame.GetFrameType() switch {
             CorDebugInternalFrameType.STUBFRAME_M2U => "[Managed to Native Transition]",

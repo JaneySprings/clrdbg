@@ -8,7 +8,6 @@ public class SourceLocation {
     public int Column { get; }
     public int EndLine { get; }
     public int EndColumn { get; }
-    public SourceChecksum? Checksum { get; set; }
     // The URL the document can be downloaded from, when the PDB carries a SourceLink map for it
     public string? SourceLink { get; set; }
 

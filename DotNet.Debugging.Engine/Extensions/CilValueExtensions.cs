@@ -38,16 +38,16 @@ internal static class CilValueExtensions {
     public static HostObject GetHostObject(this CilValue receiver) {
         receiver = receiver.DereferenceLocation();
         if (receiver.IsNull)
-            throw new NullReferenceException();
+            throw new EvaluationThrewException("System.NullReferenceException");
         return receiver.Value as HostObject ?? throw new InvalidOperationException("The field belongs to a type the expression declares, the receiver is not an object of it");
     }
     public static ICorDebugArrayValue GetArrayValue(this CilValue value) {
-        return value.CorValue?.UnwrapDebugValue() as ICorDebugArrayValue ?? throw new NullReferenceException("The array reference is null");
+        return value.CorValue?.UnwrapDebugValue() as ICorDebugArrayValue ?? throw new EvaluationThrewException("System.NullReferenceException");
     }
     public static ICorDebugArrayValue GetArrayValue(this ICorDebugValue value) {
-        return value.UnwrapDebugValue() as ICorDebugArrayValue ?? throw new NullReferenceException("The array reference is null");
+        return value.UnwrapDebugValue() as ICorDebugArrayValue ?? throw new EvaluationThrewException("System.NullReferenceException");
     }
-    // A null receiver is the null dereference the debuggee itself would raise, told apart from a value of the wrong kind
+    // A null receiver is the null dereference the debuggee itself would raise, reported as that, told apart from a value of the wrong kind
     public static ICorDebugObjectValue GetFieldReceiver(this CilValue receiver) {
         var corValue = receiver.CorValue;
         if (corValue == null && receiver.Location is CorDebugLocation directLocation)
@@ -55,13 +55,13 @@ internal static class CilValueExtensions {
         else if (corValue == null && receiver.Location != null)
             corValue = receiver.Location.Read().CorValue;
         if (corValue == null || (corValue is ICorDebugReferenceValue reference && reference.IsNull()))
-            throw new NullReferenceException("The instance field receiver is null");
+            throw new EvaluationThrewException("System.NullReferenceException");
         return corValue.UnwrapDebugValueToObject();
     }
     public static ICorDebugBoxValue GetBoxedValue(this CilValue source) {
         source = source.DereferenceLocation();
         if (source.IsNull)
-            throw new NullReferenceException();
+            throw new EvaluationThrewException("System.NullReferenceException");
         var boxed = source.CorValue is ICorDebugReferenceValue reference
             ? reference.Dereference() as ICorDebugBoxValue
             : source.CorValue as ICorDebugBoxValue;

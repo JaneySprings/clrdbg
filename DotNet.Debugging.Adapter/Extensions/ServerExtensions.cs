@@ -1,4 +1,3 @@
-using System.Text;
 using DotNet.Debugging.Adapter.Symbols;
 using DotNet.Debugging.Common.Logging;
 using DotNet.Debugging.Engine.Enums;
@@ -37,8 +36,6 @@ public static class ServerExtensions {
                     Label = "Jump to cursor",
                     Line = args.Line,
                     Column = args.Column,
-                    EndLine = 0,
-                    EndColumn = 0
                 }
             }
         };
@@ -50,42 +47,29 @@ public static class ServerExtensions {
     public static string ToDisplayMessage(this FailedCondition failedCondition) {
         return string.Format(Resources.MsgBreakpointConditionFailed, failedCondition.Breakpoint.Condition, failedCondition.Error);
     }
+    // The description names the wrapped exception as well: a client shows the description, not the nested details
     public static DebugProtocol.ExceptionInfoResponse ToExceptionInfoResponse(this ExceptionInfo exception) {
         var description = $"{FormatExceptionMessage(exception.Kind, exception.TypeName, exception.ModuleName)}: '{exception.Message}'";
-        var details = CreateExceptionDetails(exception.TypeName, exception.Message, exception.Source, exception.StackTrace, exception.HResult);
-        if (exception.InnerExceptionChain.Count > 0) {
-            // Microsoft's debugger nests the whole chain and puts the innermost exception forward: the description names
-            // it and its recorded trace replaces the wrapper's, which had barely started when the wrapper
-            // stop was reported - even when the innermost was never thrown and has no trace at all
-            var innermost = exception.InnerExceptionChain[exception.InnerExceptionChain.Count - 1];
-            description += string.Format(Resources.MsgExceptionInnerFound, innermost.TypeName, innermost.Message);
-            details.StackTrace = innermost.StackTrace;
-            var parent = details;
-            foreach (var inner in exception.InnerExceptionChain) {
-                var innerDetails = CreateExceptionDetails(inner.TypeName, inner.Message, inner.Source, inner.StackTrace, inner.HResult);
-                parent.InnerException = new List<DebugProtocol.ExceptionDetails> { innerDetails };
-                parent = innerDetails;
-            }
+        var details = CreateExceptionDetails(exception.TypeName, exception.Message, exception.StackTrace);
+        var inner = exception.InnerException;
+        if (inner != null) {
+            description += string.Format(Resources.MsgExceptionInner, inner.TypeName, inner.Message);
+            details.InnerException = new List<DebugProtocol.ExceptionDetails> { CreateExceptionDetails(inner.TypeName, inner.Message, inner.StackTrace) };
         }
-        return new DebugProtocol.ExceptionInfoResponse($"CLR/{exception.TypeName}", exception.Kind.ToBreakMode()) {
+        return new DebugProtocol.ExceptionInfoResponse(exception.TypeName, exception.Kind.ToBreakMode()) {
             Description = description,
-            Code = 0,
             Details = details,
         };
     }
-    // The library pre-populates 'innerException' with an empty list, which Microsoft's debugger only sends when there is one
-    private static DebugProtocol.ExceptionDetails CreateExceptionDetails(string typeName, string message, string? source, string? stackTrace, int hresult) {
-        var shortTypeName = typeName.Substring(typeName.LastIndexOf('.') + 1);
+    // The library pre-populates 'innerException' with an empty list, it is sent only when there is one
+    private static DebugProtocol.ExceptionDetails CreateExceptionDetails(string typeName, string message, string? stackTrace) {
         return new DebugProtocol.ExceptionDetails {
             Message = message,
-            TypeName = shortTypeName,
+            TypeName = typeName.Substring(typeName.LastIndexOf('.') + 1),
             FullTypeName = typeName,
             EvaluateName = "$exception",
             StackTrace = stackTrace,
             InnerException = null,
-            FormattedDescription = $"**{typeName}:** '{EscapeMarkdown(message)}'",
-            HResult = hresult,
-            Source = source,
         };
     }
     public static DebugProtocol.ExceptionBreakMode ToBreakMode(this ExceptionStopKind kind) {
@@ -103,52 +87,29 @@ public static class ServerExtensions {
         };
         return string.Format(format, typeName ?? "Exception", moduleName ?? "Unknown Module.");
     }
-    // The 'formattedDescription' is rendered as markdown, so the characters markdown treats specially are
-    // escaped - and only those: a quote or an apostrophe passes through unescaped
-    private const string MarkdownSpecialCharacters = "\\`*_{}[]()#+-.!|<>~";
-    private static string EscapeMarkdown(string text) {
-        var builder = new StringBuilder(text.Length);
-        foreach (var symbol in text) {
-            if (MarkdownSpecialCharacters.Contains(symbol))
-                builder.Append('\\');
-            builder.Append(symbol);
-        }
-        return builder.ToString();
-    }
     public static DebugProtocol.Source ToSource(this SourceLocation location, SourceLinkResolver sourceLinkResolver, SourceFileMapper sourceFileMapper) {
         var filePath = sourceFileMapper.ToLocalPath(location.FilePath);
-        // The library pre-populates 'sources' and 'checksums' with empty lists, which Microsoft's debugger never sends
+        // The library pre-populates 'sources' and 'checksums' with empty lists
         var source = new DebugProtocol.Source {
             Name = Path.GetFileName(filePath),
             Path = filePath,
             Sources = null,
             Checksums = null,
         };
-        if (location.Checksum != null && Enum.TryParse<DebugProtocol.ChecksumAlgorithm>(location.Checksum.Algorithm, out var algorithm))
-            source.Checksums = new List<DebugProtocol.Checksum> { new DebugProtocol.Checksum(algorithm, location.Checksum.Value) };
-        if (location.SourceLink != null) {
-            source.VsSourceLinkInfo = new DebugProtocol.VSSourceLinkInfo { Url = location.SourceLink, RelativeFilePath = filePath };
-            // A document that does not exist locally is served through the 'source' request, which downloads it
-            if (!File.Exists(filePath))
-                source.SourceReference = sourceLinkResolver.GetSourceReference(location.SourceLink);
-        }
+        // A Source Link document that does not exist locally is served through the 'source' request, which downloads it
+        if (location.SourceLink != null && !File.Exists(filePath))
+            source.SourceReference = sourceLinkResolver.GetSourceReference(location.SourceLink);
         return source;
     }
-    public static DebugProtocol.Module ToModule(this ModuleInfo module, int moduleId, bool justMyCode) {
-        var symbolStatus = Resources.MsgCannotFindPdb;
-        if (module.HasSymbols)
-            symbolStatus = Resources.MsgPdbLoaded;
-        else if (!module.IsUserCode && justMyCode)
-            symbolStatus = Resources.MsgPdbSkippedShort;
-
+    public static DebugProtocol.Module ToModule(this ModuleInfo module, bool justMyCode) {
         return new DebugProtocol.Module {
-            Id = moduleId,
+            Id = module.Id,
             Name = module.Name,
             Path = module.Path,
             IsOptimized = !module.IsUserCode,
             IsUserCode = module.IsUserCode,
-            Version = module.Version.ToDisplayVersion(),
-            SymbolStatus = symbolStatus,
+            Version = module.Version?.ToString(),
+            SymbolStatus = module.ToSymbolStatus(justMyCode),
             SymbolFilePath = module.HasSymbols ? module.SymbolFilePath : null,
         };
     }
@@ -165,18 +126,16 @@ public static class ServerExtensions {
             Source = location?.ToSource(sourceLinkResolver, sourceFileMapper),
         };
     }
-    public static DebugProtocol.StackFrame ToStackFrame(this StackFrameInfo frame, int? moduleId, SourceLinkResolver sourceLinkResolver, SourceFileMapper sourceFileMapper) {
+    public static DebugProtocol.StackFrame ToStackFrame(this StackFrameInfo frame, SourceLinkResolver sourceLinkResolver, SourceFileMapper sourceFileMapper) {
         return new DebugProtocol.StackFrame() {
             Id = frame.Id,
             Source = frame.Location?.ToSource(sourceLinkResolver, sourceFileMapper),
             Name = frame.ToDisplayName(),
             Line = frame.Location?.Line ?? 0,
             Column = frame.Location?.Column ?? 0,
-            EndLine = frame.Location?.EndLine ?? 0,
-            EndColumn = frame.Location?.EndColumn ?? 0,
-            InstructionPointerReference = frame.InstructionPointer == null ? null : $"0x{frame.InstructionPointer.Value:X16}",
-            ModuleId = moduleId,
-            PresentationHint = DebugProtocol.StackFrame.PresentationHintValue.Normal
+            EndLine = frame.Location?.EndLine,
+            EndColumn = frame.Location?.EndColumn,
+            ModuleId = frame.ModuleId,
         };
     }
     public static DebugProtocol.Thread ToThread(this ThreadInfo thread) {

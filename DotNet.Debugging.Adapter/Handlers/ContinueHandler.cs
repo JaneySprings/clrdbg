@@ -5,10 +5,7 @@ namespace DotNet.Debugging.Adapter;
 public partial class DebugSession {
     protected override ContinueResponse HandleContinueRequest(ContinueArguments arguments) {
         return Invoke(() => {
-            InvokeDebugger(() => {
-                session.Continue();
-                Protocol.SendEvent(new ContinuedEvent(arguments.ThreadId) { AllThreadsContinued = true });
-            });
+            InvokeDebugger(() => session.Continue());
             return new ContinueResponse() { AllThreadsContinued = true };
         });
     }

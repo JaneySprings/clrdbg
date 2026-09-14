@@ -33,7 +33,7 @@ internal static class SequencePointResolver {
         }
         // A line inside a statement spanning several lines (a blank line in a lambda body, whose enclosing statement
         // covers the whole lambda text) goes to the next statement within that span when another method has one -
-        // the lambda's - rather than up to the start of the spanning statement, the way Microsoft's debugger binds it
+        // the lambda's - rather than up to the start of the spanning statement, which is where the user put it
         if (column == null && covering.All(it => it.Covering!.Value.StartLine < line)) {
             var inner = candidates
                 .Where(it => it.First.StartLine >= line && covering.Any(spanning => it.MethodToken != spanning.MethodToken && it.First.CompareEnd(spanning.Covering!.Value) <= 0))
