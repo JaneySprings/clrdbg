@@ -49,8 +49,8 @@ public class NativeFrameEvaluationTests : BaseDebugTestFixture {
     [Test]
     public void EvaluationOnAThreadInNativeCodeIsRefusedTest() {
         var (mainThreadId, sleeperThreadId) = PauseInNativeCode();
-        var mainFrame = GetTopStackFrame(mainThreadId);
-        var sleeperFrame = GetTopStackFrame(sleeperThreadId);
+        var mainFrame = GetTopSourceFrame(mainThreadId);
+        var sleeperFrame = GetTopSourceFrame(sleeperThreadId);
 
         var watch = Stopwatch.StartNew();
         var mainFailure = Assert.Throws<ProtocolException>(() => Host.SendRequestSync(new EvaluateRequest() { Expression = "sample.Name", FrameId = mainFrame.Id }));
@@ -70,7 +70,9 @@ public class NativeFrameEvaluationTests : BaseDebugTestFixture {
         var (mainThreadId, _) = PauseInNativeCode();
 
         var watch = Stopwatch.StartNew();
-        var locals = GetLocalVariables(mainThreadId).ToDictionary(it => it.Name.Split(' ')[0], it => it.Value);
+        var scopes = Host.SendRequestSync(new ScopesRequest() { FrameId = GetTopSourceFrame(mainThreadId).Id }).Scopes;
+        Assert.That(scopes, Is.Not.Empty);
+        var locals = GetVariables(scopes[0].VariablesReference).ToDictionary(it => it.Name.Split(' ')[0], it => it.Value);
         watch.Stop();
 
         Assert.Multiple(() => {
@@ -96,6 +98,14 @@ public class NativeFrameEvaluationTests : BaseDebugTestFixture {
         var sleeper = threads.First(it => it.Name.Contains("sleeper", StringComparison.Ordinal));
         var main = threads.First(it => it.Id != sleeper.Id);
         return (main.Id, sleeper.Id);
+    }
+    // The frame the evaluation runs in: the innermost one with source. The frame on top of it differs by platform - on
+    // Windows the thread's blocking call shows as a '[Native Frame]' (the P/Invoke stub) that no evaluation can use,
+    // on macOS and Linux the managed caller is listed first - and the state that matters is the thread's, not the frame's
+    private Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages.StackFrame GetTopSourceFrame(int threadId) {
+        var frames = Host.SendRequestSync(new StackTraceRequest() { ThreadId = threadId }).StackFrames;
+        TestContext.Out.WriteLine($"frames of {threadId}: {string.Join(" | ", frames.Take(4).Select(it => it.Name))}");
+        return frames.First(it => it.Source != null);
     }
     // For a short while after the attach has landed the process reports itself as not running, and the pause is refused
     private void PauseUntilAccepted(int threadId) {
