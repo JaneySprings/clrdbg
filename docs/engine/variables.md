@@ -144,7 +144,12 @@ The `Type` template replaces the type name (`labelled [RetypedThing]`); the `Nam
 the name of a *member or element* (a dictionary's `["key"]` entries), never that of a scope variable
 or an evaluated expression. None of this marks the variable as a failed evaluation. Once the
 listing's two-second implicit-eval budget, counted from the start of the page, is spent, the values
-that follow fall back to `{TypeName}` without evaluating anything.
+that follow fall back to `{TypeName}` without evaluating anything. A thread the runtime refuses to
+run code on (paused in native code or a wait, see the func-eval section of
+[evaluation.md](evaluation.md)) gets the same fallback: the first `EvaluationRefusedException` of a
+page shows that value as `{TypeName}`, creates no debugger proxy for it, and the rest of the page skips
+its implicit evaluations — the frame slots still list, and a property getter shows the refusal as its
+own error row.
 `TypeNameFormatter` renders types as C#: keywords for primitives, `string[]`/`int[,]`, generic
 instantiations with the arguments consumed by arity along the nesting chain (`Outer<string>.Inner<int>`),
 `System.Nullable<T>` as `T?`, `System.String`/`System.Object`/`System.Decimal` and boxed primitives as

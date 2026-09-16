@@ -246,6 +246,25 @@ session: the wait runs on the thread that holds `syncLock`. The `ImplicitEvalBud
 `VariableProvider` is a different thing — it decides whether to *start* another `ToString`/
 `DebuggerDisplay` evaluation in a listing, never bounds one in flight.
 
+**A refused start.** The runtime sets an evaluation up only on a thread stopped at a safe point in
+managed code, at a breakpoint or a step. Every other stop it marks as `USER_UNSAFE_POINT` in the
+thread's user state — the same `IsThreadAtSafePlace` check it makes before a func eval — so
+`EnsureThreadCanEvaluate` reads the user state and refuses the eval *before starting it*, throwing an
+`EvaluationRefusedException` (a thread stopped at an exception is exempt: the user state calls it
+unsafe too, but the runtime sets an eval up from the exception's context instead of hijacking the
+thread, `evalDuringException`, so `$exception` and its properties evaluate as before): `Cannot evaluate the expression: the thread is paused in a sleep, wait,
+or join` when `USER_WAIT_SLEEP_JOIN` is also set, otherwise `... is stopped in native or optimized
+code, where the runtime cannot run an evaluation` (an idle app blocked in a platform run loop such as
+`UIApplicationMain`, a P/Invoke, or a GC-unsafe point in an optimized method). Checking the user
+state, rather than reacting to what the start call returns, is what makes this work on the
+mobile/maccatalyst remote host: there the start is *not* refused synchronously — the eval is accepted,
+the process continued, and the eval simply never completes, so without the pre-check it is given up on
+only after the 10s abort cycle and, because a thread that is not at a safe point cannot be made to run
+the abort either, wedges the session (an eval started at a breakpoint is aborted fine there). The local runtime still refuses an unsafe start synchronously; `CreateRefusal`
+turns the precise HRESULTs it gives for stops the user state did not catch (a stack overflow, a
+prolog) into their own messages. Nothing runs on the thread until the debuggee moves on, which
+`VariableProvider` relies on (see [variables.md](variables.md)).
+
 `IsRunning` is what the breakpoint and exception handlers consult to continue through stops the
 evaluated code produces. Two helpers sit on top: `GetStaticFieldValueAsync` (retrying after the
 static constructor) and `GetPropertyValueAsync` (getter lookup along the base types, used for

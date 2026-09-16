@@ -58,6 +58,9 @@ internal class VariableProvider {
     private readonly VariableManager variableManager;
     private readonly Stopwatch implicitEvalTime = new Stopwatch();
     private bool limitImplicitEvals;
+    // Set once the thread refused an implicit evaluation (it is paused in native code): it refuses every other one
+    // alike until the debuggee moves on, so the rest of the page falls back to type names without another attempt
+    private bool implicitEvalsRefused;
 
     public VariableProvider(ManagedDebugger debugger, VariableManager variableManager) {
         this.debugger = debugger;
@@ -80,6 +83,7 @@ internal class VariableProvider {
         var pageEnd = Math.Clamp(start + count, pageStart, totalCount);
         var variables = new List<VariableInfo>(pageEnd - pageStart);
         limitImplicitEvals = true;
+        implicitEvalsRefused = false;
         implicitEvalTime.Restart();
         try {
             var position = 0;
@@ -216,25 +220,42 @@ internal class VariableProvider {
         if (formatted.TypeName.EndsWith('?'))
             displayValue = value.UnwrapDebugValueToObject().GetNullableValue() ?? value;
         if (formatted.RequiresDebuggerDisplay) {
-            if (IsImplicitEvalBudgetSpent || depth >= MaxDisplayDepth) {
+            if (IsImplicitEvalBudgetSpent || IsImplicitEvalRefused || depth >= MaxDisplayDepth) {
                 // The budget ran out (or the displays nest too deep), the value falls back to the display it would have without the override
                 text = $"{{{formatted.TypeName}}}";
             }
             else {
-                text = await RenderDisplayAsync(formatted.Value, displayValue, threadId, frameDepth, depth);
-                if (formatted.TypeTemplate != null)
-                    typeName = await RenderDisplayAsync(formatted.TypeTemplate, displayValue, threadId, frameDepth, depth);
-                if (formatted.NameTemplate != null)
-                    name = await RenderDisplayAsync(formatted.NameTemplate, displayValue, threadId, frameDepth, depth);
+                try {
+                    text = await RenderDisplayAsync(formatted.Value, displayValue, threadId, frameDepth, depth);
+                    if (formatted.TypeTemplate != null)
+                        typeName = await RenderDisplayAsync(formatted.TypeTemplate, displayValue, threadId, frameDepth, depth);
+                    if (formatted.NameTemplate != null)
+                        name = await RenderDisplayAsync(formatted.NameTemplate, displayValue, threadId, frameDepth, depth);
+                }
+                catch (EvaluationRefusedException ex) {
+                    // The same fallback as a spent budget: the value is shown without the override rather than with an error
+                    DebuggerLoggingService.LogMessage($"The display of a '{formatted.TypeName}' cannot be rendered: {ex.Message}");
+                    implicitEvalsRefused = true;
+                    text = $"{{{formatted.TypeName}}}";
+                }
             }
         }
 
         ICorDebugValue? proxyValue = null;
-        if (createProxy && formatted.DebuggerProxyTypeName != null)
-            proxyValue = await CreateDebuggerProxyAsync(displayValue, formatted.DebuggerProxyTypeName, threadId);
+        if (createProxy && formatted.DebuggerProxyTypeName != null && !IsImplicitEvalRefused) {
+            try {
+                proxyValue = await CreateDebuggerProxyAsync(displayValue, formatted.DebuggerProxyTypeName, threadId);
+            }
+            catch (EvaluationRefusedException ex) {
+                // Without its proxy the value lists its own members
+                DebuggerLoggingService.LogMessage($"The debugger proxy of a '{formatted.TypeName}' cannot be created: {ex.Message}");
+                implicitEvalsRefused = true;
+            }
+        }
         return new ValueDisplay(typeName, text, name, proxyValue);
     }
     private bool IsImplicitEvalBudgetSpent => limitImplicitEvals && implicitEvalTime.ElapsedMilliseconds >= ImplicitEvalBudgetMilliseconds;
+    private bool IsImplicitEvalRefused => limitImplicitEvals && implicitEvalsRefused;
 
     // Every '{expression}' is evaluated in the value's type context and shown the way a variable holding its result is
     // (a string quoted unless ',nq', a nested value through its own DebuggerDisplay or ToString), the text between the
@@ -253,6 +274,9 @@ internal class VariableProvider {
         var context = new EvaluationContext(debugger.GetThread(threadId), threadId, frameDepth, value);
         using var evaluation = await debugger.GetEvaluator().EvaluateAsync(fragment.Text, context);
         if (evaluation.Error != null) {
+            // A thread that runs no code fails the whole display, not this fragment alone
+            if (evaluation.Failure is EvaluationRefusedException refused)
+                throw refused;
             DebuggerLoggingService.LogMessage($"DebuggerDisplay fragment '{fragment.Text}' failed: {evaluation.Error}");
             return evaluation.Error;
         }

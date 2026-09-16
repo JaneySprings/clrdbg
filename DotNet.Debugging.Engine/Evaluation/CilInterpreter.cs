@@ -506,7 +506,10 @@ internal class CilInterpreter {
             return await CreateMultidimensionalArrayAsync(arrayType, stack, resolver, context, handles);
 
         var constructor = resolver.ResolveMethod(token);
-        var constructorArguments = stack.PopArguments(constructor.Signature.ParameterTypes.Length);
+        return await CreateObjectAsync(constructor, stack.PopArguments(constructor.Signature.ParameterTypes.Length), resolver, context, handles);
+    }
+    // Runs a debuggee constructor and yields the object it created, the way 'newobj' does
+    private async Task<CilValue> CreateObjectAsync(ResolvedRuntimeMethod constructor, CilValue[] constructorArguments, EvaluationMetadataResolver resolver, EvaluationContext context, EvaluationHandleScope handles) {
         // A delegate over a function the expression named cannot exist in the debuggee (a lambda has no code there, a
         // method group no function pointer here): the interpreter invokes it itself
         if (constructorArguments.Length == 2 && constructorArguments[1].DereferenceLocation().Value is HostFunction function) {
@@ -564,6 +567,16 @@ internal class CilInterpreter {
             return;
         if (receiverValue?.Value is StringBuilder || receiverValue?.Location?.Read().Value is StringBuilder || argumentValues.Any(it => it.Value is StringBuilder))
             throw new InvalidOperationException($"Unhandled interpolated-string call '{method.DeclaringType.FullName}.{method.Name}'");
+
+        // 'ldloca slot; call T::.ctor(args)' initialises a value type in place ('slot = new T(args)': a struct or nullable
+        // temporary of the expression, the value an assignment or an argument then reads). A debuggee slot has the storage
+        // the constructor writes into and is passed as it is; a temporary of the expression has none, so it is given the
+        // object 'newobj' would create instead
+        if (method.Name == ".ctor" && !method.IsStatic && receiverValue?.Location is TemporaryLocation temporary) {
+            var created = await CreateObjectAsync(method, argumentValues, resolver, context, handles);
+            temporary.Write(await MaterializeForLocationAsync(temporary, created, resolver, context, handles));
+            return;
+        }
 
         var byRefArguments = new List<ByRefArgument>();
         var callArguments = await MaterializeArgumentsAsync(method, argumentValues, method.IsStatic ? 0 : 1, resolver, context, handles, byRefArguments);

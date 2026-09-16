@@ -97,7 +97,13 @@ internal class FuncEvalRunner {
     }
 
     private async Task<ICorDebugValue?> RunAsync(ICorDebugEval eval, bool throwOnException, Action start, Func<ICorDebugEval, ICorDebugValue?> getResult) {
-        start();
+        EnsureThreadCanEvaluate(eval.GetThread());
+        try {
+            start();
+        }
+        catch (COMException ex) when (EvaluationRefusedException.IsRefusal(ex.HResult)) {
+            throw CreateRefusal(ex.HResult);
+        }
         IsRunning = true;
         RunningThreadId = eval.GetThread().GetId();
         try {
@@ -122,6 +128,39 @@ internal class FuncEvalRunner {
             IsRunning = false;
             RunningThreadId = null;
         }
+    }
+    // A func eval runs code on the thread's own stack, so the runtime allows it only when the thread is stopped at a
+    // safe point in managed code (a breakpoint or a step). The debugger marks every other stop as USER_UNSAFE_POINT in
+    // the thread's user state - a thread paused in native code (an idle app's platform run loop, a P/Invoke), in a
+    // wait, or at a GC-unsafe point in an optimized method - and this is the same check the runtime makes before it sets
+    // the eval up. Starting one there is refused up front rather than started and left to fail: the local runtime
+    // returns a bare HRESULT that says little, and the mobile/maccatalyst remote host does not refuse it at all - the
+    // eval simply never completes and is given up on only after the abort timeout, wedging the session
+    private static void EnsureThreadCanEvaluate(ICorDebugThread thread) {
+        // A thread stopped at an exception is never at a safe point by the user state, yet the runtime runs an eval there
+        // (it is set up from the exception's context rather than by hijacking the thread): 'evalDuringException'
+        if (thread.TryGetCurrentException(out var exception) == Cor.S_OK && exception != null)
+            return;
+        if (thread.TryGetUserState(out var state) != Cor.S_OK || (state & CorDebugUserState.USER_UNSAFE_POINT) == 0)
+            return;
+        if ((state & CorDebugUserState.USER_WAIT_SLEEP_JOIN) != 0)
+            throw new EvaluationRefusedException("the thread is paused in a sleep, wait, or join");
+        throw new EvaluationRefusedException("the thread is stopped in native or optimized code, where the runtime cannot run an evaluation");
+    }
+    // The local runtime, unlike the remote host, refuses an unsafe start synchronously; the precise reasons it gives
+    // for a stop the user state did not already catch (a stack overflow, a prolog) are turned into their own messages
+    private static EvaluationRefusedException CreateRefusal(int result) {
+        if (result == Cor.CORDBG_E_ILLEGAL_IN_STACK_OVERFLOW)
+            return new EvaluationRefusedException("the thread has overflowed its stack");
+        if (result == Cor.CORDBG_E_ILLEGAL_IN_PROLOG)
+            return new EvaluationRefusedException("the thread is stopped in the prolog or epilog of a method");
+        if (result == Cor.CORDBG_E_ILLEGAL_IN_NATIVE_CODE)
+            return new EvaluationRefusedException("the thread is stopped in native code");
+        if (result == Cor.CORDBG_E_ILLEGAL_IN_OPTIMIZED_CODE)
+            return new EvaluationRefusedException("the method the thread is stopped in is optimized");
+        if (result == Cor.CORDBG_E_FUNC_EVAL_BAD_START_POINT)
+            return new EvaluationRefusedException("the thread is not at a point where an evaluation can start (an earlier evaluation is still being aborted, or the process is exiting)");
+        return new EvaluationRefusedException("the thread is stopped where the runtime cannot run an evaluation");
     }
     // Waits for the completion callback, aborting the evaluation when it takes too long. The wait keeps dispatching
     // the callbacks arriving meanwhile, so it is never abandoned: the abort is requested alongside it, and the

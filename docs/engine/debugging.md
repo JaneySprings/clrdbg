@@ -15,9 +15,12 @@ debuggee on `configurationDone` rather than on `launch`.
 - **Launch** (`LaunchAsync` → `LaunchProcessAsync`): the program is started with `DOTNET_DefaultDiagnosticPortSuspend=1`
   and redirected output (forwarded through `OnOutput`). The runtime then waits for a diagnostics
   client, which gives the debugger time to register for its startup: `DbgShimHost.AttachAsync`
-  registers with dbgshim *before* `DiagnosticsClientHelper.ResumeRuntimeAsync` lets the runtime go,
+  registers with dbgshim *before* `DiagnosticsClientHelper.ResumeLaunchedRuntimeAsync` lets the runtime go,
   and the attach itself (`Initialize`, `SetManagedHandler`, `DebugActiveProcess`) runs inside
-  dbgshim's startup callback while the runtime is still parked in its startup handshake.
+  dbgshim's startup callback while the runtime is still parked in its startup handshake. Right before
+  the resume, the suspend variable is taken back out of the debuggee's environment (or reset to the
+  value the launch configuration gave it), so the processes the debuggee starts do not park on it too —
+  see [runtime.md](runtime.md).
 - **Launch in a terminal** (`LaunchInTerminalAsync`): the host starts the program through the
   `OnTerminalLaunchRequested` event (the adapter's `runInTerminal` reverse request) and reports the
   pid in `LaunchRequest.ProcessId`; the rest is the launch path above.

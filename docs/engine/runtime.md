@@ -39,11 +39,22 @@ Two details are load-bearing:
 - **Registration precedes the resume.** A launched debuggee is started with
   `DOTNET_DefaultDiagnosticPortSuspend=1`, so its runtime waits for a diagnostics client before
   starting; `DbgShimHost.AttachAsync` registers synchronously before returning its task, then
-  `DiagnosticsClientHelper.ResumeRuntimeAsync` sends `ResumeRuntime` over the diagnostics IPC — retried
+  `DiagnosticsClientHelper.ResumeLaunchedRuntimeAsync` sends `ResumeRuntime` over the diagnostics IPC — retried
   with a doubling delay, because hosts that start the runtime themselves (e.g. godot) open the IPC
-  late. For a plain attach the resume is attempted and its failure ignored: a running runtime has
-  nothing to resume. The completion source runs its continuation asynchronously so the engine never
-  continues on dbgshim's helper thread, which `Unregister` waits for.
+  late. For a plain attach (`ResumeRuntimeAsync`) the resume is attempted and its failure ignored: a
+  running runtime has nothing to resume. The completion source runs its continuation asynchronously so
+  the engine never continues on dbgshim's helper thread, which `Unregister` waits for.
+- **The suspend variable is taken back before the resume.** An environment is inherited, so every process
+  the debuggee starts would otherwise carry `DOTNET_DefaultDiagnosticPortSuspend=1` too — a managed child
+  would park on its own diagnostics port, where no debugger is listening, and hang the debuggee the moment
+  it waits for it (`Process.WaitForExit`). Before `ResumeRuntime`, `ResumeLaunchedRuntimeAsync` sends the
+  diagnostics `SetEnvironmentVariable` command that removes the variable from the debuggee's environment,
+  or restores the value the launch configuration's `env` gave it. The runtime has read the variable by then
+  and is parked on it, so the debuggee itself is unaffected; the command changes the runtime's own copy of
+  the environment, which is what managed code (and so `Process.Start`) sees — on Unix a native spawn that
+  inherits the libc environment still gets the debugger's value. A failure of the command (a runtime too
+  old to know it) is logged and the launch goes on. The same applies to a terminal launch: `TerminalHost`
+  sets the variable exactly like `LaunchProcessAsync` does.
 
 Only one registration can be in flight (a static slot); a second concurrent attach throws.
 

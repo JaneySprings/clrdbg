@@ -132,8 +132,7 @@ public partial class ManagedDebugger {
     }
     public async Task AttachAsync(int processId) {
         EnsureNotStarted();
-        // The target may have been started with DOTNET_DefaultDiagnosticPortSuspend, a running one refuses the resume
-        await AttachToProcessAsync(processId, resumeRuntime: true, ignoreResumeFailure: true);
+        await AttachToProcessAsync(processId, launchRequest: null);
     }
     // The transport is set up first, 'onListenerReady' then lets the host launch the on-device app so it can connect back,
     // and the attach is initiated last
@@ -515,7 +514,9 @@ public partial class ManagedDebugger {
             startInfo.ArgumentList.Add(argument);
         foreach (var (key, value) in launchRequest.Environment)
             startInfo.Environment[key] = value;
-        // The runtime waits for a diagnostics client before starting, so the attach lands before any managed code runs
+        // The runtime waits for a diagnostics client before starting, so the attach lands before any managed code runs.
+        // Set last, whatever the configuration says; it is taken back out of the debuggee's environment before the
+        // runtime is resumed, so the processes the debuggee starts do not inherit it (see 'ResumeLaunchedRuntimeAsync')
         startInfo.Environment[DiagnosticPortSuspendVariable] = "1";
 
         var started = Process.Start(startInfo) ?? throw new InvalidOperationException("The process could not be started");
@@ -526,7 +527,7 @@ public partial class ManagedDebugger {
         DebuggerLoggingService.LogMessage($"Process created suspended with PID: {started.Id}");
 
         stopAtEntryPending = launchRequest.StopAtEntry;
-        await AttachToProcessAsync(started.Id, resumeRuntime: true, ignoreResumeFailure: false);
+        await AttachToProcessAsync(started.Id, launchRequest);
         OnProcessStarted?.Invoke(started.Id);
     }
     private async Task LaunchInTerminalAsync(LaunchRequest launchRequest) {
@@ -535,33 +536,41 @@ public partial class ManagedDebugger {
         await Task.Run(() => handler.Invoke(launchRequest));
         var processId = launchRequest.ProcessId ?? throw new InvalidOperationException("The terminal launch did not provide the id of the started process");
         stopAtEntryPending = launchRequest.StopAtEntry;
-        await AttachToProcessAsync(processId, resumeRuntime: true, ignoreResumeFailure: false);
+        await AttachToProcessAsync(processId, launchRequest);
         OnProcessStarted?.Invoke(processId);
     }
-    private async Task AttachToProcessAsync(int processId, bool resumeRuntime, bool ignoreResumeFailure) {
+    // 'launchRequest' is the launch that parked the debuggee with DOTNET_DefaultDiagnosticPortSuspend, null for an attach.
+    // A launched runtime has to be resumed, and the variable is taken back out of its environment first. An attach target
+    // may have been started that way by someone else, so the resume is attempted and its failure ignored: a running
+    // runtime refuses it, and its environment is its own
+    private async Task AttachToProcessAsync(int processId, LaunchRequest? launchRequest) {
         DebuggerLoggingService.LogMessage($"Attaching to process: {processId}");
         // The registration is made before the runtime is resumed, so the startup notification is not missed
         using var attachCancellation = new CancellationTokenSource();
         var attachTask = DbgShimHost.AttachAsync(processId, target => AttachToRuntime(target, processId), attachCancellation.Token);
-        if (resumeRuntime) {
-            try {
+        try {
+            if (launchRequest == null) {
                 await DiagnosticsClientHelper.ResumeRuntimeAsync(processId);
             }
-            catch (Exception ex) when (ignoreResumeFailure) {
-                DebuggerLoggingService.LogMessage($"Failed to resume the runtime of the attach target (already running?): {ex.Message}");
+            else {
+                launchRequest.Environment.TryGetValue(DiagnosticPortSuspendVariable, out var configuredValue);
+                await DiagnosticsClientHelper.ResumeLaunchedRuntimeAsync(processId, configuredValue);
             }
-            catch {
-                // The runtime stays parked and its startup never comes: the registration is withdrawn, or it would
-                // refuse every later attach made from this process
-                attachCancellation.Cancel();
-                try {
-                    await attachTask;
-                }
-                catch (Exception attachException) {
-                    DebuggerLoggingService.LogMessage($"The attach was withdrawn: {attachException.Message}");
-                }
-                throw;
+        }
+        catch (Exception ex) when (launchRequest == null) {
+            DebuggerLoggingService.LogMessage($"Failed to resume the runtime of the attach target (already running?): {ex.Message}");
+        }
+        catch {
+            // The runtime stays parked and its startup never comes: the registration is withdrawn, or it would
+            // refuse every later attach made from this process
+            attachCancellation.Cancel();
+            try {
+                await attachTask;
             }
+            catch (Exception attachException) {
+                DebuggerLoggingService.LogMessage($"The attach was withdrawn: {attachException.Message}");
+            }
+            throw;
         }
         await attachTask;
         DebuggerLoggingService.LogMessage($"Attached to process: {processId}");
