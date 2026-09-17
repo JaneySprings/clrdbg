@@ -12,10 +12,6 @@
         <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
         <WarningsAsErrors>$(WarningsAsErrors);NU1903;NU1904</WarningsAsErrors>
     </PropertyGroup>
-    <PropertyGroup Condition="'$(Configuration)'=='Release'">
-		<DebugType>None</DebugType>
-		<DebugSymbols>false</DebugSymbols>
-	</PropertyGroup>
 
     <ItemGroup>
         <InternalsVisibleTo Include="DotNet.Debugging.Tests" />
