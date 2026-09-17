@@ -4,7 +4,7 @@
 	<PropertyGroup>
 		<OutputType>Exe</OutputType>
 		<AssemblyName>clrdbg</AssemblyName>
-		<OutputPath>$(AssetsPath)</OutputPath>
+		<OutputPath>$(MSBuildThisFileDirectory)\..\out</OutputPath>
 		<PublishDir>$(OutputPath)</PublishDir>
 		<SelfContained>true</SelfContained>
 	</PropertyGroup>

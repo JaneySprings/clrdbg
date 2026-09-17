@@ -74,6 +74,11 @@ managed handler, invokes `onListenerReady` — the adapter launches the on-devic
 `CreateProcess` callback instead (`ProcessHandler.HandleProcessCreated`), and only then is `ProcessId`
 known.
 
+`assembliesPath` is the `;` separated list the adapter composes from the launch's `assetsPath` and the folder of
+the host library. Module paths reported by the device are mapped into those folders by file name, so the engine reads
+metadata and symbols from the local copy of the bundle; `docs/remote/README.md` says what `assetsPath` must point to
+on each platform and how a wrong folder shows up in the log.
+
 ### Debuggee output
 
 A launched process has stdout/stderr redirected. Two background pumps (`PumpOutputAsync`, one per

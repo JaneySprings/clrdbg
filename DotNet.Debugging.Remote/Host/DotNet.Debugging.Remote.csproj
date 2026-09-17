@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+	<Import Project="..\..\Common.Build.props" />
+
+	<PropertyGroup>
+		<OutputType>Library</OutputType>
+		<AssemblyName>remotecoreclrhost</AssemblyName>
+		<AssemblyName Condition="'$(RuntimeIdentifier)' != '' and !$(RuntimeIdentifier.StartsWith('win'))">lib$(AssemblyName)</AssemblyName>
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+		<PublishAot>true</PublishAot>
+		<NativeLib>Shared</NativeLib>
+		<SelfContained>true</SelfContained>
+		<PublishTrimmed>true</PublishTrimmed>
+		<IsAotCompatible>true</IsAotCompatible>
+		<InvariantGlobalization>true</InvariantGlobalization>
+		<PublishDir>$(MSBuildThisFileDirectory)..\..\out\remote-host\$(RuntimeIdentifier)\</PublishDir>
+		<StripSymbols>false</StripSymbols>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\..\DotNet.Debugging.CorApi\DotNet.Debugging.CorApi.csproj" />
+		<ProjectReference Include="..\Generator\DotNet.Debugging.Remote.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+	</ItemGroup>
+
+	<!-- The generator reads the interface definitions from their source: [In], [Out] and the buffer sizes are gone from the compiled assembly -->
+	<ItemGroup>
+		<AdditionalFiles Include="..\..\DotNet.Debugging.CorApi\Interfaces\**\*.cs" Visible="false" />
+	</ItemGroup>
+</Project>

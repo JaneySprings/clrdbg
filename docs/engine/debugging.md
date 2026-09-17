@@ -119,8 +119,9 @@ line — is every step disabled and `OnStopped` raised with
   a `DebuggerHidden`/`DebuggerStepThrough` method (and `DebuggerNonUserCode` under Just My Code) is
   stepped through wherever the step landed in it; a step into a property accessor or an operator steps
   out again (`EnableStepFiltering`); a `STEP_CALL` landing in a callee's prolog steps over to its first
-  statement; a hidden cleanup region (`using`/`lock` finally, `await using` dispose) is crossed; a skipped
-  method returning into the stepped statement resumes the step. Otherwise `OnStopped(StopReason.Step)`
+  statement; a hidden cleanup region (`using`/`lock` finally, `await using` dispose) is crossed, and so is a
+  return from it into the stepped statement; a skipped method returning into the stepped statement resumes
+  the step. Otherwise `OnStopped(StopReason.Step)`
   carries the `SourceLocation`. The full decision list is in [stepping.md](stepping.md).
 
 `AsyncStepper` handles `await`: a plain step over an await would run until the method returns to

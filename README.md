@@ -5,6 +5,7 @@ This repository contains several libraries which can be used to debug .NET appli
 * DotNet.Debugging.Evaluation: The Roslyn C# expression compiler rebuilt from its sources. See [docs/evaluation](docs/evaluation/README.md).
 * DotNet.Debugging.Adapter: Debug Adapter Protocol (DAP) frontend for DotNet.Debugging.Engine.
 * DotNet.Debugging.Common: Shared helpers (logging, interop, runtime discovery, Android and Apple platform support) used by the other projects.
+* DotNet.Debugging.Remote: Remote debugging of CoreCLR apps on Mac Catalyst, iOS and Android: a library the app loads and the host library the engine loads. See [docs/remote](docs/remote/README.md).
 
 Attribution
 ===========

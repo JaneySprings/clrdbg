@@ -10,7 +10,23 @@ using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
 namespace DotNet.Debugging.Adapter;
 
 public class MobileDebugAgent : BaseDebugAgent<LaunchConfiguration> {
-    public MobileDebugAgent(LaunchConfiguration configuration, DebugSession debugSession) : base(configuration, debugSession) { }
+    private readonly string remoteHostLibraryName;
+    private readonly string remoteTargetLibraryName;
+
+    public MobileDebugAgent(LaunchConfiguration configuration, DebugSession debugSession) : base(configuration, debugSession) {
+        ArgumentNullException.ThrowIfNullOrEmpty(configuration.RemoteHostDirectory);
+        ArgumentNullException.ThrowIfNullOrEmpty(configuration.RemoteTargetDirectory);
+
+        var hasMicrosoftHostLib = Directory
+            .EnumerateFiles(configuration.RemoteHostDirectory, "*", SearchOption.AllDirectories)
+            .Any(it => Path.GetFileName(it).Contains("vsdbg", StringComparison.OrdinalIgnoreCase));
+        remoteHostLibraryName = hasMicrosoftHostLib ? "remotemscordbihost" : "remotecoreclrhost";
+
+        var hasMicrosoftTargetLib = Directory
+            .EnumerateFiles(configuration.RemoteTargetDirectory, "*", SearchOption.AllDirectories)
+            .Any(it => Path.GetFileName(it).Contains("vsdbg", StringComparison.OrdinalIgnoreCase));
+        remoteTargetLibraryName = hasMicrosoftTargetLib ? "vsdbgremotecoreclrtarget" : "remotecoreclrtarget";
+    }
 
     public override Task ConnectAsync(ManagedDebugger debugger) {
         ArgumentNullException.ThrowIfNull(Configuration.MobileOptions);
@@ -42,7 +58,7 @@ public class MobileDebugAgent : BaseDebugAgent<LaunchConfiguration> {
     }
 
     private void ConnectMacCatalyst(ManagedDebugger debugger, RemoteAttachInfo attachInfo) {
-        var libraryName = "libvsdbgremotecoreclrtarget.dylib";
+        var libraryName = $"lib{remoteTargetLibraryName}.dylib";
         var libraryPath = Path.Combine(Configuration.Program, "Contents", "MonoBundle", libraryName);
         if (!File.Exists(libraryPath))
             throw new FileNotFoundException($"File not found: {libraryPath}");
@@ -61,7 +77,7 @@ public class MobileDebugAgent : BaseDebugAgent<LaunchConfiguration> {
         });
     }
     private void ConnectAppleMobile(ManagedDebugger debugger, RemoteAttachInfo attachInfo) {
-        var libraryName = "libvsdbgremotecoreclrtarget.dylib";
+        var libraryName = $"lib{remoteTargetLibraryName}.dylib";
         var libraryPath = Path.Combine(Configuration.Program, libraryName);
         if (!File.Exists(libraryPath))
             throw new FileNotFoundException($"File not found: {libraryPath}");
@@ -103,7 +119,7 @@ public class MobileDebugAgent : BaseDebugAgent<LaunchConfiguration> {
     }
     private void ConnectAndroid(ManagedDebugger debugger, RemoteAttachInfo attachInfo) {
         ArgumentNullException.ThrowIfNullOrEmpty(Configuration.MobileOptions?.Device);
-        Configuration.EnvironmentVariables.Add("CORECLR_PROFILER_PATH", "libvsdbgremotecoreclrtarget.so");
+        Configuration.EnvironmentVariables.Add("CORECLR_PROFILER_PATH", $"lib{remoteTargetLibraryName}.so");
 
         var applicationId = Configuration.GetApplicationName();
         if (!Configuration.MobileOptions.IsDevice)
@@ -137,7 +153,7 @@ public class MobileDebugAgent : BaseDebugAgent<LaunchConfiguration> {
 
     private string GetCoreclrHostLibrary() {
         var runtime = $"{RuntimeInfo.GetOperationSystem()}-{RuntimeInfo.GetArchitecture()}";
-        var libraryName = $"{RuntimeInfo.LibPrefix}remotemscordbihost{RuntimeInfo.LibExtension}";
+        var libraryName = $"{RuntimeInfo.LibPrefix}{remoteHostLibraryName}{RuntimeInfo.LibExtension}";
         var libraryPath = Path.Combine(Configuration.RemoteHostDirectory!, runtime, libraryName);
         if (!File.Exists(libraryPath))
             throw new FileNotFoundException($"File not found: {libraryPath}");

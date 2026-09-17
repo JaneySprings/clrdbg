@@ -196,6 +196,14 @@ internal class StepController {
             ResumeStep(thread, userStepKind == StepKind.Out ? StepKind.Over : userStepKind);
             return false;
         }
+        // The step across a hidden finally may end at the leave that called the finally, back in the statement
+        // the user's step started from (the Mac Catalyst runtime stops there; a local runtime runs on to the next
+        // statement by itself): the rest of that statement remains, so the step goes on as it did across the finally
+        if (wasCrossingHiddenFinally && IsInStepStatement(module, methodToken, ip.pnOffset)) {
+            location = null;
+            ResumeStep(thread, userStepKind == StepKind.Out ? StepKind.Over : userStepKind);
+            return false;
+        }
         // A skipped method returned into the statement the user's step started from, the rest of the step remains.
         // The returned-to offset cannot tell how much of the statement is left (the runtime only maps it
         // approximately, snapped to the statement start), so the step simply covers the statement again

@@ -1,0 +1,20 @@
+<!-- The source generator of the host library's proxies: for every [GeneratedComClass] partial class deriving from
+     RemoteObject it writes the methods of the class's CorApi interfaces, one request to the agent each, plus the table
+     of interface ids and the session's map from an interface to the class implementing it. Referenced by the Host
+     project as an analyzer, so a proxy is one empty partial declaration there -->
+<Project Sdk="Microsoft.NET.Sdk">
+	<Import Project="..\..\Common.Build.props" />
+
+	<PropertyGroup>
+		<TargetFramework>netstandard2.0</TargetFramework>
+		<LangVersion>latest</LangVersion>
+		<ImplicitUsings>disable</ImplicitUsings>
+		<IsRoslynComponent>true</IsRoslynComponent>
+		<EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+		<IncludeBuildOutput>false</IncludeBuildOutput>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Microsoft.CodeAnalysis.CSharp" PrivateAssets="all" />
+	</ItemGroup>
+</Project>
