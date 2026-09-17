@@ -1,0 +1,80 @@
+name: Remote Libs
+
+on:
+  workflow_dispatch:
+    inputs:
+      enable_trace:
+        required: false
+        default: false
+        type: boolean
+
+env:
+  DOTNET_VERSION: '10.x'
+
+jobs:
+  target:
+    runs-on: macos-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build RemoteCoreClrTarget
+        run: |
+          DotNet.Debugging.Remote/Target/build-apple.sh
+          DotNet.Debugging.Remote/Target/build-android.sh
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: RemoteCoreclrTarget
+          path: |
+            out/remote-target/**/*.so
+            out/remote-target/**/*.dylib
+
+  host:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            platform: linux
+          - os: macos-latest
+            platform: osx
+          - os: windows-latest
+            platform: win
+    
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+          # dotnet-quality: preview
+
+      - name: Install linux-arm64 cross toolchain
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+
+      - name: Publish
+        run: |
+          dotnet publish DotNet.Debugging.Remote/Host/DotNet.Debugging.Remote.csproj -c:Release -r:${{ matrix.platform }}-x64 
+          dotnet publish DotNet.Debugging.Remote/Host/DotNet.Debugging.Remote.csproj -c:Release -r:${{ matrix.platform }}-arm64
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: RemoteCoreclrHost-${{ matrix.platform }}
+          path: |
+            out/remote-host/**/*.so
+            out/remote-host/**/*.dylib
+            out/remote-host/**/*.dll
+
