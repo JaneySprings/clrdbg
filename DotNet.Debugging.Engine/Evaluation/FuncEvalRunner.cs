@@ -70,8 +70,10 @@ internal class FuncEvalRunner {
         Marshal.ThrowExceptionForHR(result);
         return value;
     }
-    // Calls the getter of a property declared on the value's type or one of its base types
-    public async Task<ICorDebugValue?> GetPropertyValueAsync(ICorDebugValue value, ICorDebugILFrame frame, string propertyName) {
+    // Calls the getter of a property declared on the value's type or one of its base types. It takes the thread to run
+    // on rather than a frame of it: a thread stopped at an exception need not have an IL frame on top (on Windows a
+    // raise repeated beyond a native frame stops under the managed to native transition)
+    public async Task<ICorDebugValue?> GetPropertyValueAsync(ICorDebugValue value, ICorDebugThread thread, string propertyName) {
         var type = value.GetExactType();
         while (type != null) {
             var corClass = type.GetClass();
@@ -88,7 +90,7 @@ internal class FuncEvalRunner {
                 return null;
 
             var isStatic = metadataImport.GetMethodProps(getter).pdwAttr.IsMdStatic();
-            var eval = frame.GetChain().GetThread().CreateEval();
+            var eval = thread.CreateEval();
             ICorDebugValue[] arguments = isStatic ? [] : [value];
             // The getter is invoked with the arguments of the type declaring it, which is a base type once the walk went up
             return await CallFunctionAsync(eval, module.GetFunctionFromToken(getter), type.GetTypeParameters(), arguments);

@@ -53,6 +53,7 @@ public partial class ManagedDebugger {
     private bool isExceptionStopPending;
     private bool isRemoteAttach;
     private int? mainThreadId;
+    private int? oldestThreadId;
     private int nextModuleId;
 
     public bool JustMyCode { get; set; } = true;
@@ -335,7 +336,7 @@ public partial class ManagedDebugger {
     }
     // The exception wrapped by the reported one, null without one. An AggregateException contributes its first inner, the property's value
     private async Task<InnerExceptionInfo?> GetInnerExceptionAsync(ICorDebugValue exception, int threadId) {
-        var inner = await FuncEval.GetPropertyValueAsync(exception, GetILFrame(threadId, 0), "InnerException");
+        var inner = await FuncEval.GetPropertyValueAsync(exception, GetThread(threadId), "InnerException");
         try {
             if (inner == null || (inner is ICorDebugReferenceValue reference && reference.IsNull()))
                 return null;
@@ -347,9 +348,7 @@ public partial class ManagedDebugger {
         }
     }
     private async Task<string?> GetExceptionPropertyAsync(ICorDebugValue exception, int threadId, string propertyName) {
-        // Every func eval neuters the frames, so the frame is re-obtained for each property
-        var frame = GetILFrame(threadId, 0);
-        var value = await FuncEval.GetPropertyValueAsync(exception, frame, propertyName) ?? throw new InvalidOperationException($"The exception property '{propertyName}' returned no value");
+        var value = await FuncEval.GetPropertyValueAsync(exception, GetThread(threadId), propertyName) ?? throw new InvalidOperationException($"The exception property '{propertyName}' returned no value");
         try {
             if (value is ICorDebugReferenceValue reference && reference.IsNull())
                 return null;

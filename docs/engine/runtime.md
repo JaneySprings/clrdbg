@@ -133,7 +133,8 @@ the await may have continued the debuggee.
 
 `CreateThread`/`ExitThread` maintain the `threads` dictionary (the first thread a launched runtime announces is the main thread; after an attach, which
 announces the existing threads in the runtime's own order, the main thread is told by its id: the process id on
-Linux and Android, the lowest id on Apple platforms), and `GetThread(id)` answers from it: `ICorDebugThread` objects stay valid until the thread
+Linux and Android, the lowest id on Apple platforms; a local Windows attach announces them in an arbitrary order
+and its ids say nothing, so the system is asked for the oldest thread of the process), and `GetThread(id)` answers from it: `ICorDebugThread` objects stay valid until the thread
 exits, and `ICorDebugProcess.GetThread` is not implemented by the remote (mobile) transport.
 `GetThreads` lists the dictionary's threads that have managed frames (`HasManagedFrames`): the
 runtime's own threads — the finalizer, the tiered compilation worker — have none while idle, whether

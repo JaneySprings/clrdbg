@@ -288,7 +288,7 @@ internal class AsyncStepper {
         var task = ReadBuilderTask(builder);
         if (task != null)
             return task;
-        var objectId = await debugger.FuncEval.GetPropertyValueAsync(builder, frame, "ObjectIdForDebugger");
+        var objectId = await debugger.FuncEval.GetPropertyValueAsync(builder, frame.GetChain().GetThread(), "ObjectIdForDebugger");
         return objectId as ICorDebugHandleValue;
     }
     // A strong handle to the builder's 'm_task' (the async void builder keeps its task builder in '_builder'), null

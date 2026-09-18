@@ -4,9 +4,9 @@ using NUnit.Framework;
 namespace DotNet.Debugging.Tests;
 
 // An attach announces the threads that exist already in the runtime's own order, which need not begin with the main
-// one: the main thread is told by its id there (the process id on Linux, the lowest id on macOS, the first on Windows).
-// A local runtime happens to announce the main thread first, so this guards the rule against naming a worker here;
-// the order that needs the rule is a remote runtime's
+// one: the main thread is told by its id there (the process id on Linux, the lowest id on macOS, the oldest thread
+// of the process on Windows). A local runtime happens to announce the main thread first on Linux and macOS, where this
+// guards the rule against naming a worker; on Windows the order is arbitrary, as is a remote runtime's
 public class AttachedThreadListTests : BaseDebugTestFixture {
     public AttachedThreadListTests() : base(nameof(AttachedThreadListTests)) { }
 
