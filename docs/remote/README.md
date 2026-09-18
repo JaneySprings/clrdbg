@@ -166,12 +166,17 @@ handles.
 ## What works, and what does not
 
 Verified through the adapter and the engine on the MAUI test app: a breakpoint in the page constructor binds and hits;
-the stack lists in 25 ms on Mac Catalyst and 190 ms on an Android device over `adb`; locals show `this` with its
+the stack lists in 25 ms on Mac Catalyst and 190 ms on an Android device over `adb` (a page of 50 locals with
+their display strings takes 0.7 s and 3 s there); locals show `this` with its
 DebuggerDisplay and expand; arrays, structs and strings display and expand; assignments, property reads, function
 evaluations (`GetType().Name`, `ToString()`, `DateTime.Now`) and constructor calls run in the app; an exception thrown
 inside an evaluation is reported; step over lands on the next line; pause stops the running app and lists the threads
 with their stacks; a first-chance exception in user code stops with its type and message; disconnect ends the app
-through the device library. The iOS simulator and an iOS device run the same session. A host connecting after the app
+through the device library. The iOS simulator, an iOS device and an Android device run the same session; the
+full case sweep (variables and formatting, member listing, set variable, evaluation, arrays, slow and throwing
+evaluations, stepping and step filtering, hidden regions, set next statement, debug output, conditions, hit counts,
+logpoints, function breakpoints, threads, exception stops with recorded traces, async stepping, pause, detach) passes
+on Mac Catalyst, the iOS simulator and the Android device. A host connecting after the app
 attached alone receives the replayed attach (1 process, 1 app domain, 49 assemblies and modules, 3 threads in 21 ms).
 
 Not proxied, by design of the wire (the host log names each call): thread and chain contexts and register sets, the

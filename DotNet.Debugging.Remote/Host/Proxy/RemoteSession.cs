@@ -23,6 +23,9 @@ public partial class RemoteSession {
     ];
 
     private readonly Dictionary<uint, WeakReference<RemoteObject>> proxies;
+    // The proxies of what lives as long as the process does (modules, functions, classes, types, importers): kept, so
+    // the answers they remember are not lost each time the debugger lets go of them between two stops
+    private readonly List<RemoteObject> longLived;
     private readonly Action detach;
     // The debugger's Continue calls held back during a replay of the attach, one per replayed callback
     private readonly SemaphoreSlim heldContinues;
@@ -41,6 +44,7 @@ public partial class RemoteSession {
         AssembliesPaths = assembliesPath == null ? [] : assembliesPath.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         this.detach = detach;
         proxies = new Dictionary<uint, WeakReference<RemoteObject>>();
+        longLived = new List<RemoteObject>();
         heldContinues = new SemaphoreSlim(0);
     }
 
@@ -111,6 +115,8 @@ public partial class RemoteSession {
                     continue;
                 }
                 proxies[handle] = new WeakReference<RemoteObject>(created);
+                if (IsLongLived(created))
+                    longLived.Add(created);
                 result[i] = (T)(object)created;
             }
         }
@@ -162,6 +168,10 @@ public partial class RemoteSession {
         Client.Release(handle, count);
     }
 
+    private static bool IsLongLived(RemoteObject proxy) {
+        return proxy is RemoteCorDebugAppDomain or RemoteCorDebugAssembly or RemoteCorDebugModule or RemoteMetaDataImport
+            or RemoteCorDebugFunction or RemoteCorDebugClass or RemoteCorDebugType or RemoteCorDebugCode;
+    }
     private bool TryGetExisting<T>(uint handle, out T? existing) where T : class {
         existing = null;
         if (!proxies.TryGetValue(handle, out var reference) || !reference.TryGetTarget(out var known) || known is not T typed)

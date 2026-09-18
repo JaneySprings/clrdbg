@@ -125,14 +125,15 @@ the await may have continued the debuggee.
 | `ContinueProcess()` (internal) | `ICorDebugProcess.Continue(false)`, nothing else. Used by handlers and internal re-steps. |
 | `Continue()` | Clears the variables references (releasing their debuggee handles) and frame ids, then continues, tolerating `CORDBG_E_SUPERFLOUS_CONTINUE`. |
 | `StepAsync(threadId, kind)` | Sets the step up (`StepController`), clears references, continues. See [stepping.md](stepping.md). |
-| `Pause(threadId)` | `ICorDebugProcess.Stop(0)` and a synthetic `OnStopped(StopReason.Pause)`: `Stop` produces no callback. Refused with an exception when `IsRunning` is false — including the moment right after an attach, when the runtime still reports itself stopped while delivering its synthetic attach callbacks; the state clears in a moment and the client can ask again. |
+| `Pause(threadId)` | `ICorDebugProcess.Stop(0)` and a synthetic `OnStopped(StopReason.Pause)`: `Stop` produces no callback. The stop names the requested thread when it has managed frames, else the first thread that has (an idle Android main thread sits in Java and is not listed). Refused with an exception when `IsRunning` is false — including the moment right after an attach, when the runtime still reports itself stopped while delivering its synthetic attach callbacks; the state clears in a moment and the client can ask again. |
 
 `IsRunning` is `ICorDebugProcess.IsRunning`, with a failed read counting as not running.
 
 ## 4. Threads
 
-`CreateThread`/`ExitThread` maintain the `threads` dictionary (the first thread created is the main
-thread), and `GetThread(id)` answers from it: `ICorDebugThread` objects stay valid until the thread
+`CreateThread`/`ExitThread` maintain the `threads` dictionary (the first thread a launched runtime announces is the main thread; after an attach, which
+announces the existing threads in the runtime's own order, the main thread is told by its id: the process id on
+Linux and Android, the lowest id on Apple platforms), and `GetThread(id)` answers from it: `ICorDebugThread` objects stay valid until the thread
 exits, and `ICorDebugProcess.GetThread` is not implemented by the remote (mobile) transport.
 `GetThreads` lists the dictionary's threads that have managed frames (`HasManagedFrames`): the
 runtime's own threads — the finalizer, the tiered compilation worker — have none while idle, whether

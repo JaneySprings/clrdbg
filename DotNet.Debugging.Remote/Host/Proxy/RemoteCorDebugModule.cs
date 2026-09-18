@@ -17,6 +17,7 @@ namespace DotNet.Debugging.Remote.Proxy;
 internal partial class RemoteCorDebugModule : RemoteObject, ICorDebugModule, ICorDebugModule2 {
     private string? localName;
     private bool hasLocalFile;
+    private bool? isInMemory;
 
     public RemoteCorDebugModule(RemoteSession session, uint handle) : base(session, handle) { }
 
@@ -32,9 +33,15 @@ internal partial class RemoteCorDebugModule : RemoteObject, ICorDebugModule, ICo
     }
     // https://learn.microsoft.com/en-us/dotnet/framework/unmanaged-api/debugging/icordebugmodule-isinmemory-method
     public int TryIsInMemory(out bool pInMemory) {
+        if (isInMemory != null) {
+            pInMemory = isInMemory.Value;
+            return Cor.S_OK;
+        }
         var hr = InvokeBool(Iids.Module, 19, out pInMemory);
         if (hr == Cor.S_OK && pInMemory && GetLocalName(out _) == Cor.S_OK && hasLocalFile)
             pInMemory = false;
+        if (hr == Cor.S_OK)
+            isInMemory = pInMemory;
         return hr;
     }
     // The importer is the device's; the debugger casts the object to the interface it asked for

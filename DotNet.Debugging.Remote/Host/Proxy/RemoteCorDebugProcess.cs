@@ -10,8 +10,6 @@ namespace DotNet.Debugging.Remote.Proxy;
 // answered and not made
 [GeneratedComClass]
 internal partial class RemoteCorDebugProcess : RemoteObject, ICorDebugProcess {
-    private uint processId;
-
     public RemoteCorDebugProcess(RemoteSession session, uint handle) : base(session, handle) { }
 
     public int TryContinue(bool fIsOutOfBand) {
@@ -25,15 +23,5 @@ internal partial class RemoteCorDebugProcess : RemoteObject, ICorDebugProcess {
     }
     public int TryTerminate(uint exitCode) {
         return Forward(() => Session.Client.TerminateAsync((int)exitCode), "Terminate");
-    }
-    public int TryGetID(out uint pdwProcessId) {
-        if (processId != 0) {
-            pdwProcessId = processId;
-            return Cor.S_OK;
-        }
-        var hr = InvokeUInt32(Iids.Process, 13, out pdwProcessId);
-        if (hr == Cor.S_OK)
-            processId = pdwProcessId;
-        return hr;
     }
 }

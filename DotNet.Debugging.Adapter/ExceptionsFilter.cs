@@ -15,7 +15,8 @@ public static class ExceptionsFilter {
         Label = "User-Unhandled Exceptions",
         Description = "Break when an exception is caught in non-user code (system code) after having passed through user code.",
         ConditionDescription = "Comma-separated list of exception types to break on, or if the list starts with '!', a list of exception types to ignore.",
-        SupportsCondition = true
+        SupportsCondition = true,
+        Default = true
     };
 }
 

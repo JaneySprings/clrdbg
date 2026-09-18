@@ -35,6 +35,8 @@ public partial class ManagedDebugger {
     // The module each thread's current exception is attributed to, captured at the raise: the stop
     // happens later in the dispatch, when the thread's frames no longer show it
     private readonly Dictionary<int, string?> exceptionModules;
+    // The address of the exception object that attribution was captured for, to tell its raise repeated from another one's
+    private readonly Dictionary<int, ulong> exceptionAddresses;
     private readonly BreakpointManager breakpointManager;
     private readonly VariableManager variableManager;
     private readonly VariableProvider variableProvider;
@@ -96,6 +98,7 @@ public partial class ManagedDebugger {
         exceptionThreads = new HashSet<int>();
         exceptionStopKinds = new Dictionary<int, ExceptionStopKind>();
         exceptionModules = new Dictionary<int, string?>();
+        exceptionAddresses = new Dictionary<int, ulong>();
         breakpointManager = new BreakpointManager();
         variableManager = new VariableManager();
         variableProvider = new VariableProvider(this, variableManager);
@@ -173,8 +176,23 @@ public partial class ManagedDebugger {
         process.Stop(0);
         stepController.Disable();
         // Stopping the process raises no callback, the stop is reported here
-        var stoppedThreadId = threads.ContainsKey(threadId) ? threadId : threads.Keys.FirstOrDefault(threadId);
-        OnStopped?.Invoke(new StopInfo(stoppedThreadId, StopReason.Pause));
+        OnStopped?.Invoke(new StopInfo(GetPausedThreadId(threadId), StopReason.Pause));
+    }
+    // The thread a pause is reported on: the one asked for when the client can show it. A thread without managed frames
+    // is not listed (an idle Android main thread sits in Java), so another one with frames stands in for it
+    private int GetPausedThreadId(int requestedThreadId) {
+        try {
+            if (threads.TryGetValue(requestedThreadId, out var requested) && requested.HasManagedFrames())
+                return requestedThreadId;
+            foreach (var (threadId, thread) in threads) {
+                if (thread.HasManagedFrames())
+                    return threadId;
+            }
+        }
+        catch (Exception ex) {
+            DebuggerLoggingService.LogError("Error choosing the paused thread", ex);
+        }
+        return threads.ContainsKey(requestedThreadId) ? requestedThreadId : threads.Keys.FirstOrDefault(requestedThreadId);
     }
     // A line of console input collected by the client while the debuggee runs, written to its standard input
     public bool WriteStandardInput(string text) {
@@ -626,6 +644,7 @@ public partial class ManagedDebugger {
         exceptionThreads.Clear();
         exceptionStopKinds.Clear();
         exceptionModules.Clear();
+        exceptionAddresses.Clear();
         stepController.Disable();
         threads.Clear();
         ClearReferences();

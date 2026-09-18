@@ -37,7 +37,6 @@ public class MobileDebugAgent : BaseDebugAgent<LaunchConfiguration> {
         Configuration.EnvironmentVariables.Add("CORECLR_REMOTE_DEBUGGER_IP", attachInfo.Address);
         Configuration.EnvironmentVariables.Add("CORECLR_REMOTE_DEBUGGER_PORT", attachInfo.Port.ToString());
         Configuration.EnvironmentVariables.Add("CORECLR_REMOTE_DEBUGGER_ISSERVER", attachInfo.IsServer ? "0" : "1");
-        Configuration.EnvironmentVariables.Add("DOTNET_MODIFIABLE_ASSEMBLIES", "debug");
         Logger.Debug($"Debugger listening on {attachInfo.Address}:{attachInfo.Port}");
 
         switch (Configuration.MobileOptions.Platform) {

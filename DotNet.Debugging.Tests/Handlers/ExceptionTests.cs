@@ -61,6 +61,19 @@ public class ExceptionTests : BaseDebugTestFixture {
         Assert.That(CollectStopsUntilExit(), Is.Empty, "The exception caught by the user code must not stop the execution again");
     }
 
+    // A client enables the filters the adapter marks as on by default. An exception leaving user code is what ends an
+    // app whose framework catches everything, and the runtime never calls it unhandled: that filter is the default one
+    [Test]
+    public void UserUnhandledFilterIsOnByDefaultTest() {
+        var filters = Capabilities.ExceptionBreakpointFilters;
+        Assert.That(filters.Single(it => it.Filter == "user-unhandled").Default, Is.True);
+        Assert.That(filters.Single(it => it.Filter == "all").Default, Is.Not.True);
+
+        LaunchWithExceptionFilters(filters.Where(it => it.Default == true).Select(it => it.Filter).ToArray());
+        var stopped = WaitForStopped(StoppedEvent.ReasonValue.Exception);
+        Assert.That(GetExceptionInfo(stopped.ThreadId!.Value).BreakMode, Is.EqualTo(ExceptionBreakMode.UserUnhandled));
+    }
+
     [Test]
     public void ExceptionVariableTest() {
         LaunchWithExceptionFilters("all");

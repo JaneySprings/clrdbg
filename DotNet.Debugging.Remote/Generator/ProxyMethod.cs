@@ -48,9 +48,14 @@ internal sealed class ProxyMethod {
     public void Write(StringBuilder text) {
         var returns = method.ReturnsVoid ? "void" : "int";
         var name = explicitImplementation ? $"{returns} {iface.Name}.{method.Name}" : $"public {returns} {method.Name}";
-        text.Append($"    {name}({string.Join(", ", parameters.Select(p => p.Declaration()))}) {{\n");
         var arguments = new List<Argument>();
-        if (!TryMap(arguments, out var unmapped)) {
+        var mapped = TryMap(arguments, out var unmapped);
+        if (mapped && IsRemembered(arguments)) {
+            WriteRemembered(text, name, arguments);
+            return;
+        }
+        text.Append($"    {name}({string.Join(", ", parameters.Select(p => p.Declaration()))}) {{\n");
+        if (!mapped) {
             text.Append($"        // '{unmapped}' has no kind on the wire\n");
             foreach (var assignment in parameters.Select(DefaultAssignment).Where(a => a != null))
                 text.Append($"        {assignment}\n");
@@ -58,6 +63,36 @@ internal sealed class ProxyMethod {
             text.Append("    }\n");
             return;
         }
+        WriteBody(text, arguments);
+        text.Append("    }\n");
+    }
+
+    // An immutable getter: one result, nothing passed in, and not an explicit implementation
+    private bool IsRemembered(List<Argument> arguments) {
+        return ImmutableResults.Contains(iface, method) && !explicitImplementation && parameters.Count == 1
+            && arguments.Count == 1 && arguments[0].Kind == "out" && arguments[0].Target != string.Empty;
+    }
+    // The getter asks the agent once: the answer of a successful call is kept in the proxy and handed out from then on
+    private void WriteRemembered(StringBuilder text, string name, List<Argument> arguments) {
+        var parameter = parameters[0];
+        var key = CorApiInterface.IdName(iface.Name) + method.Name.Substring(3);
+        var isReference = Category(parameter) == "object";
+        var fieldType = parameter.TypeText.TrimEnd('?') + (isReference ? "?" : string.Empty);
+        text.Append($"    private bool has{key};\n");
+        text.Append($"    private {fieldType} cached{key};\n");
+        text.Append($"    {name}({parameter.Declaration()}) {{\n");
+        text.Append($"        if (has{key}) {{\n");
+        text.Append($"            {parameter.Identifier} = cached{key}{(isReference ? "!" : string.Empty)};\n");
+        text.Append("            return Cor.S_OK;\n");
+        text.Append("        }\n");
+        text.Append($"        var result = Fetch{key}(out {parameter.Identifier});\n");
+        text.Append("        if (result == Cor.S_OK) {\n");
+        text.Append($"            cached{key} = {parameter.Identifier};\n");
+        text.Append($"            has{key} = true;\n");
+        text.Append("        }\n");
+        text.Append("        return result;\n");
+        text.Append("    }\n");
+        text.Append($"    private int Fetch{key}({parameter.Declaration()}) {{\n");
         WriteBody(text, arguments);
         text.Append("    }\n");
     }

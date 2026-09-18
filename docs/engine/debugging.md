@@ -153,7 +153,19 @@ not stop at all under Just My Code — the reason a "break on all exceptions" fi
 thrown and caught inside a library. `Exception2` also follows the dispatch for the third kind: a
 first-chance notification in a user-code frame marks the thread, and when the catch handler is found
 in non-user code for a marked thread the engine raises `UserUnhandled` — an exception that passed
-through user code and is about to be swallowed by a library. User code is decided per frame
+through user code and is about to be swallowed by a library. That is also the only stop an app gets whose
+framework catches everything: a MAUI page constructor runs under reflection and a native callback, the
+exception is caught there and the app ends itself, and the runtime never calls it unhandled. The adapter
+therefore marks the `user-unhandled` filter as on by default. An exception that crosses a native frame on
+its way is raised again in the managed caller beyond it; that raise continues the first one, so the stop
+still names the module of the original raise, while the thread's frames by then begin at the re-raise and
+the throw site is found in the exception's recorded stack trace. The engine tells the continued raise by
+the exception object: the module is captured together with the object's address, and a first-chance
+notification in a non-user frame for the same object keeps it. Another exception raised there in its
+place — the `TypeInitializationException` wrapping a failed type initializer, the `FileLoadException`
+wrapping a failed resolve handler — is a raise of its own and names the module it was made in. The
+recorded trace leaves out the frames it cannot resolve: a dynamic method has no module, and the stub a
+reflection invoke calls its target through is recorded with a nil method token. User code is decided per frame
 (`TryClassifyFrame`): a user module's method counts unless it, or its type, is marked
 `[DebuggerNonUserCode]` (under Just My Code), `[DebuggerStepThrough]` or `[DebuggerHidden]` — a catch
 block in such a method of the user's own assembly is a `UserUnhandled` stop like a library's, the

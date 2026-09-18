@@ -28,7 +28,7 @@ public partial class ManagedDebugger {
         if (callbackEvent.Unhandled)
             exceptionThreads.Remove(threadId);
         // This callback arrives at the raise itself, the thread's frames still show it
-        exceptionModules[threadId] = GetExceptionModuleName(callbackEvent.Thread);
+        CaptureExceptionModule(callbackEvent.Thread, threadId);
         RaiseExceptionStop(threadId, callbackEvent.Unhandled ? ExceptionStopKind.Unhandled : ExceptionStopKind.FirstChance);
     }
     // Follows the exception dispatch: the first chance stop under Just My Code happens when the dispatch reaches
@@ -44,9 +44,16 @@ public partial class ManagedDebugger {
         switch (callbackEvent.DwEventType) {
             case CorDebugExceptionCallbackType.DEBUG_EXCEPTION_FIRST_CHANCE:
                 // The dispatch stops later (entering user code, or heading into a non-user catch), when the
-                // thread's frames no longer show the raise - the module the stop names is captured here
-                exceptionModules[threadId] = GetExceptionModuleName(callbackEvent.Thread);
-                if (IsUserCodeFrame(callbackEvent.Frame))
+                // thread's frames no longer show the raise - the module the stop names is captured here. An
+                // exception that left user code uncaught and crosses a native frame is raised again in the managed
+                // caller beyond it (a constructor invoked through reflection, a native callback): that raise
+                // continues the first one, whose module stands. Another exception raised there in its place (the
+                // wrapper of a failed type initializer) is a raise of its own
+                var isUserCodeRaise = IsUserCodeFrame(callbackEvent.Frame);
+                var continuesUserCodeRaise = !isUserCodeRaise && exceptionThreads.Contains(threadId) && IsCapturedException(callbackEvent.Thread, threadId);
+                if (!continuesUserCodeRaise)
+                    CaptureExceptionModule(callbackEvent.Thread, threadId);
+                if (isUserCodeRaise)
                     exceptionThreads.Add(threadId);
                 break;
             case CorDebugExceptionCallbackType.DEBUG_EXCEPTION_USER_FIRST_CHANCE:
@@ -69,6 +76,26 @@ public partial class ManagedDebugger {
         ContinueProcess();
     }
 
+    private void CaptureExceptionModule(ICorDebugThread thread, int threadId) {
+        exceptionModules[threadId] = GetExceptionModuleName(thread);
+        exceptionAddresses[threadId] = GetExceptionAddress(thread);
+    }
+    private bool IsCapturedException(ICorDebugThread thread, int threadId) {
+        var address = GetExceptionAddress(thread);
+        return address != 0 && exceptionAddresses.GetValueOrDefault(threadId) == address;
+    }
+    // Zero when the thread's exception cannot be read
+    private ulong GetExceptionAddress(ICorDebugThread thread) {
+        try {
+            if (thread.TryGetCurrentException(out var exception) != Cor.S_OK || exception is not ICorDebugReferenceValue reference)
+                return 0;
+            return reference.GetValue().Value;
+        }
+        catch (Exception ex) {
+            DebuggerLoggingService.LogError("Failed to get the exception address", ex);
+            return 0;
+        }
+    }
     private void RaiseExceptionStop(int threadId, ExceptionStopKind kind) {
         exceptionStopKinds[threadId] = kind;
         // Whether the subscriber continued is recorded by 'Continue' itself, not read back from the runtime:
@@ -156,8 +183,9 @@ public partial class ManagedDebugger {
                 return null;
             var lines = new List<string>();
             foreach (var frame in exceptionObject.GetExceptionCallStack()) {
-                // A frame without a module cannot be resolved (e.g. a dynamic method)
-                if (frame.pModule == null)
+                // A frame without a module or a method row cannot be resolved: a dynamic method, or a stub the runtime
+                // emitted (the one a reflection invoke calls its target through is recorded with a nil token)
+                if (frame.pModule == null || frame.methodDef.IsNil)
                     continue;
                 if (frame.pModule.GetMetaDataInterface<IMetaDataImport>().IsStackTraceHidden(frame.methodDef))
                     continue;

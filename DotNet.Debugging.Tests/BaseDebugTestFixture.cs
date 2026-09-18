@@ -21,6 +21,8 @@ public abstract class BaseDebugTestFixture {
     protected string ProgramPath { get; private set; } = null!;
 
     protected DebugProtocolHost Host { get; private set; } = null!;
+    // What the adapter answered to 'initialize'
+    protected InitializeResponse Capabilities { get; private set; } = null!;
 
     private DebugSession debugSession = null!;
     private AnonymousPipeServerStream hostInput = null!;
@@ -117,7 +119,7 @@ public abstract class BaseDebugTestFixture {
         Host = new DebugProtocolHost(hostInput, hostOutput);
         Host.EventReceived += OnEventReceived;
         Host.Run();
-        Host.SendRequestSync(new InitializeRequest() {
+        Capabilities = Host.SendRequestSync(new InitializeRequest() {
             AdapterID = "meteor-v2",
             LinesStartAt1 = true,
             ColumnsStartAt1 = true,
