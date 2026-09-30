@@ -17,8 +17,9 @@ public abstract class RemoteObject {
     private const int NameCacheLimit = 4096;
 
     private int issued;
-    // Memory handed to the debugger for bytes a callee pointed into its own (metadata signatures, constants)
-    private List<nint>? blobs;
+    // Memory handed to the debugger for bytes a callee pointed into its own (metadata signatures, constants), by
+    // content: the debugger asks for the same ones again and again, each is kept once
+    private Dictionary<byte[], nint>? blobs;
     // The complete responses of the calls that returned a name, by call
     private Dictionary<string, CachedResponse>? names;
 
@@ -39,7 +40,7 @@ public abstract class RemoteObject {
     ~RemoteObject() {
         Session.Release(Handle, (uint)issued);
         if (blobs != null) {
-            foreach (var blob in blobs)
+            foreach (var blob in blobs.Values)
                 Marshal.FreeHGlobal(blob);
         }
     }
@@ -147,13 +148,15 @@ public abstract class RemoteObject {
     protected nint KeepBlob(byte[] bytes) {
         if (bytes.Length == 0)
             return 0;
-        var blob = Marshal.AllocHGlobal(bytes.Length);
-        Marshal.Copy(bytes, 0, blob, bytes.Length);
         lock (this) {
-            blobs ??= new List<nint>();
-            blobs.Add(blob);
+            blobs ??= new Dictionary<byte[], nint>(BlobComparer.Instance);
+            if (blobs.TryGetValue(bytes, out var kept))
+                return kept;
+            var blob = Marshal.AllocHGlobal(bytes.Length);
+            Marshal.Copy(bytes, 0, blob, bytes.Length);
+            blobs[bytes] = blob;
+            return blob;
         }
-        return blob;
     }
     // Bytes the debugger points at in its own memory, which is this process
     protected static byte[] BytesAt(nint pointer, uint count) {
@@ -216,8 +219,11 @@ public abstract class RemoteObject {
         hr = cached.HResult;
         return true;
     }
-    // Only a response with every name complete is kept: a longer one is asked for again with the right buffer
+    // Only an answer with every name complete is kept: a failed call may succeed later, a longer name is asked for
+    // again with the right buffer
     private void Remember(string key, int hr, byte[] results, RemoteArgument[] arguments) {
+        if (hr < 0)
+            return;
         foreach (var argument in arguments) {
             if (argument.IsText && argument.LengthResult > argument.Capacity)
                 return;

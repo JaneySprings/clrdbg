@@ -14,6 +14,9 @@
 // The socket of the connected host, -1 without one; the lock keeps the frames of different threads apart
 static std::mutex hostLock;
 static int hostSocket = -1;
+// How many hosts have connected: the number of the connected one tells it from those before it. Its socket does not,
+// the number of a closed socket goes to the next connection
+static int hostNumber = 0;
 
 static bool WriteAll(int socket, const uint8_t* data, size_t size) {
     while (size > 0) {
@@ -40,6 +43,7 @@ static void RegisterHost(int connection) {
     setsockopt(connection, IPPROTO_TCP, TCP_NODELAY, &noDelay, sizeof(noDelay));
     std::lock_guard<std::mutex> guard(hostLock);
     hostSocket = connection;
+    hostNumber++;
     Log("host connected");
 }
 
@@ -49,7 +53,7 @@ bool HostConnected() {
 }
 int CurrentHost() {
     std::lock_guard<std::mutex> guard(hostLock);
-    return hostSocket;
+    return hostSocket >= 0 ? hostNumber : -1;
 }
 bool SendFrame(uint8_t kind, uint32_t sequence, const ByteWriter& body) {
     std::lock_guard<std::mutex> guard(hostLock);
@@ -63,7 +67,10 @@ bool SendFrame(uint8_t kind, uint32_t sequence, const ByteWriter& body) {
     if (WriteAll(hostSocket, frame.bytes.data(), frame.bytes.size()))
         return true;
     Log("writing to the host failed, dropping the connection");
-    close(hostSocket);
+    // The socket is closed by the thread that serves it (CloseHost) and nowhere else: closed here as well, its number
+    // could be the app's own file by the time that thread reads from it and closes it again. Shutting it down ends
+    // the read that thread waits in
+    shutdown(hostSocket, SHUT_RDWR);
     hostSocket = -1;
     return false;
 }

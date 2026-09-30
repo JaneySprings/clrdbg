@@ -48,8 +48,11 @@ It stops the process, hands the engine `CreateProcess`, then `CreateAppDomain` f
 `LoadModule` for each assembly and its modules, and `CreateThread` for each thread, in the order the runtime reports an
 attach. The engine continues after each callback as it always does; during the replay the session holds those
 `Continue` calls instead of forwarding them (the process and app domain proxies answer `S_OK`) and the replay waits for
-each before the next callback, up to ten seconds, so the engine sees the sequence at its own pace. One `Continue` at
-the end releases the stop. Events the agent queued meanwhile are delivered after the replay.
+each before the next callback, so the engine sees the sequence at its own pace. The wait has no limit: a callback
+takes the engine as long as it takes (the symbols of a module may come from a server), and a replay that went on
+without its `Continue` would release the process ahead of the engine and forward that `Continue` later, with no stop
+left for it. Only a lost connection ends the wait, and the replay with it. One `Continue` at the end releases the
+stop. Events the agent queued meanwhile are delivered after the replay.
 
 ## The protocol client (`RemoteDebuggerClient`)
 
@@ -79,8 +82,8 @@ frees the blobs. `Invoke(iid, slot, arguments)` is one request; the helpers `Inv
 `InvokeBool`, `InvokeObject<T>` and `InvokeText` cover the common shapes, and `NotProxied` answers `E_NOTIMPL` with a
 log line. `InvokeObject<T>` sends the probes of `T`; `FillProxies` makes the proxies of an out array. A blob the callee
 pointed into its own memory (a signature, a custom attribute, a constant) is copied into memory the proxy keeps for as
-long as it lives (`KeepBlob`), the way the callee keeps its own. A lost connection reads as
-`CORDBG_E_PROCESS_TERMINATED`.
+long as it lives (`KeepBlob`), the way the callee keeps its own; the same bytes are kept once, however often they are
+asked for. A lost connection reads as `CORDBG_E_PROCESS_TERMINATED`.
 
 What cannot change is asked once. The generator writes a remembering getter for the methods listed in
 `Generator/ImmutableResults.cs` (a type's element type, class, base, rank and first parameter; a class's and a
@@ -95,7 +98,7 @@ page of 50 locals from 4.4 to 3.0 seconds; what remains is mostly the function e
 Names are asked for twice by the engine, once for the length and once with a buffer of that length. A call with a text
 buffer of capacity zero goes out with a buffer of 1024 characters instead, and its whole response is kept by the call
 (slot and in-arguments); the second call, and any repeat, is answered from it without a round trip as long as the
-name fit. A longer name is asked for again with the right buffer.
+name fit. A longer name is asked for again with the right buffer, and so is a call that failed.
 
 ## The proxies (`Proxy/`)
 

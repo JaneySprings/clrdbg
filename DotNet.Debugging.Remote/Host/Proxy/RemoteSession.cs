@@ -9,6 +9,9 @@ namespace DotNet.Debugging.Remote.Proxy;
 // which of the kind-telling interfaces it has, and the proxy class exposes exactly those. An object that arrives
 // without that answer (the argument of a callback) is asked about in a Query first
 public partial class RemoteSession {
+    // How often the wait for a held Continue looks whether the connection is still there
+    private const int ConnectionCheckMilliseconds = 250;
+
     private static readonly Guid[] valueProbe = [Iids.GenericValue, Iids.ReferenceValue, Iids.HandleValue, Iids.HeapValue, Iids.ObjectValue, Iids.StringValue, Iids.ArrayValue, Iids.BoxValue, Iids.ExceptionObjectValue, Iids.DelegateObjectValue];
     private static readonly Guid[] frameProbe = [Iids.ILFrame, Iids.NativeFrame, Iids.InternalFrame, Iids.RuntimeUnwindableFrame];
     private static readonly HashSet<Type> valueInterfaces = [
@@ -155,9 +158,14 @@ public partial class RemoteSession {
         heldContinues.Release();
         return true;
     }
-    // Waits for the debugger to be done with the replayed callback it was handed, which it shows by continuing
-    public bool WaitForHeldContinue(TimeSpan timeout) {
-        return heldContinues.Wait(timeout);
+    // Waits for the debugger to be done with the replayed callback it was handed, which it shows by continuing;
+    // false when the connection went before it did
+    public bool WaitForHeldContinue() {
+        while (!heldContinues.Wait(ConnectionCheckMilliseconds)) {
+            if (Client.IsLost)
+                return false;
+        }
+        return true;
     }
 
     internal void Release(uint handle, uint count) {

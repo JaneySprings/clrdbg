@@ -13,9 +13,6 @@ namespace DotNet.Debugging.Remote;
 // rebuilt from the process (ReplayAttach)
 [GeneratedComClass]
 public partial class RemoteCorDebug : ICorDebug {
-    // How long a replayed callback waits for the debugger to continue before the next one goes out
-    private static readonly TimeSpan ReplayStepTimeout = TimeSpan.FromSeconds(10);
-
     private readonly string address;
     private readonly int port;
     private readonly bool isServer;
@@ -201,15 +198,18 @@ public partial class RemoteCorDebug : ICorDebug {
                 Replay(current, () => callback.TryLoadModule(domain, module), "LoadModule");
         }
     }
-    // One replayed callback: handed to the debugger, then waited for until the debugger continues
+    // One replayed callback: handed to the debugger, then waited for until the debugger continues. The debugger takes
+    // what it takes (the symbols of a module may come from a server): a replay that went on without its Continue would
+    // release the process ahead of it and let that Continue through to the agent later, where no stop is left for it.
+    // Only a lost connection ends the wait, and the replay with it
     private static void Replay(RemoteSession current, Func<int> deliver, string name) {
         var result = deliver();
         if (result != Cor.S_OK) {
             HostLog.Write($"the debugger failed the replayed {name}: 0x{result:X8}");
             return;
         }
-        if (!current.WaitForHeldContinue(ReplayStepTimeout))
-            HostLog.Write($"the debugger did not continue after the replayed {name}");
+        if (!current.WaitForHeldContinue())
+            throw new IOException($"The agent connection was lost before the debugger continued the replayed {name}");
     }
     private delegate int NextFunc<TEnum, TItem>(TEnum enumerator, uint count, TItem[] items, out uint fetched);
     // Everything an enumerator has; a page shorter than asked comes back with S_FALSE, which is not a failure

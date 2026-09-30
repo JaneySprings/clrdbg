@@ -50,8 +50,15 @@ public static class AppleSdkLocator {
         var dotnetPacksPath = Path.Combine(MSBuildLocator.GetRootDirectory(), "packs");
         var sdkPaths = Directory.GetDirectories(dotnetPacksPath, "Microsoft.iOS.Sdk.net*");
 
-        if (sdkPaths.Length > 0)
-            sdkPath = sdkPaths.OrderByDescending(x => Path.GetFileName(x)).First();
+        if (sdkPaths.Length > 0) {
+            sdkPath = sdkPaths.MaxBy(p => {
+                var sdkParts = Path.GetFileName(p).Split('_', StringSplitOptions.RemoveEmptyEntries);
+                if (sdkParts.Length == 0)
+                    return -1.0;
+
+                return double.TryParse(sdkParts.Last(), out var version) ? version : -1.0;
+            });
+        }
         if (string.IsNullOrEmpty(sdkPath))
             sdkPath = Path.Combine(dotnetPacksPath, "Microsoft.iOS.Sdk");
         if (!Directory.Exists(sdkPath))

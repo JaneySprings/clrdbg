@@ -56,6 +56,20 @@ public class ProcessEventTests : BaseDebugTestFixture {
         Assert.That(() => System.Diagnostics.Process.GetProcessById(reported.SystemProcessId!.Value), Throws.Nothing);
     }
 
+    [Test]
+    public void AttachReportsTheProcessItAttachedToTest() {
+        using var debuggee = StartDebuggee();
+
+        Attach(debuggee.Id);
+        ConfigurationDone();
+        WaitForFirstThread();
+
+        var reported = WaitForEvent<ProcessEvent>();
+
+        Assert.That(reported.SystemProcessId, Is.EqualTo(debuggee.Id));
+        Assert.That(reported.StartMethod, Is.EqualTo(ProcessEvent.StartMethodValue.Attach));
+    }
+
     // Read from the retained events rather than the queue: what the program prints and the event
     // naming it arrive in either order
     private int PrintedProcessId() {

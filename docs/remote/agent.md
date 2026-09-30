@@ -55,7 +55,9 @@ it connects out to the address, retrying every 250 ms for 30 seconds. Then, with
 `ICorDebug::DebugActiveProcess(getpid(), FALSE)`: the runtime's debugging library attaches to the process it lives in,
 and the callbacks of the attach start on its own event thread. Without a host every callback is continued at once.
 With one, the agent thread serves the host's requests until the connection drops; an app that listens then waits for
-the next host, forever.
+the next host, forever. The hosts are numbered as they connect, which tells one from the next: the number of a socket
+does not, a closed one's goes to the next connection. A write to the host that fails shuts the socket down and
+forgets the host; the socket itself is closed by the agent thread alone, once its read has ended.
 
 The threads of the library never enter the runtime: the profiler callback thread starts a pthread and returns, the
 agent thread and the debugger's event thread run native code only, so the debugger's suspension never catches them.

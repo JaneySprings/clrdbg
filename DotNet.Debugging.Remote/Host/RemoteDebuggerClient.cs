@@ -30,6 +30,8 @@ public class RemoteDebuggerClient : IDisposable {
     // Set once the connection is gone: a request made after that fails at once instead of waiting for an answer
     private volatile bool lost;
 
+    public bool IsLost => lost;
+
     public event Action<RemoteCallbackEvent>? CallbackReceived {
         add {
             callbackReceived += value;

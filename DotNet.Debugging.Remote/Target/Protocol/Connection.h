@@ -5,9 +5,11 @@
 // The TCP connection to the host debugger, one at a time: the app listens for it or connects out to it, and frames
 // go both ways as docs/remote/protocol.md says
 bool HostConnected();
-// The socket of the connected host, -1 without one: tells one host's connection from the next one's
+// The number of the connected host, counted from 1 as they connect, -1 without one: tells one host's connection from
+// the next one's
 int CurrentHost();
-// Sends a frame to the connected host; false when no host is connected or the write failed (the host is dropped then)
+// Sends a frame to the connected host; false when no host is connected or the write failed (the host is dropped then,
+// its socket is left for CloseHost to close)
 bool SendFrame(uint8_t kind, uint32_t sequence, const ByteWriter& body);
 void SendResponse(uint32_t sequence, HRESULT hr, const ByteWriter& result);
 // Reads the next frame's body (the bytes after the length); false when the host is gone or the frame is malformed

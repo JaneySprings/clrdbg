@@ -7,8 +7,8 @@
 
 // https://learn.microsoft.com/dotnet/core/unmanaged-api/debugging/icordebug/icordebugcontroller-continue-method
 static const int ICorDebugController_Continue = 4;
-// The process and the host connection (a socket) its CreateProcess callback was reported to, -1 for none; the callback
-// thread writes them, the agent thread reads them for Hello
+// The process and the host connection (its number) its CreateProcess callback was reported to, -1 for none; the
+// callback thread writes them, the agent thread reads them for Hello
 static std::mutex processLock;
 static void* debuggedProcess = NULL;
 static int attachHost = -1;

@@ -250,6 +250,8 @@ static void WriteResult(ByteWriter& result, CallArgument& arg, bool succeeded) {
             break;
         }
         case Arg_OutBytes:
+            if (!succeeded)
+                memset(arg.bytes.data(), 0, arg.bytes.size());
             result.WriteUInt32(arg.count);
             result.WriteBytes(arg.bytes.data(), arg.count);
             break;
@@ -259,6 +261,8 @@ static void WriteResult(ByteWriter& result, CallArgument& arg, bool succeeded) {
                 WriteObject(result, arg.objects[i], arg.probes, succeeded);
             break;
         case Arg_OutGuid:
+            if (!succeeded)
+                memset(&arg.guid, 0, sizeof(GUID));
             result.WriteBytes(&arg.guid, sizeof(GUID));
             break;
         case Arg_OutBlob: {

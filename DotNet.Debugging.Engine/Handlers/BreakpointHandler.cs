@@ -130,7 +130,7 @@ public partial class ManagedDebugger {
     private bool TryHandleEntryPointBreakpoint(ICorDebugThread thread, ICorDebugFunctionBreakpoint functionBreakpoint) {
         if (entryPointBreakpoint == null)
             return false;
-        if (functionBreakpoint != entryPointBreakpoint && breakpointManager.FindByCorBreakpoint(functionBreakpoint) != null)
+        if (functionBreakpoint != entryPointBreakpoint && breakpointManager.FindByCorBreakpoint(functionBreakpoint).Count > 0)
             return false;
 
         ClearEntryPointBreakpoint();

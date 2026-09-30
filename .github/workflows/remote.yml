@@ -22,8 +22,8 @@ jobs:
 
       - name: Build RemoteCoreClrTarget
         run: |
-          DotNet.Debugging.Remote/Target/build-apple.sh
-          DotNet.Debugging.Remote/Target/build-android.sh
+          DotNet.Debugging.Remote/Target/build-apple.sh ${{ inputs.enable_trace && '--enable-trace' || '' }}
+          DotNet.Debugging.Remote/Target/build-android.sh ${{ inputs.enable_trace && '--enable-trace' || '' }}
       
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

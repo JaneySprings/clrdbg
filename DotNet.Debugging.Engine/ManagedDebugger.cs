@@ -137,6 +137,7 @@ public partial class ManagedDebugger {
     public async Task AttachAsync(int processId) {
         EnsureNotStarted();
         await AttachToProcessAsync(processId, launchRequest: null);
+        OnProcessStarted?.Invoke(processId);
     }
     // The transport is set up first, 'onListenerReady' then lets the host launch the on-device app so it can connect back,
     // and the attach is initiated last
@@ -567,15 +568,16 @@ public partial class ManagedDebugger {
         var attachTask = DbgShimHost.AttachAsync(processId, target => AttachToRuntime(target, processId), attachCancellation.Token);
         try {
             if (launchRequest == null) {
-                await DiagnosticsClientHelper.ResumeRuntimeAsync(processId);
+                // Not awaited. A running attach target does not need the resume, and its diagnostics server may not answer it
+                // until the attach is continued: another client's session (dotnet-counters) enabling managed EventSources on the
+                // server thread is parked by this very attach. Waiting for the resume would hold the lock the attach events are
+                // continued under. A parked target has no startup to report until it is resumed, so the attach waits for it anyway
+                _ = ResumeAttachTargetAsync(processId);
             }
             else {
                 launchRequest.Environment.TryGetValue(DiagnosticPortSuspendVariable, out var configuredValue);
                 await DiagnosticsClientHelper.ResumeLaunchedRuntimeAsync(processId, configuredValue);
             }
-        }
-        catch (Exception ex) when (launchRequest == null) {
-            DebuggerLoggingService.LogMessage($"Failed to resume the runtime of the attach target (already running?): {ex.Message}");
         }
         catch {
             // The runtime stays parked and its startup never comes: the registration is withdrawn, or it would
@@ -592,6 +594,14 @@ public partial class ManagedDebugger {
         await attachTask;
         DebuggerLoggingService.LogMessage($"Attached to process: {processId}");
         ProcessId = processId;
+    }
+    private static async Task ResumeAttachTargetAsync(int processId) {
+        try {
+            await DiagnosticsClientHelper.ResumeRuntimeAsync(processId);
+        }
+        catch (Exception ex) {
+            DebuggerLoggingService.LogMessage($"Failed to resume the runtime of the attach target (already running?): {ex.Message}");
+        }
     }
     // Runs inside dbgshim's runtime startup callback, while the debuggee's runtime is still parked in its startup handshake
     private void AttachToRuntime(ICorDebug target, int processId) {
