@@ -1,0 +1,68 @@
+name: CodeQL
+
+permissions:
+  contents: read
+  security-events: write
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+env:
+  DOTNET_VERSION: '10.x'
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: actions
+            os: ubuntu-latest
+            build-mode: none
+          - language: csharp
+            os: ubuntu-latest
+            build-mode: manual
+          - language: c-cpp
+            os: macos-latest
+            build-mode: manual
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        if: matrix.language == 'csharp'
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+          # dotnet-quality: preview
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Build solution
+        if: matrix.language == 'csharp'
+        run: dotnet build clrdbg.slnx -c Release
+
+      - name: Build RemoteCoreClrTarget
+        if: matrix.language == 'c-cpp'
+        run: |
+          DotNet.Debugging.Remote/Target/build-apple.sh maccatalyst-arm64
+          DotNet.Debugging.Remote/Target/build-android.sh arm64-v8a
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:${{ matrix.language }}

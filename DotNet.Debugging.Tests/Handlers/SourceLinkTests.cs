@@ -124,9 +124,11 @@ public class SourceLinkTests : BaseDebugTestFixture {
         listener.BeginGetContext(OnRequest, null);
 
         Interlocked.Increment(ref servedRequests);
-        var filePath = Path.Combine(ProjectDirectory, context.Request.Url!.AbsolutePath.TrimStart('/'));
-        var content = File.Exists(filePath) ? File.ReadAllBytes(filePath) : Encoding.UTF8.GetBytes("not found");
-        context.Response.StatusCode = File.Exists(filePath) ? 200 : 404;
+        // The request only picks one of the project's own files by its name, a path is never made out of it
+        var fileName = context.Request.Url!.AbsolutePath.TrimStart('/');
+        var filePath = Directory.EnumerateFiles(ProjectDirectory).FirstOrDefault(it => Path.GetFileName(it) == fileName);
+        var content = filePath != null ? File.ReadAllBytes(filePath) : Encoding.UTF8.GetBytes("not found");
+        context.Response.StatusCode = filePath != null ? 200 : 404;
         context.Response.ContentLength64 = content.Length;
         context.Response.OutputStream.Write(content);
         context.Response.Close();
