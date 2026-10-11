@@ -33,6 +33,7 @@ public static class DebuggerExtensions {
         return breakpoint.Status switch {
             BreakpointStatus.Unbound => breakpoint.IsFunctionBreakpoint ? string.Format(Resources.MsgFunctionBreakpointUnbound, breakpoint.FunctionName) : Resources.MsgBreakpointUnbound,
             BreakpointStatus.SourceMismatch => Resources.MsgBreakpointSourceMismatch,
+            BreakpointStatus.NoCode => Resources.MsgBreakpointNoCode,
             BreakpointStatus.Error => string.Format(Resources.MsgBreakpointError, breakpoint.Error),
             _ => null
         };

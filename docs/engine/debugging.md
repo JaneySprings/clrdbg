@@ -74,11 +74,15 @@ behind them are gone once the debuggee runs (`ClearReferences`), and tolerates
 
 `SetBreakpoints(file, requests)` replaces the file's breakpoints; `SetFunctionBreakpoints` replaces
 all function breakpoints. Binding (`BreakpointManager.TryBind`) asks every module with symbols to
-`ResolveBreakpoint(file, line, column, requireExactSource, out sourceMismatch)`:
+`ResolveBreakpoint(file, line, column, sourceFileMapper, requireExactSource, out status)`, and binds
+it in every module that resolves it (a file compiled into several modules is hit in each):
 
-- `ModuleMetadataReader.FindDocument` matches the document by full path first, then by file name
-  (PDBs built elsewhere) — a file-name match whose checksum differs from the local file is rejected
-  with `RequireExactSource` (the default) and reported as `BreakpointStatus.SourceMismatch`;
+- `ModuleMetadataReader.FindDocument` matches the document by full path first (the document's path
+  translated through `ManagedDebugger.SourceFileMap`, the `sourceFileMap` of the launch configuration), then
+  by file name (PDBs built elsewhere) — with `RequireExactSource` (the default) a document whose
+  checksum differs from the client's file (edited since the build, another project's same-named
+  file) is passed over and reported as `BreakpointStatus.SourceMismatch`; a document without code at
+  the line is `BreakpointStatus.NoCode`;
 - `SequencePointResolver` picks the sequence point: the one covering the position with the latest
   start (which naturally selects the innermost lambda), netcoredbg's containment rule when several
   start at the same position, and the next line with code when none covers it;

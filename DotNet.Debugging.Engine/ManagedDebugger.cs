@@ -9,6 +9,7 @@ using DotNet.Debugging.Engine.Evaluation;
 using DotNet.Debugging.Engine.Extensions;
 using DotNet.Debugging.Engine.Interop;
 using DotNet.Debugging.Engine.Logging;
+using DotNet.Debugging.Engine.Metadata;
 using DotNet.Debugging.Engine.Models;
 using DotNet.Debugging.Engine.Stepping;
 using DotNet.Debugging.Engine.Variables;
@@ -55,10 +56,17 @@ public partial class ManagedDebugger {
     private int? mainThreadId;
     private int? oldestThreadId;
     private int nextModuleId;
+    private SourceFileMapper sourceFileMapper;
 
     public bool JustMyCode { get; set; } = true;
     // A source file matched by name alone (PDBs built from a different location) must also match the PDB's content checksum
     public bool RequireExactSource { get; set; } = true;
+    // 'sourceFileMap': where the client has the sources of a module built elsewhere, keyed by the compile-time directory
+    // its PDB document paths start with. Applied when a breakpoint's file is looked up, and by 'MapDocumentPath'
+    public IReadOnlyDictionary<string, string> SourceFileMap {
+        get => sourceFileMapper.Map;
+        set => sourceFileMapper = new SourceFileMapper(value);
+    }
     // 'Step over properties and operators': a step never stops inside an accessor or an operator method
     public bool EnableStepFiltering { get; set; } = true;
     // Whether ICorDebug reports the debuggee as executing. A state that cannot be read counts as not running
@@ -101,6 +109,7 @@ public partial class ManagedDebugger {
         exceptionModules = new Dictionary<int, string?>();
         exceptionAddresses = new Dictionary<int, ulong>();
         breakpointManager = new BreakpointManager();
+        sourceFileMapper = new SourceFileMapper(new Dictionary<string, string>());
         variableManager = new VariableManager();
         variableProvider = new VariableProvider(this, variableManager);
         frameReferenceManager = new FrameReferenceManager();
@@ -250,7 +259,7 @@ public partial class ManagedDebugger {
 
     public List<Breakpoint> SetBreakpoints(string filePath, List<BreakpointRequest> requests) {
         DebuggerLoggingService.LogMessage($"SetBreakpoints: {filePath}, lines: {string.Join(", ", requests.Select(it => it.Line))}");
-        return breakpointManager.SetBreakpoints(filePath, requests, Modules, RequireExactSource);
+        return breakpointManager.SetBreakpoints(filePath, requests, Modules, sourceFileMapper, RequireExactSource);
     }
     public List<Breakpoint> SetFunctionBreakpoints(List<FunctionBreakpointRequest> requests) {
         DebuggerLoggingService.LogMessage($"SetFunctionBreakpoints: {string.Join(", ", requests.Select(it => it.Name))}");
@@ -369,7 +378,7 @@ public partial class ManagedDebugger {
 
         var function = frame.GetFunction();
         var module = GetModule(function.GetModule());
-        var resolved = module.MetadataReader.ResolveBreakpoint(filePath, line, null, RequireExactSource, out _)
+        var resolved = module.MetadataReader.ResolveBreakpoint(filePath, line, null, sourceFileMapper, RequireExactSource, out _)
             ?? throw new InvalidOperationException($"No executable code found at {Path.GetFileName(filePath)}:{line}");
         if (resolved.MethodToken != function.GetToken())
             throw new InvalidOperationException("The next statement must be within the current method");
@@ -382,6 +391,12 @@ public partial class ManagedDebugger {
         }
         // Frames and values are neutered by SetIP
         ClearReferences();
+    }
+
+    // The client's path of a document: 'SourceLocation.FilePath' is the path recorded in the PDB, this is where the
+    // client has the file by 'SourceFileMap'. Reads no debuggee state, so any thread may call it
+    public string MapDocumentPath(string documentPath) {
+        return sourceFileMapper.ToLocalPath(documentPath);
     }
 
     // Threads come from the 'CreateThread' callbacks rather than 'ICorDebugProcess.GetThread', which the remote (mobile) transport does not implement

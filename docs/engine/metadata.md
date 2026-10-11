@@ -47,7 +47,7 @@ keyed by it, as a new module changes what an expression may bind to.
 | Method | Reads | Used by |
 |---|---|---|
 | `GetSourceLocation(methodToken, ilOffset)` | The non-hidden sequence point at the offset, or the closest one before it (the IP at a return is past the last point). Returns a `SourceLocation` with the document path, span, checksum and Source Link URL. | Stack frames, stop locations, step completion. |
-| `ResolveBreakpoint(filePath, line, column, requireExactSource, out sourceMismatch)` | The document (exact path, then file name — see below) and `SequencePointResolver`'s choice among its methods' sequence points — see [breakpoints.md](breakpoints.md). | Breakpoint binding, `SetNextStatement`. |
+| `ResolveBreakpoint(filePath, line, column, sourceFileMapper, requireExactSource, out status)` | The document (exact path through the source file map, then file name — see below) and `SequencePointResolver`'s choice among its methods' sequence points; `status` explains a null (`Unbound`: no document, `SourceMismatch`: content differs, `NoCode`: nothing at the line) — see [breakpoints.md](breakpoints.md). | Breakpoint binding, `SetNextStatement`. |
 | `ResolveMethodEntry(methodToken)` | The method's first non-hidden sequence point. | Function breakpoints, `stopAtEntry`. |
 | `GetEntryPointToken()` | `CorHeader.EntryPointTokenOrRelativeVirtualAddress` when it is a MethodDef and not a native entry point. | `stopAtEntry`. |
 | `GetMethodsWithoutSequencePoints()`, `GetMethodsMarkedNonUserCode()` | The methods Just My Code marks non-user per method: those the PDB has no sequence points for, and those `[DebuggerNonUserCode]`, `[DebuggerStepThrough]` or `[DebuggerHidden]` applies to, directly or through their type (the PE custom attribute table, attribute types resolved by `GetAttributeTypeName`). | Module load under `JustMyCode`. |
@@ -59,15 +59,22 @@ keyed by it, as a new module changes what an expression may bind to.
 | `GetAssemblyVersion()` | The assembly definition. | `ModuleInfo.Version`. |
 | `PeMetadataReader`, `PdbMetadataReader`, `Mvid` | The raw readers. | The expression compiler and resolver, function breakpoints, frame signatures. |
 
-Document hashes — SHA-1 (`ff1816ec-…`) or SHA-256 (`8829d00f-…`), other algorithms never match — are
-compared with the local file's content when a document is matched by file name alone.
-
-Paths are compared with `\` normalized to `/` and case-insensitively; a PDB built on another machine
-(or with `PathMap`) still finds its documents by file name. A file-name match whose checksum equals
-the local file's counts as exact; one whose content differs is accepted only with
-`ManagedDebugger.RequireExactSource` off (it defaults to on), because any module with an equally named
-source would capture the breakpoint otherwise — with it on, such a rejected match is reported through
-`sourceMismatch`, which becomes `BreakpointStatus.SourceMismatch`.
+Paths are compared with `\` normalized to `/` and case-insensitively, after the document's path is
+translated by the `SourceFileMapper` (`ManagedDebugger.SourceFileMap`, the launch configuration's
+`sourceFileMap`: the compile-time directory of a PDB built on another machine or with `PathMap` →
+where the client has the sources; a document no entry applies to keeps its path, so a locally built
+module is unaffected by entries meant for others). A PDB built
+elsewhere without a map entry still finds its documents by file name (`DocumentMatchKind.Path` /
+`Name`). With `ManagedDebugger.RequireExactSource` on (it defaults to on) the document must hold the
+content of the client's file: its hash — SHA-1 (`ff1816ec-…`) or SHA-256 (`8829d00f-…`); a document
+without one, or with another algorithm, or whose file is not on disk (the client sees it through Source
+Link), passes by path only — is compared with the file's. A document
+that differs is passed over (the file was edited since the build, or another project has an equally
+named file) and reported as `BreakpointStatus.SourceMismatch` when nothing else resolves the file; with
+the option off the breakpoint binds to the differing document. A document without code at or after
+the line is `BreakpointStatus.NoCode`. `BreakpointManager` binds the breakpoint in every module whose
+document resolves. The reverse direction is `ManagedDebugger.MapDocumentPath`: a reported
+`SourceLocation.FilePath` is the PDB's document path, the host shows the client's.
 
 ## Source Link
 

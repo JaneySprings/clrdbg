@@ -2,6 +2,7 @@ using DotNet.Debugging.CorApi;
 using DotNet.Debugging.CorApi.Extensions;
 using DotNet.Debugging.Engine.Enums;
 using DotNet.Debugging.Engine.Logging;
+using DotNet.Debugging.Engine.Metadata;
 using DotNet.Debugging.Engine.Models;
 
 namespace DotNet.Debugging.Engine.Breakpoints;
@@ -14,7 +15,7 @@ internal class BreakpointManager {
     public IEnumerable<Breakpoint> Breakpoints => breakpoints.Values;
 
     // Replaces the breakpoints of a file. What the loaded modules cannot bind stays unbound until a module loads
-    public List<Breakpoint> SetBreakpoints(string filePath, List<BreakpointRequest> requests, IReadOnlyCollection<ModuleInfo> modules, bool requireExactSource) {
+    public List<Breakpoint> SetBreakpoints(string filePath, List<BreakpointRequest> requests, IReadOnlyCollection<ModuleInfo> modules, SourceFileMapper sourceFileMapper, bool requireExactSource) {
         foreach (var existing in breakpoints.Values.Where(it => !it.IsFunctionBreakpoint && it.FilePath == filePath).ToList()) {
             Deactivate(existing);
             breakpoints.Remove(existing.Id);
@@ -24,7 +25,7 @@ internal class BreakpointManager {
         foreach (var request in requests) {
             var breakpoint = new Breakpoint(nextId++, filePath, request);
             breakpoints[breakpoint.Id] = breakpoint;
-            TryBind(breakpoint, modules, requireExactSource);
+            TryBind(breakpoint, modules, sourceFileMapper, requireExactSource);
             result.Add(breakpoint);
         }
         return result;
@@ -58,8 +59,9 @@ internal class BreakpointManager {
     public List<Breakpoint> FindByCorBreakpoint(ICorDebugFunctionBreakpoint corBreakpoint) {
         return breakpoints.Values.Where(it => it.Bindings.Any(binding => binding.CorBreakpoint == corBreakpoint)).ToList();
     }
-    // Binds what the newly loaded module can resolve, returns the breakpoints whose reported status changed
-    public List<Breakpoint> BindPending(ModuleInfo module, bool requireExactSource) {
+    // Binds what the newly loaded module can resolve - a bound breakpoint too, when the module compiles its file as
+    // well - and returns the breakpoints whose reported state changed
+    public List<Breakpoint> BindPending(ModuleInfo module, SourceFileMapper sourceFileMapper, bool requireExactSource) {
         var changed = new List<Breakpoint>();
         if (!module.HasSymbols)
             return changed;
@@ -69,16 +71,7 @@ internal class BreakpointManager {
                 if (TryBindFunction(breakpoint, module))
                     changed.Add(breakpoint);
             }
-            else if (!breakpoint.Verified) {
-                var statusBefore = breakpoint.Status;
-                if (TryBind(breakpoint, [module], requireExactSource))
-                    changed.Add(breakpoint);
-                // An equally named source that did not match is reported too, a module without the document is not
-                else if (breakpoint.Status != statusBefore && breakpoint.Status == BreakpointStatus.SourceMismatch)
-                    changed.Add(breakpoint);
-            }
-            // A binding made by file name alone moves to a module whose document matches exactly
-            else if (!breakpoint.IsExactMatch && TryRebind(breakpoint, module, requireExactSource)) {
+            else if (TryBind(breakpoint, [module], sourceFileMapper, requireExactSource)) {
                 changed.Add(breakpoint);
             }
         }
@@ -91,69 +84,47 @@ internal class BreakpointManager {
         nextId = 1;
     }
 
-    private bool TryBind(Breakpoint breakpoint, IReadOnlyCollection<ModuleInfo> modules, bool requireExactSource) {
+    // Binds the breakpoint in every module that resolves its file and line: a file compiled into several modules
+    // (a linked file, an identical copy) is hit in each of them. Returns whether the reported state changed
+    private bool TryBind(Breakpoint breakpoint, IReadOnlyCollection<ModuleInfo> modules, SourceFileMapper sourceFileMapper, bool requireExactSource) {
+        var statusBefore = breakpoint.Status;
+        var locationBefore = breakpoint.Location;
+        var bindingsBefore = breakpoint.Bindings.Count;
+        var noCodeFound = false;
+        var sourceMismatchFound = false;
         try {
-            ModuleInfo? targetModule = null;
-            var sourceMismatchFound = false;
-            ResolvedBreakpoint? resolved = null;
             foreach (var module in modules) {
-                if (!module.HasSymbols)
+                if (!module.HasSymbols || breakpoint.Bindings.Any(it => it.Module == module.Module))
                     continue;
-                var candidate = module.MetadataReader.ResolveBreakpoint(breakpoint.FilePath!, breakpoint.RequestedLine, breakpoint.RequestedColumn, requireExactSource, out var sourceMismatch);
-                if (candidate == null) {
-                    sourceMismatchFound |= sourceMismatch;
+                var resolved = module.MetadataReader.ResolveBreakpoint(breakpoint.FilePath!, breakpoint.RequestedLine, breakpoint.RequestedColumn, sourceFileMapper, requireExactSource, out var status);
+                if (resolved == null) {
+                    noCodeFound |= status == BreakpointStatus.NoCode;
+                    sourceMismatchFound |= status == BreakpointStatus.SourceMismatch;
                     continue;
                 }
-                // The first match wins unless a later module matches the document exactly (path or content)
-                if (resolved == null || (candidate.IsExactMatch && !resolved.IsExactMatch)) {
-                    targetModule = module;
-                    resolved = candidate;
+                breakpoint.Bindings.Add(CreateBinding(module.Module, resolved));
+                // The breakpoint reports the document matched by path when a module has one, the first binding until then
+                if (breakpoint.Location == null || (resolved.MatchKind == DocumentMatchKind.Path && breakpoint.MatchKind != DocumentMatchKind.Path)) {
+                    breakpoint.Location = resolved.Location;
+                    breakpoint.MatchKind = resolved.MatchKind;
                 }
-                if (resolved.IsExactMatch)
-                    break;
+                breakpoint.SetStatus(BreakpointStatus.Bound);
+                DebuggerLoggingService.LogMessage($"Breakpoint {breakpoint.Id} bound at {resolved.Location.FilePath}:{breakpoint.Line} -> IL offset {resolved.ILOffset} in method 0x{resolved.MethodToken:X} of {module.Name}");
             }
-            if (targetModule == null || resolved == null) {
-                if (sourceMismatchFound)
+            // The document found without code at the line is the answer; a differing source is one only when no
+            // module has the file; a module without the document never clears what an earlier one reported
+            if (!breakpoint.Verified) {
+                if (noCodeFound)
+                    breakpoint.SetStatus(BreakpointStatus.NoCode);
+                else if (sourceMismatchFound && breakpoint.Status == BreakpointStatus.Unbound)
                     breakpoint.SetStatus(BreakpointStatus.SourceMismatch);
-                // A module without the document must not clear a mismatch reported by an earlier one
-                else if (breakpoint.Status != BreakpointStatus.SourceMismatch)
-                    breakpoint.SetStatus(BreakpointStatus.Unbound);
-                return false;
             }
-            Bind(breakpoint, targetModule, resolved);
-            return true;
         }
         catch (Exception ex) {
             DebuggerLoggingService.LogError($"Error binding breakpoint {breakpoint.Id} at {breakpoint.FilePath}:{breakpoint.Line}", ex);
             breakpoint.SetStatus(BreakpointStatus.Error, ex.Message);
-            return false;
         }
-    }
-    // Upgrades a binding made by file name alone once a module matching the document exactly loads.
-    // The loose binding stays active until then, so an already bound breakpoint keeps working
-    private bool TryRebind(Breakpoint breakpoint, ModuleInfo module, bool requireExactSource) {
-        try {
-            var resolved = module.MetadataReader.ResolveBreakpoint(breakpoint.FilePath!, breakpoint.RequestedLine, breakpoint.RequestedColumn, requireExactSource, out _);
-            if (resolved == null || !resolved.IsExactMatch)
-                return false;
-
-            Bind(breakpoint, module, resolved);
-            return true;
-        }
-        catch (Exception ex) {
-            DebuggerLoggingService.LogError($"Error rebinding breakpoint {breakpoint.Id} to {module.Name}", ex);
-            return false;
-        }
-    }
-    // A rebind replaces the previous loose binding rather than keeping both active
-    private void Bind(Breakpoint breakpoint, ModuleInfo module, ResolvedBreakpoint resolved) {
-        Deactivate(breakpoint);
-        breakpoint.Bindings.Clear();
-        breakpoint.Bindings.Add(CreateBinding(module.Module, resolved));
-        breakpoint.Location = resolved.Location;
-        breakpoint.IsExactMatch = resolved.IsExactMatch;
-        breakpoint.SetStatus(BreakpointStatus.Bound);
-        DebuggerLoggingService.LogMessage($"Breakpoint {breakpoint.Id} bound at {resolved.Location.FilePath}:{breakpoint.Line} -> IL offset {resolved.ILOffset} in method 0x{resolved.MethodToken:X}");
+        return breakpoint.Status != statusBefore || breakpoint.Location != locationBefore || breakpoint.Bindings.Count != bindingsBefore;
     }
     private bool TryBindFunction(Breakpoint breakpoint, ModuleInfo module) {
         try {

@@ -60,7 +60,7 @@ public partial class ManagedDebugger {
             evaluator = new ExpressionEvaluator(this, PrimitiveTypeClasses.Load(module.Module));
 
         OnModuleLoaded?.Invoke(module);
-        foreach (var breakpoint in breakpointManager.BindPending(module, RequireExactSource))
+        foreach (var breakpoint in breakpointManager.BindPending(module, sourceFileMapper, RequireExactSource))
             OnBreakpointChanged?.Invoke(breakpoint);
     }
     private void RefreshDynamicModule(ICorDebugModule corModule) {

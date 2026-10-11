@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using DotNet.Debugging.Engine.Enums;
 using DotNet.Debugging.Engine.Extensions;
 using DotNet.Debugging.Engine.Models;
 
@@ -171,20 +172,28 @@ internal sealed class ModuleMetadataReader : IDisposable {
         var document = match.Value.Document.IsNil ? debugInformation.Document : match.Value.Document;
         return CreateLocation(reader, document, match.Value);
     }
-    public ResolvedBreakpoint? ResolveBreakpoint(string filePath, int line, int? column, bool requireExactSource, out bool sourceMismatch) {
-        sourceMismatch = false;
+    // 'status' explains a null: no document for the file ('Unbound'), one whose content differs from the file
+    // ('SourceMismatch'), or no code at the line ('NoCode')
+    public ResolvedBreakpoint? ResolveBreakpoint(string filePath, int line, int? column, SourceFileMapper sourceFileMapper, bool requireExactSource, out BreakpointStatus status) {
+        status = BreakpointStatus.Unbound;
         var reader = PdbMetadataReader;
         if (reader == null)
             return null;
 
-        var documentHandle = FindDocument(reader, filePath, requireExactSource, out var exactMatch, out sourceMismatch);
-        if (documentHandle.IsNil)
+        var documentHandle = FindDocument(reader, filePath, sourceFileMapper, requireExactSource, out var matchKind, out var sourceMismatch);
+        if (documentHandle.IsNil) {
+            if (sourceMismatch)
+                status = BreakpointStatus.SourceMismatch;
             return null;
+        }
 
         var match = SequencePointResolver.Resolve(reader, documentHandle, line, column);
-        if (match == null)
+        if (match == null) {
+            status = BreakpointStatus.NoCode;
             return null;
-        return new ResolvedBreakpoint(match.MethodToken, match.Point.Offset, CreateLocation(reader, documentHandle, match.Point), exactMatch);
+        }
+        status = BreakpointStatus.Bound;
+        return new ResolvedBreakpoint(match.MethodToken, match.Point.Offset, CreateLocation(reader, documentHandle, match.Point), matchKind);
     }
     public ResolvedBreakpoint? ResolveMethodEntry(int methodToken) {
         var reader = PdbMetadataReader;
@@ -204,7 +213,7 @@ internal sealed class ModuleMetadataReader : IDisposable {
             var document = point.Document.IsNil ? debugInformation.Document : point.Document;
             if (document.IsNil)
                 return null;
-            return new ResolvedBreakpoint(methodToken, point.Offset, CreateLocation(reader, document, point), isExactMatch: true);
+            return new ResolvedBreakpoint(methodToken, point.Offset, CreateLocation(reader, document, point), DocumentMatchKind.Path);
         }
         return null;
     }
@@ -529,59 +538,60 @@ internal sealed class ModuleMetadataReader : IDisposable {
         return null;
     }
 
-    // An exact path match wins, a file name match handles PDBs built from a different location. A file name
-    // match whose content hash equals the PDB's counts as exact; an unverified one is allowed only without
-    // 'requireExactSource', because any module with an equally named source captures the breakpoint otherwise.
-    // 'sourceMismatch' reports that only such a rejected name match was found
-    private static DocumentHandle FindDocument(MetadataReader reader, string filePath, bool requireExactSource, out bool exactMatch, out bool sourceMismatch) {
-        exactMatch = false;
-        sourceMismatch = false;
+    // The document whose map-translated path is the file's, else an equally named one (a PDB built from a location
+    // the map does not cover). With 'requireExactSource' it must hold the file's content by the PDB's hash: a
+    // differing one is passed over (the file was edited since the build, or another project has one of the same
+    // name) and reported through 'sourceMismatch' when nothing else matches
+    private static DocumentHandle FindDocument(MetadataReader reader, string filePath, SourceFileMapper sourceFileMapper, bool requireExactSource, out DocumentMatchKind matchKind, out bool sourceMismatch) {
         var normalizedPath = filePath.NormalizePathSeparators();
         var fileName = Path.GetFileName(normalizedPath);
-        var fileNameMatch = default(DocumentHandle);
-        var fileNameMatchVerified = false;
-        var mismatchFound = false;
+        var match = default(DocumentHandle);
+        matchKind = DocumentMatchKind.Name;
+        sourceMismatch = false;
         foreach (var handle in reader.Documents) {
-            var documentPath = reader.GetString(reader.GetDocument(handle).Name).NormalizePathSeparators();
-            if (string.Equals(documentPath, normalizedPath, ExactPathComparison)) {
-                exactMatch = true;
-                return handle;
-            }
-            if (fileNameMatchVerified || !string.Equals(Path.GetFileName(documentPath), fileName, StringComparison.OrdinalIgnoreCase))
+            var documentName = reader.GetString(reader.GetDocument(handle).Name);
+            var documentPath = sourceFileMapper.ToLocalPath(documentName).NormalizePathSeparators();
+            DocumentMatchKind kind;
+            if (string.Equals(documentPath, normalizedPath, ExactPathComparison))
+                kind = DocumentMatchKind.Path;
+            else if (string.Equals(Path.GetFileName(documentPath), fileName, StringComparison.OrdinalIgnoreCase))
+                kind = DocumentMatchKind.Name;
+            else
                 continue;
-            if (ChecksumMatchesFile(reader, handle, filePath)) {
-                fileNameMatch = handle;
-                fileNameMatchVerified = true;
+            if (requireExactSource && !HoldsFileContent(reader, handle, filePath, kind)) {
+                sourceMismatch = true;
+                continue;
             }
-            else if (requireExactSource)
-                mismatchFound = true;
-            else if (fileNameMatch.IsNil)
-                fileNameMatch = handle;
+            // The document matched by path is the file itself, a name match stands in until one is found
+            if (match.IsNil || kind == DocumentMatchKind.Path) {
+                match = handle;
+                matchKind = kind;
+            }
+            if (kind == DocumentMatchKind.Path)
+                break;
         }
-        exactMatch = fileNameMatchVerified;
-        sourceMismatch = fileNameMatch.IsNil && mismatchFound;
-        return fileNameMatch;
+        sourceMismatch &= match.IsNil;
+        return match;
     }
-    private static bool ChecksumMatchesFile(MetadataReader reader, DocumentHandle handle, string filePath) {
+    // A document without a hash, or with one of an algorithm unknown here, or a file that is not there (the client
+    // sees it through Source Link) cannot be told apart: that passes when it is the file's own path, a merely
+    // equally named one does not
+    private static bool HoldsFileContent(MetadataReader reader, DocumentHandle handle, string filePath, DocumentMatchKind kind) {
         try {
-            if (!File.Exists(filePath))
-                return false;
             var document = reader.GetDocument(handle);
             var documentHash = reader.GetBlobBytes(document.Hash);
-            if (documentHash.Length == 0)
-                return false;
-
             var algorithmGuid = reader.GetGuid(document.HashAlgorithm);
+            if (documentHash.Length == 0 || (algorithmGuid != sha256AlgorithmGuid && algorithmGuid != sha1AlgorithmGuid) || !File.Exists(filePath))
+                return kind == DocumentMatchKind.Path;
+
             using var stream = File.OpenRead(filePath);
             byte[] fileHash;
             if (algorithmGuid == sha256AlgorithmGuid)
                 fileHash = SHA256.HashData(stream);
 #pragma warning disable CA5350 // The checksum algorithm is chosen by the compiler that produced the PDB
-            else if (algorithmGuid == sha1AlgorithmGuid)
+            else
                 fileHash = SHA1.HashData(stream);
 #pragma warning restore CA5350
-            else
-                return false;
             return fileHash.AsSpan().SequenceEqual(documentHash);
         }
         catch {

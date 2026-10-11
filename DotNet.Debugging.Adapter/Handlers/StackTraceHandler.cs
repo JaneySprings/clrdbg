@@ -10,7 +10,7 @@ public partial class DebugSession {
             var stackFrames = frames
                 .Skip(arguments.StartFrame ?? 0)
                 .Take(arguments.Levels ?? int.MaxValue)
-                .Select(it => it.ToStackFrame(sourceLinkResolver, sourceFileMapper))
+                .Select(it => it.ToStackFrame(sourceLinkResolver, session))
                 .ToList();
 
             return new StackTraceResponse(stackFrames) { TotalFrames = frames.Count };

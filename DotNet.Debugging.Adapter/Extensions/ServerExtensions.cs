@@ -1,5 +1,6 @@
 using DotNet.Debugging.Adapter.Symbols;
 using DotNet.Debugging.Common.Logging;
+using DotNet.Debugging.Engine;
 using DotNet.Debugging.Engine.Enums;
 using DotNet.Debugging.Engine.Models;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol;
@@ -87,8 +88,8 @@ public static class ServerExtensions {
         };
         return string.Format(format, typeName ?? "Exception", moduleName ?? "Unknown Module.");
     }
-    public static DebugProtocol.Source ToSource(this SourceLocation location, SourceLinkResolver sourceLinkResolver, SourceFileMapper sourceFileMapper) {
-        var filePath = sourceFileMapper.ToLocalPath(location.FilePath);
+    public static DebugProtocol.Source ToSource(this SourceLocation location, SourceLinkResolver sourceLinkResolver, ManagedDebugger debugger) {
+        var filePath = debugger.MapDocumentPath(location.FilePath);
         // The library pre-populates 'sources' and 'checksums' with empty lists
         var source = new DebugProtocol.Source {
             Name = Path.GetFileName(filePath),
@@ -113,7 +114,7 @@ public static class ServerExtensions {
             SymbolFilePath = module.HasSymbols ? module.SymbolFilePath : null,
         };
     }
-    public static DebugProtocol.Breakpoint ToBreakpoint(this Breakpoint breakpoint, SourceLinkResolver sourceLinkResolver, SourceFileMapper sourceFileMapper) {
+    public static DebugProtocol.Breakpoint ToBreakpoint(this Breakpoint breakpoint, SourceLinkResolver sourceLinkResolver, ManagedDebugger debugger) {
         var location = breakpoint.Location;
         return new DebugProtocol.Breakpoint() {
             Id = breakpoint.Id,
@@ -123,13 +124,13 @@ public static class ServerExtensions {
             Column = location?.Column,
             EndLine = location?.EndLine,
             EndColumn = location?.EndColumn,
-            Source = location?.ToSource(sourceLinkResolver, sourceFileMapper),
+            Source = location?.ToSource(sourceLinkResolver, debugger),
         };
     }
-    public static DebugProtocol.StackFrame ToStackFrame(this StackFrameInfo frame, SourceLinkResolver sourceLinkResolver, SourceFileMapper sourceFileMapper) {
+    public static DebugProtocol.StackFrame ToStackFrame(this StackFrameInfo frame, SourceLinkResolver sourceLinkResolver, ManagedDebugger debugger) {
         return new DebugProtocol.StackFrame() {
             Id = frame.Id,
-            Source = frame.Location?.ToSource(sourceLinkResolver, sourceFileMapper),
+            Source = frame.Location?.ToSource(sourceLinkResolver, debugger),
             Name = frame.ToDisplayName(),
             Line = frame.Location?.Line ?? 0,
             Column = frame.Location?.Column ?? 0,

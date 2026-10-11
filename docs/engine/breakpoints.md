@@ -15,10 +15,10 @@ condition, log message) or a `FunctionBreakpointRequest` (name, condition, hit c
 | `Id` | Session-unique, increasing. Replacing a file's breakpoints issues new ids. |
 | `FilePath` / `FunctionName` | One of the two is set; `IsFunctionBreakpoint` tells them apart. |
 | `Line`, `Column`, `EndLine`, `EndColumn` | The requested line until bound, the resolved statement span afterwards. |
-| `Status` | `Unbound` (no loaded module with symbols contains the location — or, for a function breakpoint, has a matching function — yet), `SourceMismatch` (a module has an equally named document whose content differs from the local file), `Bound`, `Error` (+ `Error` text). `Verified` is `Status == Bound`. |
-| `Location` | The bound `SourceLocation`: document path as in the PDB, span, Source Link URL — for a function breakpoint that of its first binding, which is what it reports. |
+| `Status` | `Unbound` (no loaded module with symbols contains the location — or, for a function breakpoint, has a matching function — yet), `SourceMismatch` (a module has the document, but its content differs from the local file: edited since the build, or another project's file of the same name), `NoCode` (a module has the document, but no code is associated with the line), `Bound`, `Error` (+ `Error` text). `Verified` is `Status == Bound`. |
+| `Location` | The bound `SourceLocation`: document path as in the PDB, span, Source Link URL — for a function breakpoint that of its first binding; for a source breakpoint bound in several modules the document matched by path when there is one (`MatchKind`, internal), the first binding otherwise. |
 | `HitCount` | Incremented on every hit, before the hit condition is checked. |
-| `Bindings` (internal) | The `BreakpointBinding`s behind it (runtime breakpoint, module, method, IL offset) — one for a source breakpoint, one per matching method for a function breakpoint. Breakpoints resolving to one location share a single runtime breakpoint, so the runtime reports the location once for all of them. `Line` is the bound line, the requested one until then. |
+| `Bindings` (internal) | The `BreakpointBinding`s behind it (runtime breakpoint, module, method, IL offset) — one per module compiling the file for a source breakpoint (a linked file, an identical copy in another project: the breakpoint is hit in each), one per matching method for a function breakpoint. Breakpoints resolving to one location share a single runtime breakpoint, so the runtime reports the location once for all of them. `Line` is the bound line, the requested one until then. |
 
 The status is the engine's statement of fact; the adapter turns it into a message the client shows
 with the unverified breakpoint (`Resources`, `DebuggerExtensions.ToStatusMessage`).
@@ -31,14 +31,22 @@ against the loaded modules at once (none before the launch, the breakpoint stays
 whenever a module loads (`BindPending(module)`), which is how breakpoints set before the launch bind as
 the debuggee starts.
 
-Binding a source breakpoint (`TryBind`) asks each module with symbols to resolve it:
+Binding a source breakpoint (`TryBind`) asks every module with symbols to resolve it, and binds it in
+each one that does — a file compiled into several modules (a linked `<Compile>`, a byte-identical copy
+in another project) is hit in each of them, as it is in vsdbg:
 
 1. `ModuleMetadataReader.FindDocument` looks the document up by full path (case-insensitive, `\`
-   normalized to `/`), falling back to a file-name match for PDBs built from another location. A
-   file-name match is verified against the PDB's document hash: one whose content matches counts as
-   exact, one that differs is rejected with `ManagedDebugger.RequireExactSource` on (the default) and
-   makes the breakpoint `SourceMismatch` when nothing else resolves it. A binding made by file name
-   alone is later moved to a module whose document matches exactly (`TryRebind`).
+   normalized to `/`): each document's path is translated through `ManagedDebugger.SourceFileMap`
+   (the launch configuration's `sourceFileMap`, compile-time directory → where the client has the
+   sources; a path no entry applies to stays as it is) and compared with the path the client sent. It
+   falls back to a file-name match for PDBs built from a location the map does not cover
+   (`DocumentMatchKind.Path` / `Name`). With `ManagedDebugger.RequireExactSource` on (the default) the
+   document must hold the content of the client's file, checked through the PDB's document hash: one
+   that differs is passed over — the file was edited since the build, or it is another project's file
+   of the same name — and makes the breakpoint `SourceMismatch` when no module resolves it; with it
+   off the breakpoint binds to the differing document. A document found without code at or after the
+   line makes the breakpoint `NoCode`. The breakpoint reports the document matched by path once a
+   module has one (the file the user set it in), the first binding until then.
 2. `SequencePointResolver.Resolve` chooses the sequence point (below). The debugger attributes
    (`[DebuggerHidden]`, `[DebuggerStepThrough]`, `[DebuggerNonUserCode]`) steer stepping and exception
    stops, not breakpoints: a method carrying one takes a breakpoint like any other.

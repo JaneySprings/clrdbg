@@ -24,6 +24,7 @@ public static class Resources {
     public const string MsgBreakpointUnbound = "The breakpoint is not bound yet: no loaded module with symbols contains this location.";
     public const string MsgFunctionBreakpointUnbound = "The breakpoint is not bound yet: no loaded module with symbols has a function matching '{0}'.";
     public const string MsgBreakpointSourceMismatch = "The breakpoint is not bound: the source file differs from the one the module was built from. Set 'requireExactSource' to false in the launch configuration to bind it anyway.";
+    public const string MsgBreakpointNoCode = "The breakpoint is not bound: no executable code is associated with this line.";
     public const string MsgBreakpointError = "The breakpoint could not be bound: {0}";
     public const string MsgBreakpointConditionFailed = "The breakpoint condition '{0}' could not be evaluated: {1}";
 

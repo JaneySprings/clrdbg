@@ -42,4 +42,26 @@ public class SourceFileMapTests : BaseDebugTestFixture {
         Assert.That(frame.Line, Is.EqualTo(GetMarkerLine("marker:first")));
         Assert.That(frame.Source?.Path, Is.EqualTo(movedPath));
     }
+
+    // A map entry for a build server that did not build this module (the PDB holds the local paths) must not get
+    // in the way: the client's path matches the documents directly
+    [Test]
+    public void UnrelatedMapEntryKeepsLocalPathsBindingTest() {
+        Launch(properties: new Dictionary<string, JToken> {
+            ["sourceFileMap"] = JToken.FromObject(new Dictionary<string, string> { ["D:\\BuildServer\\Src"] = ProjectDirectory }),
+        });
+        Host.SendRequestSync(new SetBreakpointsRequest() {
+            Source = new Source() { Path = ProgramFilePath },
+            Breakpoints = new List<SourceBreakpoint> { new SourceBreakpoint() { Line = GetMarkerLine("marker:first") } },
+        });
+        ConfigurationDone();
+
+        var bound = WaitForEvent<BreakpointEvent>(it => it.Breakpoint.Verified);
+        Assert.That(bound.Breakpoint.Source?.Path, Is.EqualTo(ProgramFilePath));
+
+        var stopped = WaitForStopped(StoppedEvent.ReasonValue.Breakpoint);
+        var frame = GetTopStackFrame(stopped.ThreadId!.Value);
+        Assert.That(frame.Line, Is.EqualTo(GetMarkerLine("marker:first")));
+        Assert.That(frame.Source?.Path, Is.EqualTo(ProgramFilePath));
+    }
 }

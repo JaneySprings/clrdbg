@@ -20,7 +20,6 @@ public partial class DebugSession : Session {
 
     private IDebugAgent debugAgent = null!;
     private SourceLinkResolver sourceLinkResolver = null!;
-    private SourceFileMapper sourceFileMapper = null!;
     private SymbolsResolver symbolsResolver = null!;
 
     public DebugSession(Stream input, Stream output) : base(input, output) {
@@ -102,7 +101,7 @@ public partial class DebugSession : Session {
         Protocol.SendEvent(new ModuleEvent(ModuleEvent.ReasonValue.New, module.ToModule(justMyCode)));
     }
     private void BreakpointStatusChanged(Breakpoint breakpoint) {
-        Protocol.SendEvent(new BreakpointEvent(BreakpointEvent.ReasonValue.Changed, breakpoint.ToBreakpoint(sourceLinkResolver, sourceFileMapper)));
+        Protocol.SendEvent(new BreakpointEvent(BreakpointEvent.ReasonValue.Changed, breakpoint.ToBreakpoint(sourceLinkResolver, session)));
     }
     private void TargetOutput(string output, bool isError) {
         // Print chunks directly, without trimming

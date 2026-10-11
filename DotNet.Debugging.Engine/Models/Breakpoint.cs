@@ -16,7 +16,8 @@ public class Breakpoint {
     // Details of a 'BreakpointStatus.Error'
     public string? Error { get; internal set; }
     public int HitCount { get; internal set; }
-    // Where the breakpoint is bound (a function breakpoint: its first binding), with the document's Source Link
+    // Where the breakpoint is bound (a function breakpoint, a file compiled into several modules: its first binding),
+    // with the document's Source Link
     public SourceLocation? Location { get; internal set; }
 
     public bool Verified => Status == BreakpointStatus.Bound;
@@ -24,10 +25,10 @@ public class Breakpoint {
     // The bound line, the requested one until then
     public int Line => Location?.Line ?? RequestedLine;
 
-    // One for a source breakpoint, one per matching method for a function breakpoint
+    // One per module compiling the file for a source breakpoint, one per matching method for a function breakpoint
     internal List<BreakpointBinding> Bindings { get; }
-    // A source breakpoint bound to a document matched by path or checksum rather than by file name alone
-    internal bool IsExactMatch { get; set; }
+    // How the document of 'Location' was matched: the one matched by path is reported once a module has it
+    internal DocumentMatchKind MatchKind { get; set; }
 
     public Breakpoint(int id, string filePath, BreakpointRequest request) {
         Id = id;

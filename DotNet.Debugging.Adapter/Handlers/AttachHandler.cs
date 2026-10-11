@@ -16,13 +16,13 @@ public partial class DebugSession {
                 DebuggerLoggingService.OnEngineMessage += OnDebugDataReceived;
 
             sourceLinkResolver = new SourceLinkResolver(configuration.SourceLinkOptions);
-            sourceFileMapper = new SourceFileMapper(configuration.SourceFileMap);
             symbolsResolver = new SymbolsResolver(configuration.SymbolOptions);
             debugAgent = configuration.CreateDebugAgent(this);
 
             InvokeDebugger(() => {
                 session.JustMyCode = configuration.JustMyCode;
                 session.RequireExactSource = configuration.RequireExactSource;
+                session.SourceFileMap = configuration.SourceFileMap;
                 session.EnableStepFiltering = configuration.EnableStepFiltering;
             });
             // Breakpoints arrive after this event, the attach itself is made on 'ConfigurationDone'

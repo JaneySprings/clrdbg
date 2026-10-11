@@ -1,35 +1,25 @@
-namespace DotNet.Debugging.Adapter.Symbols;
+namespace DotNet.Debugging.Engine.Metadata;
 
-public class SourceFileMapper {
-    private readonly Dictionary<string, string> map;
+internal class SourceFileMapper {
+    public IReadOnlyDictionary<string, string> Map { get; }
 
-    public SourceFileMapper(Dictionary<string, string> map) {
-        this.map = map;
-    }
-
-    // The path of a PDB document, translated for the client
-    public string ToLocalPath(string filePath) {
-        return Translate(filePath, useCompilerPrefix: true);
-    }
-    // A path sent by the client, translated to the compile-time form the PDB documents use
-    public string ToCompilerPath(string filePath) {
-        return Translate(filePath, useCompilerPrefix: false);
+    public SourceFileMapper(IReadOnlyDictionary<string, string> map) {
+        Map = map;
     }
 
     // The longest matching prefix wins, so a more specific entry beats a broader one
-    private string Translate(string filePath, bool useCompilerPrefix) {
+    public string ToLocalPath(string filePath) {
         var result = filePath;
         var matchLength = -1;
-        foreach (var entry in map) {
-            var prefix = useCompilerPrefix ? entry.Key : entry.Value;
-            var replacement = useCompilerPrefix ? entry.Value : entry.Key;
-            if (prefix.Length > matchLength && TryReplacePrefix(filePath, prefix, replacement, out var replaced)) {
+        foreach (var entry in Map) {
+            if (entry.Key.Length > matchLength && TryReplacePrefix(filePath, entry.Key, entry.Value, out var replaced)) {
                 result = replaced;
-                matchLength = prefix.Length;
+                matchLength = entry.Key.Length;
             }
         }
         return result;
     }
+
     // Replaces the 'prefix' part of the path by 'replacement'. The prefix must end on a directory
     // boundary, and separators do not have to agree: the rest of the path takes the separator flavor
     // of the replacement, so 'C:\src' -> '/home/src' turns 'C:\src\A.cs' into '/home/src/A.cs'
