@@ -11,10 +11,13 @@ public enum DebugTarget {
 
 public class LaunchSettings {
     [JsonPropertyName("profiles")]
-    public Dictionary<string, LaunchProfile>? Profiles { get; set; }
+    public Dictionary<string, LaunchProfile?>? Profiles { get; set; }
 }
 
 public class LaunchProfile {
+    [JsonPropertyName("commandName")]
+    public string? CommandName { get; set; }
+
     [JsonPropertyName("applicationUrl")]
     public string? ApplicationUrl { get; set; }
 
@@ -24,9 +27,6 @@ public class LaunchProfile {
     [JsonPropertyName("commandLineArgs")]
     public string? CommandLineArgs { get; set; }
 
-    [JsonPropertyName("executablePath")]
-    public string? ExecutablePath { get; set; }
-
     [JsonPropertyName("workingDirectory")]
     public string? workingDirectory { get; set; }
 
@@ -35,6 +35,10 @@ public class LaunchProfile {
 
     [JsonPropertyName("launchBrowser")]
     public bool LaunchBrowser { get; set; }
+
+
+    [JsonIgnore]
+    internal string? Id { get; set; }
 }
 
 public class CoreClrMobileDebuggerOptions {

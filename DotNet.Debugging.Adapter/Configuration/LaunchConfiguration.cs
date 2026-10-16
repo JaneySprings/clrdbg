@@ -16,6 +16,7 @@ public class LaunchConfiguration : BaseConfiguration {
     public bool StopAtEntry { get; }
     public string? LaunchSettingsFilePath { get; }
     public string? LaunchSettingsProfile { get; }
+    public LaunchProfile? LaunchProfile { get; private set; }
     public CoreClrMobileDebuggerOptions? MobileOptions { get; }
     public string? RemoteHostDirectory { get; }
     public string? RemoteTargetDirectory { get; }
@@ -91,27 +92,28 @@ public class LaunchConfiguration : BaseConfiguration {
 
     private void OverrideFromLaunchSettings(string launchSettingsPath, string? profileName) {
         var settings = SafeExtensions.Invoke(() => JsonSerializer.Deserialize<LaunchSettings>(File.OpenRead(launchSettingsPath), SerializationExtensions.Options));
-        if (settings?.Profiles == null || settings.Profiles.Count == 0)
+        if (settings?.Profiles == null)
             return;
 
-        LaunchProfile? profile = null;
+        settings.Profiles.ForEach(kvp => kvp.Value?.Id = kvp.Key);
+
         if (!string.IsNullOrEmpty(profileName) && settings.Profiles.TryGetValue(profileName, out LaunchProfile? value))
-            profile = value;
-        if (profile == null && settings.Profiles.TryGetValue("https", out LaunchProfile? value2))
-            profile = value2;
-        if (profile == null)
-            profile = settings.Profiles.Values.First();
+            LaunchProfile = value;
+        if (LaunchProfile == null && settings.Profiles.TryGetValue("https", out LaunchProfile? value2))
+            LaunchProfile = value2;
+        if (LaunchProfile == null)
+            LaunchProfile = settings.Profiles.Values.FirstOrDefault(x => x?.CommandName == "Project");
+        if (LaunchProfile == null)
+            return;
 
-        if (!string.IsNullOrEmpty(profile.ExecutablePath))
-            Program = profile.ExecutablePath.ToPlatformPath();
-        if (!string.IsNullOrEmpty(profile.workingDirectory))
-            WorkingDirectory = profile.workingDirectory.ToPlatformPath();
-        if (!string.IsNullOrEmpty(profile.CommandLineArgs))
-            Arguments = profile.CommandLineArgs.Split(' ').ToList(); //TODO: update split
-        if (profile.EnvironmentVariables != null)
-            EnvironmentVariables = profile.EnvironmentVariables;
+        if (!string.IsNullOrEmpty(LaunchProfile.workingDirectory))
+            WorkingDirectory = LaunchProfile.workingDirectory.ToPlatformPath();
+        if (!string.IsNullOrEmpty(LaunchProfile.CommandLineArgs))
+            Arguments = LaunchProfile.CommandLineArgs.Split(' ').ToList(); //TODO: update split
+        if (LaunchProfile.EnvironmentVariables != null)
+            EnvironmentVariables = LaunchProfile.EnvironmentVariables;
 
-        if (!string.IsNullOrEmpty(profile.ApplicationUrl))
-            EnvironmentVariables.TryAdd("ASPNETCORE_URLS", profile.ApplicationUrl);
+        if (!string.IsNullOrEmpty(LaunchProfile.ApplicationUrl))
+            EnvironmentVariables.TryAdd("ASPNETCORE_URLS", LaunchProfile.ApplicationUrl);
     }
 }

@@ -13,6 +13,8 @@ public partial class DebugSession {
 
             if (configuration.Logging.LicenseBanner)
                 OnDebugDataReceived(Resources.MsgLicenseBanner);
+            if (configuration.LaunchProfile != null)
+                OnDebugDataReceived(string.Format(Resources.MsgLaunchProfileApplied, configuration.LaunchProfile.Id, configuration.LaunchSettingsFilePath));
             if (configuration.Logging.EngineLogging)
                 DebuggerLoggingService.OnEngineMessage += OnDebugDataReceived;
 
