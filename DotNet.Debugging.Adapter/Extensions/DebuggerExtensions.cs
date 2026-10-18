@@ -20,6 +20,8 @@ public static class DebuggerExtensions {
     }
     // 'Module.dll!Namespace.Type.Method(string[] args)'
     public static string ToDisplayName(this StackFrameInfo frame) {
+        if (frame.Kind == StackFrameKind.Recorded)
+            return $"[Exception] {frame.ModuleName}!{frame.Name}";
         if (frame.Kind != StackFrameKind.Managed)
             return frame.Name;
         return $"{frame.ModuleName}!{frame.Name}";

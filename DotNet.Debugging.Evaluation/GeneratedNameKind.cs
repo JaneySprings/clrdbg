@@ -10,4 +10,5 @@ public enum GeneratedNameKind {
     DisplayClassLocalOrField,
     LambdaDisplayClass,
     StateMachineType,
+    PrimaryConstructorParameter,
 }

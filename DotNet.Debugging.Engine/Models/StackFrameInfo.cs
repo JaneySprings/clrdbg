@@ -11,6 +11,7 @@ public class StackFrameInfo {
     // The id of the module the frame's method belongs to, the one its module event carried
     public int? ModuleId { get; set; }
     public SourceLocation? Location { get; set; }
+    public bool IsUserCode { get; set; }
 
     public StackFrameInfo(int id, StackFrameKind kind, string name) {
         Id = id;

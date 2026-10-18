@@ -33,6 +33,11 @@ jobs:
             (cd out/$rid && zip -qr ../clrdbg_$rid.zip .)
           done
 
+      - name: Publish (framework-dependent)
+        run: |
+          dotnet publish DotNet.Debugging.Adapter/DotNet.Debugging.Adapter.csproj -c Release --self-contained false
+          (cd out/universal && zip -qr ../clrdbg_universal.zip .)
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:

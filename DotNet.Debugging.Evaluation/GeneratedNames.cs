@@ -24,6 +24,7 @@ public static class GeneratedNames {
             case RoslynGeneratedNameKind.DisplayClassLocalOrField: return GeneratedNameKind.DisplayClassLocalOrField;
             case RoslynGeneratedNameKind.LambdaDisplayClass: return GeneratedNameKind.LambdaDisplayClass;
             case RoslynGeneratedNameKind.StateMachineType: return GeneratedNameKind.StateMachineType;
+            case RoslynGeneratedNameKind.PrimaryConstructorParameter: return GeneratedNameKind.PrimaryConstructorParameter;
             default: return GeneratedNameKind.Other;
         }
     }

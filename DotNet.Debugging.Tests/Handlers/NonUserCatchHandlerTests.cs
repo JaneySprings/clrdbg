@@ -46,7 +46,12 @@ public class NonUserCatchHandlerTests : BaseDebugTestFixture {
         var first = WaitForStopped(StoppedEvent.ReasonValue.Exception);
         Assert.That(first.Text, Is.EqualTo($"An exception of type 'System.InvalidOperationException' occurred in {ProjectName}.dll but was not handled in user code"));
         Assert.That(GetExceptionInfo(first.ThreadId!.Value).BreakMode, Is.EqualTo(ExceptionBreakMode.UserUnhandled));
-        Assert.That(GetTopStackFrame(first.ThreadId!.Value).Line, Is.EqualTo(GetMarkerLine("marker:nonUserCode")), "The throwing user frame is on top");
+        var frames = GetStackFrames(first.ThreadId!.Value);
+        Assert.That(frames[0].Line, Is.EqualTo(GetMarkerLine("marker:nonUserCode")), "The throwing user frame is on top");
+        Assert.That(frames[0].PresentationHint, Is.Null, "A user frame is shown as it is");
+        var handler = frames.First(it => it.Name.Contains("QuietRunner"));
+        Assert.That(handler.PresentationHint, Is.EqualTo(StackFrame.PresentationHintValue.Subtle), "A non-user frame is de-emphasized, even with a source of its own");
+        Assert.That(handler.Source?.PresentationHint, Is.EqualTo(Source.PresentationHintValue.Deemphasize), "...and so is its source, which keeps a client's exception widget on the user's frame");
         Continue(first.ThreadId!.Value);
 
         var second = WaitForStopped(StoppedEvent.ReasonValue.Exception);

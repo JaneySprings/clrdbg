@@ -17,6 +17,8 @@ namespace DotNet.Debugging.Engine.Metadata;
 internal sealed class ModuleMetadataReader : IDisposable {
     // https://github.com/dotnet/roslyn/blob/main/src/Dependencies/CodeAnalysis.Debugging/PortableCustomDebugInfoKinds.cs
     private static readonly Guid asyncMethodSteppingInformationGuid = new Guid("54FD2AC5-E925-401A-9C2A-F94F171072F8");
+    private static readonly Guid stateMachineHoistedLocalScopesGuid = new Guid("6DA9A61E-F8C7-4874-BE62-68BC5630DF71");
+    private static readonly Guid tupleElementNamesGuid = new Guid("ED9FDF71-8879-4747-8ED3-FE5EDE3CE710");
     private static readonly Guid sourceLinkGuid = new Guid("CC110556-A091-4D38-9FEC-25AB9A351A6A");
     private static readonly Guid sha1AlgorithmGuid = new Guid("ff1816ec-aa5e-4d10-87f7-6f4963833460");
     private static readonly Guid sha256AlgorithmGuid = new Guid("8829d00f-11b8-4213-878b-770e8597ac16");
@@ -150,27 +152,61 @@ internal sealed class ModuleMetadataReader : IDisposable {
         if (debugInformation.SequencePointsBlob.IsNil)
             return null;
 
-        // Ideally an exact match. When stepping at the end of a method there may be none,
-        // the closest prior sequence point is used then
-        SequencePoint? exact = null;
-        SequencePoint? closest = null;
-        foreach (var point in debugInformation.GetSequencePoints()) {
-            if (point.IsHidden)
-                continue;
-            if (point.Offset == ilOffset) {
-                exact = point;
-                break;
-            }
-            if (point.Offset < ilOffset && (closest == null || point.Offset > closest.Value.Offset))
-                closest = point;
-        }
-
-        var match = exact ?? closest;
+        // The visible sequence point at the offset, or the closest one before it: a step at the end of a method has no exact match
+        var match = FindSequencePoint(debugInformation, ilOffset, includeHidden: false);
         if (match == null)
             return null;
 
         var document = match.Value.Document.IsNil ? debugInformation.Document : match.Value.Document;
         return CreateLocation(reader, document, match.Value);
+    }
+    // The location a frame is shown at: 'GetSourceLocation', except inside an exception handler the compiler hid - the
+    // catch around an async method's body, a hidden finally - where no statement runs and the frame gets no line. Hidden
+    // code elsewhere (a method awaiting a call sits in the hidden code after its await) keeps the statement before it,
+    // as the runtime's own stack traces do
+    public SourceLocation? GetFrameLocation(int methodToken, int ilOffset) {
+        if (IsHiddenCode(methodToken, ilOffset) && IsInExceptionHandler(methodToken, ilOffset))
+            return null;
+        return GetSourceLocation(methodToken, ilOffset);
+    }
+    private bool IsHiddenCode(int methodToken, int ilOffset) {
+        var reader = PdbMetadataReader;
+        if (reader == null)
+            return false;
+        var debugInformation = reader.GetMethodDebugInformation(MetadataTokens.MethodDefinitionHandle(methodToken));
+        return !debugInformation.SequencePointsBlob.IsNil && FindSequencePoint(debugInformation, ilOffset, includeHidden: true)?.IsHidden == true;
+    }
+    // The sequence point at the offset, or the closest one before it
+    private static SequencePoint? FindSequencePoint(MethodDebugInformation debugInformation, int ilOffset, bool includeHidden) {
+        SequencePoint? closest = null;
+        foreach (var point in debugInformation.GetSequencePoints()) {
+            if ((point.IsHidden && !includeHidden) || point.Offset > ilOffset)
+                continue;
+            if (closest == null || point.Offset > closest.Value.Offset)
+                closest = point;
+        }
+        return closest;
+    }
+    // Whether the offset lies in a catch, finally, fault or filter block of the method; false when the body cannot be
+    // read (a dynamic module has no image)
+    private bool IsInExceptionHandler(int methodToken, int ilOffset) {
+        try {
+            if (peReader == null)
+                return false;
+            var method = PeMetadataReader.GetMethodDefinition(MetadataTokens.MethodDefinitionHandle(methodToken));
+            if (method.RelativeVirtualAddress == 0)
+                return false;
+            foreach (var region in peReader.GetMethodBody(method.RelativeVirtualAddress).ExceptionRegions) {
+                if (ilOffset >= region.HandlerOffset && ilOffset < region.HandlerOffset + region.HandlerLength)
+                    return true;
+                if (region.Kind == ExceptionRegionKind.Filter && ilOffset >= region.FilterOffset && ilOffset < region.HandlerOffset)
+                    return true;
+            }
+            return false;
+        }
+        catch {
+            return false;
+        }
     }
     // 'status' explains a null: no document for the file ('Unbound'), one whose content differs from the file
     // ('SourceMismatch'), or no code at the line ('NoCode')
@@ -271,6 +307,47 @@ internal sealed class ModuleMetadataReader : IDisposable {
             }
         }
         return names;
+    }
+    // The element names of the tuple typed locals in scope at 'ilOffset', by slot: '(string Name, int Count) pair' gives
+    // ["Name", "Count"], an unnamed position is empty
+    public Dictionary<int, string[]> GetLocalTupleElementNames(int methodToken, int ilOffset) {
+        var result = new Dictionary<int, string[]>();
+        var reader = PdbMetadataReader;
+        if (reader == null)
+            return result;
+
+        foreach (var scopeHandle in reader.GetLocalScopes(MetadataTokens.MethodDefinitionHandle(methodToken))) {
+            var scope = reader.GetLocalScope(scopeHandle);
+            if (ilOffset < scope.StartOffset || ilOffset >= scope.EndOffset)
+                continue;
+            foreach (var variableHandle in scope.GetLocalVariables()) {
+                foreach (var handle in reader.GetCustomDebugInformation(variableHandle)) {
+                    var debugInformation = reader.GetCustomDebugInformation(handle);
+                    if (reader.GetGuid(debugInformation.Kind) != tupleElementNamesGuid)
+                        continue;
+                    var names = System.Text.Encoding.UTF8.GetString(reader.GetBlobBytes(debugInformation.Value)).Split('\0');
+                    result.TryAdd(reader.GetLocalVariable(variableHandle).Index, names);
+                }
+            }
+        }
+        return result;
+    }
+    // The scopes of a state machine's hoisted locals in slot order ('<i>5__4' is slot 4): the IL ranges of MoveNext in
+    // which each one is in scope; empty when the compiler recorded none
+    public List<HoistedLocalScope> GetHoistedLocalScopes(int methodToken) {
+        var result = new List<HoistedLocalScope>();
+        var reader = PdbMetadataReader;
+        if (reader == null)
+            return result;
+        foreach (var handle in reader.GetCustomDebugInformation(MetadataTokens.EntityHandle(methodToken))) {
+            var debugInformation = reader.GetCustomDebugInformation(handle);
+            if (reader.GetGuid(debugInformation.Kind) != stateMachineHoistedLocalScopesGuid)
+                continue;
+            var blobReader = reader.GetBlobReader(debugInformation.Value);
+            while (blobReader.RemainingBytes >= 8)
+                result.Add(new HoistedLocalScope((int)blobReader.ReadUInt32(), (int)blobReader.ReadUInt32()));
+        }
+        return result;
     }
     // The IL range of the statement containing 'ilOffset': its sequence point up to the next one.
     // 'endOffset' equals 'startOffset' when the statement is the last one of the method
@@ -395,6 +472,22 @@ internal sealed class ModuleMetadataReader : IDisposable {
             hasUserCode = true;
         }
         return hasUserCode ? result : null;
+    }
+    // The IL offset of the catch the compiler put around the body of an async method whose exception is bound to escape:
+    // an async entry point (the synthesized '<Main>' rethrows the task's exception) or an 'async void' method or lambda
+    // (the builder rethrows on the synchronization context). Recorded as offset + 1 for those methods only; null otherwise
+    public uint? GetAsyncCatchHandlerOffset(int methodToken) {
+        var reader = PdbMetadataReader;
+        if (reader == null)
+            return null;
+        foreach (var handle in reader.GetCustomDebugInformation(MetadataTokens.EntityHandle(methodToken))) {
+            var debugInformation = reader.GetCustomDebugInformation(handle);
+            if (reader.GetGuid(debugInformation.Kind) != asyncMethodSteppingInformationGuid)
+                continue;
+            var catchHandlerOffset = reader.GetBlobReader(debugInformation.Value).ReadUInt32();
+            return catchHandlerOffset == 0 ? null : catchHandlerOffset - 1;
+        }
+        return null;
     }
     // Whether an await's yield point still lies ahead in the hidden code between 'ilOffset' and the next statement
     public bool HasAwaitAhead(int methodToken, int ilOffset, int? nextStatementOffset) {

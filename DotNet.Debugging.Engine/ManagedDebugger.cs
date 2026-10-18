@@ -52,6 +52,7 @@ public partial class ManagedDebugger {
     private bool stopAtEntryPending;
     // An exception stop is being reported and the subscriber has not continued it (yet)
     private bool isExceptionStopPending;
+    private int? exceptionStopThreadId;
     private bool isRemoteAttach;
     private int? mainThreadId;
     private int? oldestThreadId;
@@ -290,17 +291,25 @@ public partial class ManagedDebugger {
         if (thread == null)
             return result;
 
+        // At an exception stop the frames the exception's recorded trace holds beyond the live ones come first
+        var frames = thread.GetManagedFrames().ToList();
+        result.AddRange(GetRecordedExceptionFrames(threadId, frames));
         var depth = 0;
-        foreach (var frame in thread.GetManagedFrames()) {
+        foreach (var frame in frames) {
             var frameId = frameReferenceManager.GetOrCreate(threadId, depth++);
             result.Add(CreateStackFrameInfo(frameId, frame));
         }
         return result;
     }
-    // The variables reference of the frame's locals, zero when the frame has nothing to show
+    // The variables reference of the frame's locals, zero when the frame has nothing to show; a recorded frame has no
+    // locals anymore, only the thread's exception
     public int GetLocalsReference(int frameId) {
         var reference = frameReferenceManager.Get(frameId);
-        if (reference == null || GetFrame(reference.ThreadId, reference.Depth) is not ICorDebugILFrame frame)
+        if (reference == null)
+            return 0;
+        if (reference.IsRecorded)
+            return GetCurrentException(reference.ThreadId) == null ? 0 : variableProvider.CreateExceptionScopeReference(reference.ThreadId, GetLiveFrameDepth(reference.ThreadId));
+        if (GetFrame(reference.ThreadId, reference.Depth) is not ICorDebugILFrame frame)
             return 0;
         if (frame.GetLocalVariables().Length == 0 && frame.GetArguments().Length == 0 && GetCurrentException(reference.ThreadId) == null)
             return 0;
@@ -317,7 +326,10 @@ public partial class ManagedDebugger {
     public async Task<VariableInfo> EvaluateAsync(string expression, int frameId) {
         DebuggerLoggingService.LogMessage($"Evaluate: {expression}");
         var reference = frameReferenceManager.Get(frameId) ?? throw new InvalidOperationException("The frame id does not exist");
-        var context = new EvaluationContext(GetThread(reference.ThreadId), reference.ThreadId, reference.Depth);
+        // A recorded frame is gone: the expression runs in the thread's first live frame, where '$exception' is available
+        // and the dead frame's locals are unknown names
+        var frameDepth = reference.IsRecorded ? GetLiveFrameDepth(reference.ThreadId) : reference.Depth;
+        var context = new EvaluationContext(GetThread(reference.ThreadId), reference.ThreadId, frameDepth);
         using var result = await GetEvaluator().EvaluateAsync(expression, context);
         if (result.Error != null)
             throw new EvaluationException(result.Error);
@@ -404,6 +416,16 @@ public partial class ManagedDebugger {
         return threads.GetValueOrDefault(threadId) ?? throw new InvalidOperationException($"Thread '{threadId}' not found");
     }
     // Frames are re-obtained from the thread every time, the ICorDebugFrame objects are neutered by any continue
+    // The depth of the thread's first IL frame, zero when it has none
+    private int GetLiveFrameDepth(int threadId) {
+        var depth = 0;
+        foreach (var frame in GetThread(threadId).GetManagedFrames()) {
+            if (frame is ICorDebugILFrame)
+                return depth;
+            depth++;
+        }
+        return 0;
+    }
     internal ICorDebugFrame GetFrame(int threadId, int depth) {
         return GetThread(threadId).GetManagedFrames().ElementAt(depth);
     }
@@ -652,10 +674,11 @@ public partial class ManagedDebugger {
         ArgumentNullException.ThrowIfNull(process);
         process.Continue(false);
     }
-    // Variables and frames are only valid until the debuggee runs again
+    // Variables and frames are only valid until the debuggee runs again, and so is the exception stop they belong to
     private void ClearReferences() {
         variableManager.Clear();
         frameReferenceManager.Clear();
+        exceptionStopThreadId = null;
     }
     private void Dispose(bool killLaunchedProcess) {
         foreach (var module in modules.Values)
@@ -699,7 +722,10 @@ public partial class ManagedDebugger {
             var info = new StackFrameInfo(frameId, StackFrameKind.Managed, function.GetDisplayName(module.MetadataReader.PeMetadataReader));
             info.ModuleName = module.Name;
             info.ModuleId = module.Id;
-            info.Location = GetSourceLocation(ilFrame);
+            if (module.HasSymbols)
+                info.Location = module.MetadataReader.GetFrameLocation(function.GetToken(), ilFrame.GetIP().pnOffset);
+            // A frame without a line (compiler generated code, a method without sequence points) is not the user's code either
+            info.IsUserCode = info.Location != null && IsUserCodeMethod(module, function.GetToken());
             return info;
         }
         if (frame is ICorDebugInternalFrame internalFrame)

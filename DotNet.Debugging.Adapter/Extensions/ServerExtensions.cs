@@ -128,15 +128,20 @@ public static class ServerExtensions {
         };
     }
     public static DebugProtocol.StackFrame ToStackFrame(this StackFrameInfo frame, SourceLinkResolver sourceLinkResolver, ManagedDebugger debugger) {
+        var isSubtle = debugger.JustMyCode && !frame.IsUserCode;
+        var source = frame.Location?.ToSource(sourceLinkResolver, debugger);
+        if (source != null && isSubtle)
+            source.PresentationHint = DebugProtocol.Source.PresentationHintValue.Deemphasize;
         return new DebugProtocol.StackFrame() {
             Id = frame.Id,
-            Source = frame.Location?.ToSource(sourceLinkResolver, debugger),
+            Source = source,
             Name = frame.ToDisplayName(),
             Line = frame.Location?.Line ?? 0,
             Column = frame.Location?.Column ?? 0,
             EndLine = frame.Location?.EndLine,
             EndColumn = frame.Location?.EndColumn,
             ModuleId = frame.ModuleId,
+            PresentationHint = isSubtle ? DebugProtocol.StackFrame.PresentationHintValue.Subtle : null,
         };
     }
     public static DebugProtocol.Thread ToThread(this ThreadInfo thread) {

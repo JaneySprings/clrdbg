@@ -4,4 +4,5 @@ public enum StackFrameKind {
     Managed,
     Native,
     Internal,
+    Recorded,
 }

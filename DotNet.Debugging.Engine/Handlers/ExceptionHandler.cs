@@ -32,8 +32,8 @@ public partial class ManagedDebugger {
         RaiseExceptionStop(threadId, callbackEvent.Unhandled ? ExceptionStopKind.Unhandled : ExceptionStopKind.FirstChance);
     }
     // Follows the exception dispatch: the first chance stop under Just My Code happens when the dispatch reaches
-    // user code, and an exception that passed through user code and is about to be caught in non-user code
-    // stops as 'user-unhandled'
+    // user code, and an exception that passed through user code and is about to be caught beyond it - in non-user
+    // code, or by the compiler's catch of an async method it cannot stay in - stops as 'user-unhandled'
     private void HandleExceptionDispatch(Exception2CorDebugManagedCallbackEventArgs callbackEvent) {
         if (IsEvaluating) {
             ContinueProcess();
@@ -67,7 +67,7 @@ public partial class ManagedDebugger {
                 break;
             case CorDebugExceptionCallbackType.DEBUG_EXCEPTION_CATCH_HANDLER_FOUND:
                 var passedThroughUserCode = exceptionThreads.Remove(threadId);
-                if (passedThroughUserCode && IsNonUserCodeFrame(callbackEvent.Frame) && OnExceptionThrown != null) {
+                if (passedThroughUserCode && OnExceptionThrown != null && IsHandlerBeyondUserCode(callbackEvent.Frame, callbackEvent.NOffset)) {
                     RaiseExceptionStop(threadId, ExceptionStopKind.UserUnhandled);
                     return;
                 }
@@ -105,6 +105,7 @@ public partial class ManagedDebugger {
         OnExceptionThrown!.Invoke(new ExceptionStopInfo(threadId, kind, GetExceptionTypeName(threadId), exceptionModules.GetValueOrDefault(threadId)));
         var stopTaken = isExceptionStopPending;
         isExceptionStopPending = false;
+        exceptionStopThreadId = stopTaken ? threadId : null;
         DebuggerLoggingService.LogMessage($"Exception stop ({kind}) on thread {threadId}: {(stopTaken ? "taken by the subscriber" : "continued by the subscriber")}");
         // The subscriber continued: its filters did not match and no stop was taken, so a step in flight
         // (e.g. over an await whose task faulted, or over a call that throws and catches internally)
@@ -120,6 +121,26 @@ public partial class ManagedDebugger {
     private bool IsNonUserCodeFrame(ICorDebugFrame? frame) {
         return TryClassifyFrame(frame, out var isUserCode) && !isUserCode;
     }
+    // A non-user method's handler, or the catch the compiler puts around the body of an async entry point or 'async void'
+    // method: that one only hands the exception to the builder, which rethrows it where no user code can catch it, so the
+    // stop is taken here while the frames of the dispatch are still live. The catch of any other async method is a user
+    // handler - the awaiting code sees the exception again at its await
+    private bool IsHandlerBeyondUserCode(ICorDebugFrame? frame, uint handlerOffset) {
+        return IsNonUserCodeFrame(frame) || IsEscapingAsyncCatchHandler(frame, handlerOffset);
+    }
+    private bool IsEscapingAsyncCatchHandler(ICorDebugFrame? frame, uint handlerOffset) {
+        try {
+            if (frame is not ICorDebugILFrame ilFrame)
+                return false;
+            var function = ilFrame.GetFunction();
+            var module = FindModule(function.GetModule());
+            return module != null && module.MetadataReader.GetAsyncCatchHandlerOffset(function.GetToken()) == handlerOffset;
+        }
+        catch (Exception ex) {
+            DebuggerLoggingService.LogError("Failed to classify the catch handler", ex);
+            return false;
+        }
+    }
     // User code is a user module's method that did not opt out through [DebuggerNonUserCode] (under Just My Code),
     // [DebuggerStepThrough] or [DebuggerHidden]: a catch in such a method is exactly what the filter for exceptions
     // leaving user code exists for. False when the frame cannot be resolved
@@ -132,12 +153,15 @@ public partial class ManagedDebugger {
             var module = FindModule(function.GetModule());
             if (module == null)
                 return false;
-            isUserCode = module.IsUserCode && !module.Module.GetMetaDataInterface<IMetaDataImport>().IsNonUserMethod(function.GetToken(), JustMyCode);
+            isUserCode = IsUserCodeMethod(module, function.GetToken());
             return true;
         }
         catch {
             return false;
         }
+    }
+    private bool IsUserCodeMethod(ModuleInfo module, MethodDefToken methodToken) {
+        return module.IsUserCode && !module.Module.GetMetaDataInterface<IMetaDataImport>().IsNonUserMethod(methodToken, JustMyCode);
     }
     private string? GetExceptionTypeName(int threadId) {
         try {
@@ -215,6 +239,75 @@ public partial class ManagedDebugger {
         if (location != null)
             line += $" in {location.FilePath}:line {location.Line}";
         return line;
+    }
+    // The frames of the exception's recorded stack trace that the thread's stack no longer holds, at an exception stop:
+    // a rethrow at an await, or after a handler's finally blocks, has unwound the frames of the raise and the recorded
+    // trace is where they remain. The runtime records a dispatch as it walks the stack, so the trace ends with live
+    // frames: the longest tail matching the top of the stack by module and method is left out. Frames hidden from stack
+    // traces and frames without a module (a dynamic method) are skipped, as in the trace itself
+    internal List<StackFrameInfo> GetRecordedExceptionFrames(int threadId, List<ICorDebugFrame> liveFrames) {
+        var result = new List<StackFrameInfo>();
+        if (exceptionStopThreadId != threadId)
+            return result;
+        try {
+            var exception = GetCurrentException(threadId);
+            if (exception?.UnwrapDebugValue() is not ICorDebugExceptionObjectValue exceptionObject)
+                return result;
+            var recorded = exceptionObject.GetExceptionCallStack();
+            var deadCount = recorded.Length - CountLiveRecordedFrames(recorded, liveFrames);
+            for (var index = 0; index < deadCount; index++) {
+                var frame = recorded[index];
+                if (frame.pModule == null || frame.methodDef.IsNil)
+                    continue;
+                var module = FindModule(frame.pModule);
+                if (module == null || module.Module.GetMetaDataInterface<IMetaDataImport>().IsStackTraceHidden(frame.methodDef))
+                    continue;
+                var function = frame.pModule.GetFunctionFromToken(frame.methodDef);
+                var frameId = frameReferenceManager.GetOrCreateRecorded(threadId, index);
+                var info = new StackFrameInfo(frameId, StackFrameKind.Recorded, function.GetDisplayName(module.MetadataReader.PeMetadataReader));
+                info.ModuleName = module.Name;
+                info.ModuleId = module.Id;
+                info.Location = GetRecordedFrameLocation(frame);
+                info.IsUserCode = IsUserCodeMethod(module, frame.methodDef);
+                result.Add(info);
+            }
+        }
+        catch (Exception ex) {
+            DebuggerLoggingService.LogError("Failed to read the recorded exception frames", ex);
+            result.Clear();
+        }
+        return result;
+    }
+    // How many of the trailing recorded frames are the top frames of the stack; the methods are resolved once on both
+    // sides, a deep recursion leaves thousands of frames to compare
+    private int CountLiveRecordedFrames(CorDebugExceptionObjectStackFrame[] recorded, List<ICorDebugFrame> liveFrames) {
+        var recordedMethods = new List<string?>(recorded.Length);
+        foreach (var frame in recorded)
+            recordedMethods.Add(frame.pModule == null ? null : GetMethodKey(FindModule(frame.pModule), frame.methodDef));
+        var liveMethods = new List<string?>();
+        foreach (var frame in liveFrames) {
+            if (frame is not ICorDebugILFrame ilFrame)
+                continue;
+            var function = ilFrame.GetFunction();
+            liveMethods.Add(GetMethodKey(FindModule(function.GetModule()), function.GetToken()));
+        }
+        for (var count = Math.Min(recordedMethods.Count, liveMethods.Count); count > 0; count--) {
+            if (IsLiveTail(recordedMethods, liveMethods, count))
+                return count;
+        }
+        return 0;
+    }
+    private static bool IsLiveTail(List<string?> recordedMethods, List<string?> liveMethods, int count) {
+        for (var index = 0; index < count; index++) {
+            var recordedMethod = recordedMethods[recordedMethods.Count - count + index];
+            if (recordedMethod == null || recordedMethod != liveMethods[index])
+                return false;
+        }
+        return true;
+    }
+    // Null for a module the engine does not know
+    private static string? GetMethodKey(ModuleInfo? module, MethodDefToken methodDef) {
+        return module == null ? null : $"{module.Id}:{methodDef.Value}";
     }
     // A recorded frame holds a native address, mapped back to an IL offset to find the source line
     private SourceLocation? GetRecordedFrameLocation(CorDebugExceptionObjectStackFrame frame) {

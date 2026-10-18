@@ -2,7 +2,9 @@ namespace DotNet.Debugging.Engine.Variables;
 
 internal class FrameReference {
     public int ThreadId { get; }
+    // The depth in the thread's stack; negative for a frame of the exception's recorded stack trace, which the stack no longer holds
     public int Depth { get; }
+    public bool IsRecorded => Depth < 0;
 
     public FrameReference(int threadId, int depth) {
         ThreadId = threadId;
@@ -25,6 +27,9 @@ internal class FrameReferenceManager {
         references[id] = new FrameReference(threadId, depth);
         ids[(threadId, depth)] = id;
         return id;
+    }
+    public int GetOrCreateRecorded(int threadId, int index) {
+        return GetOrCreate(threadId, -1 - index);
     }
     public FrameReference? Get(int id) {
         return references.GetValueOrDefault(id);

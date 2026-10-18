@@ -46,9 +46,18 @@ share one).
    itself. A captured parameter is a field of the class and a slot of the frame: the method reads and
    writes the field from its first statement on, the slot keeps the value it was entered with, so the
    field replaces the slot already listed (one entry, the live value). A display class not
-   created yet (its captured variables are not in scope) is a null field and lists nothing.
+   created yet (its captured variables are not in scope) is a null field and lists nothing. A local
+   function receives the variables it captured in a struct closure passed by reference, as an
+   argument without a name: that closure is listed through its members as well. The parameters of a
+   primary constructor that the type keeps as fields (`<name>P`, marked never browsable to hide the
+   generated name) are in scope throughout the type's members like locals, and are listed after
+   `this` under their own names.
 3. **Hoisted locals** — the fields of the closure/state machine and of every enclosing closure,
-   shown under their original names (`<count>5__1` → `count`); other generated fields are hidden.
+   shown under their original names (`<count>5__1` → `count`); other generated fields are hidden,
+   and so are the properties a state machine implements for the runtime (an iterator's `Current`).
+   A state machine's hoisted local is listed only while it is in scope: the PDB's hoisted local scopes
+   (`GetHoistedLocalScopes`, one IL range of `MoveNext` per slot — `<i>5__4` is slot 4) are checked
+   against the current offset, so a loop variable appears inside its loop and not before.
 4. **IL locals**, named through the PDB local scopes that contain the current IL offset
    (`ModuleMetadataReader.GetLocalVariableNames`); slots without a name (compiler temporaries,
    `DebuggerHidden`) are skipped.
@@ -78,8 +87,12 @@ placeholder over the remote (mobile) transport:
   when they exist (an explicit interface implementation is a private member, listed there under its
   interface-qualified name). Static members, public and non-public alike, go into a `Static members`
   group; group nodes have `Kind = Group`.
-- **`DebuggerBrowsable`**: `Never` hides the member, `RootHidden` replaces an array-valued member by
-  its elements.
+- **`DebuggerBrowsable`**: `Never` hides the member (except the field of a primary constructor
+  parameter, see above), `RootHidden` replaces an array-valued member by its elements.
+- **Tuple element names.** A tuple typed local names its elements in the PDB (`TupleElementNames`
+  on the local variable); its children are shown under those names (`Count`, `Name`) instead of
+  `Item1`, `Item2`, the unnamed positions keep `ItemN`. The names travel on the children's
+  `VariableReference` from the local's slot.
 - **`DebuggerTypeProxy`**: the proxy is instantiated in the debuggee (`.ctor(value)`, the
   first constructor found by name) and its public members are listed instead of the value's, which
   remain reachable through a `Raw View` group.

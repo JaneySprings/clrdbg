@@ -173,7 +173,16 @@ reflection invoke calls its target through is recorded with a nil method token. 
 (`TryClassifyFrame`): a user module's method counts unless it, or its type, is marked
 `[DebuggerNonUserCode]` (under Just My Code), `[DebuggerStepThrough]` or `[DebuggerHidden]` — a catch
 block in such a method of the user's own assembly is a `UserUnhandled` stop like a library's, the
-exception left the code the user is debugging. In every case the host applies its
+exception left the code the user is debugging. One catch in user code counts the same way: the catch
+the compiler puts around the body of an async entry point or an `async void` method (or lambda). It only
+hands the exception to the builder, which rethrows it where no user code can catch it — the synthesized
+`<Main>` that waits for the entry point's task, the synchronization context — so the exception is
+reported `UserUnhandled` at that catch, while the thread still holds the frames of the dispatch. The
+compiler records that handler's IL offset in the PDB's async stepping information for exactly those
+methods (`GetAsyncCatchHandlerOffset`), and a `CATCH_HANDLER_FOUND` notification whose handler offset is
+that one is the signal; the catch of any other async method stays a user handler — the awaiting code
+sees the exception again at its await and may handle it, and if it does not, the chain ends in one of the
+recorded handlers anyway. In every case the host applies its
 filters and calls `Continue()` when it does not want the stop — inside the callback, which the engine
 records: a stop the host took abandons any step in flight, a continued exception leaves it running.
 The engine does not read that back from `ICorDebugProcess.IsRunning`, which can still report the
@@ -188,7 +197,27 @@ process stopped right after a continue issued inside a callback.
   as main so the host can label it.
 - `GetStackFrames` walks the managed chains of the thread; each `StackFrameInfo` carries the
   `Namespace.Type.Method(params)` signature read from metadata, the module's name and id and the
-  `SourceLocation` (with Source Link); internal and native frames are reported by kind.
+  `SourceLocation` (with Source Link); internal and native frames are reported by kind. A nested type is
+  qualified with its enclosing types, so the state machines of two methods of one name stay apart
+  (`Worker.<RunAsync>d__0.MoveNext()`); the compiler's names are otherwise shown as they are. The
+  location is the frame's (`GetFrameLocation`): an IP in code the compiler hid is charged to the closest
+  visible statement before it, as the runtime's stack traces do — a method awaiting a call sits in the
+  hidden code after its await — except inside an exception handler region (the catch around an async
+  method's body, a hidden finally), where no statement runs and the frame gets no line. `IsUserCode` tells
+  a frame of the user's own code (a user module, no non-user attribute, a line to show) from the rest; the
+  adapter marks the rest `subtle` and their sources `deemphasize` under Just My Code, so a client
+  de-emphasizes them, focuses the first user frame at a stop and places its exception widget there (the
+  widget goes to the first frame whose source is not de-emphasized, and only when that is the focused one). For the thread
+  stopped at an exception the list opens with the frames of the exception's recorded stack trace that the
+  stack no longer holds (`StackFrameKind.Recorded`): an exception rethrown at an await, or after the
+  finally blocks of a handler ran, has unwound the frames of its raise, and without them an unhandled
+  exception in an async program would show nothing but the `<Main>` bridge. The runtime records a dispatch
+  as it walks the stack, so the trace ends with live frames — the longest tail matching the top of the
+  stack by module and method is left out and nothing is listed twice; frames hidden from stack traces and
+  frames without a module are skipped as in the trace itself. A recorded frame has a source location
+  (the recorded native address mapped back to an IL offset) but no state of its own: its scope holds the
+  thread's current exception alone, and an expression evaluated in it runs in the thread's first live
+  frame, where `$exception` is what there is to look at and the dead frame's locals are unknown names.
 - `GetLocalsReference(frameId)` returns the reference of the frame's scope, zero when there is
   nothing to show. `GetVariablesAsync` then goes through `VariableProvider`:
   the current `$exception`, `this` and the arguments (for lambdas and async methods `this` is the

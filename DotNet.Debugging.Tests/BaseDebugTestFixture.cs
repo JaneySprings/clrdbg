@@ -366,9 +366,12 @@ public abstract class BaseDebugTestFixture {
     }
 
     protected StackFrame GetTopStackFrame(int threadId) {
-        var response = Host.SendRequestSync(new StackTraceRequest() { ThreadId = threadId });
-        Assert.That(response.StackFrames, Is.Not.Empty);
-        return response.StackFrames[0];
+        var frames = GetStackFrames(threadId);
+        Assert.That(frames, Is.Not.Empty);
+        return frames[0];
+    }
+    protected List<StackFrame> GetStackFrames(int threadId) {
+        return Host.SendRequestSync(new StackTraceRequest() { ThreadId = threadId }).StackFrames;
     }
     protected List<Variable> GetLocalVariables(int threadId) {
         var frame = GetTopStackFrame(threadId);

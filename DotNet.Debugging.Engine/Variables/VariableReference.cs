@@ -5,6 +5,8 @@ namespace DotNet.Debugging.Engine.Variables;
 internal enum VariableReferenceKind {
     // The locals, arguments and current exception of a frame
     Scope,
+    // The current exception alone: what a frame of the exception's recorded stack trace has to show, its locals went with the frame
+    ExceptionScope,
     // The children (members or elements) of a value
     Members,
     // The 'Static members' group of a value
@@ -27,6 +29,8 @@ internal class VariableReference {
     public ICorDebugValue? ProxyValue { get; }
     // The expression of the value whose children this reference lists, so the children can build their own ('parent.Member', 'parent[0]')
     public string? EvaluateName { get; }
+    // The names a tuple typed local gives its elements, shown instead of 'Item1', 'Item2'...; null for any other value
+    public string[]? TupleElementNames { get; set; }
 
     public VariableReference(VariableReferenceKind kind, int threadId, int frameDepth, ICorDebugValue? value = null, ICorDebugValue? proxyValue = null, string? evaluateName = null) {
         Kind = kind;
