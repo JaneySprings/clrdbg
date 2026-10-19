@@ -165,16 +165,9 @@ internal sealed class ModuleMetadataReader : IDisposable {
     // code elsewhere (a method awaiting a call sits in the hidden code after its await) keeps the statement before it,
     // as the runtime's own stack traces do
     public SourceLocation? GetFrameLocation(int methodToken, int ilOffset) {
-        if (IsHiddenCode(methodToken, ilOffset) && IsInExceptionHandler(methodToken, ilOffset))
+        if (IsInHiddenRegion(methodToken, ilOffset) && IsInExceptionHandler(methodToken, ilOffset))
             return null;
         return GetSourceLocation(methodToken, ilOffset);
-    }
-    private bool IsHiddenCode(int methodToken, int ilOffset) {
-        var reader = PdbMetadataReader;
-        if (reader == null)
-            return false;
-        var debugInformation = reader.GetMethodDebugInformation(MetadataTokens.MethodDefinitionHandle(methodToken));
-        return !debugInformation.SequencePointsBlob.IsNil && FindSequencePoint(debugInformation, ilOffset, includeHidden: true)?.IsHidden == true;
     }
     // The sequence point at the offset, or the closest one before it
     private static SequencePoint? FindSequencePoint(MethodDebugInformation debugInformation, int ilOffset, bool includeHidden) {
@@ -379,48 +372,22 @@ internal sealed class ModuleMetadataReader : IDisposable {
         return true;
     }
     // Whether 'ilOffset' lies in a hidden region: code the compiler generated between statements, marked
-    // by a sequence point that names no source line - the finally a 'using' compiles to, the plumbing
-    // between two nested ones, or the yield/resume machinery of an 'await'
+    // by a sequence point that names no source line - the finally a 'using' compiles to, the leave out of a
+    // try guarded by a finally, the dispatch of a pattern switch, or the yield/resume machinery of an 'await'
     public bool IsInHiddenRegion(int methodToken, int ilOffset) {
+        return GetHiddenRegionStart(methodToken, ilOffset) != null;
+    }
+    // The offset of the hidden sequence point whose region 'ilOffset' lies in: the closest sequence point at or
+    // before the offset, when it is hidden. Null when that point names a source line
+    private int? GetHiddenRegionStart(int methodToken, int ilOffset) {
         var reader = PdbMetadataReader;
         if (reader == null)
-            return false;
-
+            return null;
         var debugInformation = reader.GetMethodDebugInformation(MetadataTokens.MethodDefinitionHandle(methodToken));
         if (debugInformation.SequencePointsBlob.IsNil)
-            return false;
-
-        // The region the offset falls in is the one of the closest sequence point at or before it
-        var closestOffset = -1;
-        var closestIsHidden = false;
-        foreach (var point in debugInformation.GetSequencePoints()) {
-            if (point.Offset > ilOffset || point.Offset < closestOffset)
-                continue;
-            closestOffset = point.Offset;
-            closestIsHidden = point.IsHidden;
-        }
-        return closestIsHidden;
-    }
-    // Whether 'ilOffset' lies in a finally (or fault) handler of the method
-    public bool IsInFinallyHandler(int methodToken, int ilOffset) {
-        // The IL of a dynamic module is not part of any image the exception regions could be read from
-        if (peReader == null)
-            return false;
-        try {
-            var method = PeMetadataReader.GetMethodDefinition(MetadataTokens.MethodDefinitionHandle(methodToken));
-            if (method.RelativeVirtualAddress == 0)
-                return false;
-            foreach (var region in peReader.GetMethodBody(method.RelativeVirtualAddress).ExceptionRegions) {
-                if (region.Kind != ExceptionRegionKind.Finally && region.Kind != ExceptionRegionKind.Fault)
-                    continue;
-                if (ilOffset >= region.HandlerOffset && ilOffset < region.HandlerOffset + region.HandlerLength)
-                    return true;
-            }
-            return false;
-        }
-        catch {
-            return false;
-        }
+            return null;
+        var closest = FindSequencePoint(debugInformation, ilOffset, includeHidden: true);
+        return closest?.IsHidden == true ? closest.Value.Offset : null;
     }
     // The offset of the first sequence point with source at or after 'ilOffset'
     public int? GetNextSequencePointOffset(int methodToken, int ilOffset) {
@@ -489,12 +456,22 @@ internal sealed class ModuleMetadataReader : IDisposable {
         }
         return null;
     }
-    // Whether an await's yield point still lies ahead in the hidden code between 'ilOffset' and the next statement
-    public bool HasAwaitAhead(int methodToken, int ilOffset, int? nextStatementOffset) {
+    // Whether 'ilOffset' lies in the continuation of an await: the hidden region of the await machinery, at or past
+    // the yield or resume point, where the method goes on once the awaited task is done. A step out of the awaited
+    // method ends there, and the awaiting statement is the line to report for it. The region is the one of the
+    // offset's own hidden sequence point: the hidden finally or cleanup that may follow the machinery within the
+    // same statement (a 'using' with an await as its body) starts a region of its own and is no continuation
+    public bool IsAwaitContinuation(int methodToken, int ilOffset) {
         var asyncInfo = GetAsyncMethodInfo(methodToken);
         if (asyncInfo == null)
             return false;
-        return asyncInfo.Awaits.Any(it => it.YieldOffset >= ilOffset && (nextStatementOffset == null || it.YieldOffset < nextStatementOffset));
+        var regionStart = GetHiddenRegionStart(methodToken, ilOffset);
+        if (regionStart == null)
+            return false;
+        return asyncInfo.Awaits.Any(it => IsBetween(it.YieldOffset, regionStart.Value, ilOffset) || IsBetween(it.ResumeOffset, regionStart.Value, ilOffset));
+    }
+    private static bool IsBetween(uint offset, int start, int end) {
+        return offset >= start && offset <= end;
     }
     public string? GetSourceLink(string documentPath) {
         if (!sourceLinkMapLoaded) {

@@ -6,7 +6,9 @@ namespace DotNet.Debugging.Tests;
 // A 'using', a 'lock' and a 'foreach' compile to a try/finally whose sequence points are hidden: the offsets
 // belong to no source line of their own. The runtime ends a range step at the handler, and a stop there would
 // report the closest earlier statement - the line the step has just left - so the step controller keeps
-// stepping instead (Stepping/StepController with Metadata/ModuleMetadataReader.IsInHiddenRegion)
+// stepping instead (Stepping/StepController with Metadata/ModuleMetadataReader.IsInHiddenRegion). The same
+// goes for the other hidden code a step can land in: the leave out of a try guarded by a finally once its catch
+// blocks are passed, and the dispatch of a pattern switch after a failed 'when' clause
 public class HiddenRegionSteppingTests : BaseDebugTestFixture {
     public HiddenRegionSteppingTests() : base(nameof(HiddenRegionSteppingTests)) { }
 
@@ -43,6 +45,31 @@ public class HiddenRegionSteppingTests : BaseDebugTestFixture {
             Console.WriteLine("cleanup"); // marker:finallyBody
         }
         Console.WriteLine("after finally"); // marker:afterFinally
+
+        try {
+            Console.WriteLine("guarded twice"); // marker:catchFinallyBody
+        } // marker:catchFinallyClose
+        catch {
+            throw; // marker:rethrow
+        }
+        finally { // marker:catchFinallyOpen
+            Console.WriteLine("cleanup twice"); // marker:catchFinallyCleanup
+        }
+        Console.WriteLine("after catch finally"); // marker:afterCatchFinally
+
+        object boxed = 5;
+        switch (boxed) {
+            case int negative when negative < 0: // marker:negativeGuard
+                Console.WriteLine("negative");
+                break; // marker:negativeBreak
+            case int big when big > 100: // marker:bigGuard
+                Console.WriteLine("big");
+                break; // marker:bigBreak
+            case int other:
+                Console.WriteLine($"other {other}"); // marker:otherBody
+                break; // marker:otherBreak
+        }
+        Console.WriteLine("after switch"); // marker:afterSwitch
 
         RunTailUsing(); // marker:tailCall
         Console.WriteLine("after tail"); // marker:afterTail
@@ -188,5 +215,45 @@ public class HiddenRegionSteppingTests : BaseDebugTestFixture {
         var caller = StepOver(threadId);
         Assert.That(caller.Name, Does.Contain("Main"));
         Assert.That(caller.Line, Is.EqualTo(GetMarkerLine("marker:tailCall")));
+    }
+
+    // A try with catch blocks and a finally nests the try/catch inside a try/finally. The leave out of the
+    // outer try, past the catch blocks, is hidden code that maps back to the last catch statement: the step
+    // over the closing brace of the try used to stop on the 'throw;' of a catch that never ran
+    [Test]
+    public void StepOverTryCloseWithCatchAndFinallyReachesTheFinally() {
+        var threadId = LaunchToMarker("marker:catchFinallyBody");
+        var closing = StepOver(threadId);
+        Assert.That(closing.Line, Is.EqualTo(GetMarkerLine("marker:catchFinallyClose")));
+
+        var opening = StepOver(threadId);
+        Assert.That(opening.Line, Is.EqualTo(GetMarkerLine("marker:catchFinallyOpen")));
+        Assert.That(opening.Line, Is.Not.EqualTo(GetMarkerLine("marker:rethrow")));
+
+        var cleanup = StepOver(threadId);
+        Assert.That(cleanup.Line, Is.EqualTo(GetMarkerLine("marker:catchFinallyCleanup")));
+    }
+
+    [Test]
+    public void StepIntoTryCloseWithCatchAndFinallyReachesTheFinally() {
+        var threadId = LaunchToMarker("marker:catchFinallyClose");
+        var opening = StepIn(threadId);
+        Assert.That(opening.Line, Is.EqualTo(GetMarkerLine("marker:catchFinallyOpen")));
+    }
+
+    // A failed 'when' clause jumps into the hidden dispatch of the switch that binds the next case's
+    // pattern variable; that code maps back to the 'break' of the case just failed
+    [Test]
+    public void StepOverFailingWhenClauseReachesTheNextCase() {
+        var threadId = LaunchToMarker("marker:negativeGuard");
+        var secondGuard = StepOver(threadId);
+        Assert.That(secondGuard.Line, Is.EqualTo(GetMarkerLine("marker:bigGuard")));
+
+        var body = StepOver(threadId);
+        Assert.That(body.Line, Is.EqualTo(GetMarkerLine("marker:otherBody")));
+        Assert.That(StepOver(threadId).Line, Is.EqualTo(GetMarkerLine("marker:otherBreak")));
+
+        var after = StepOver(threadId);
+        Assert.That(after.Line, Is.EqualTo(GetMarkerLine("marker:afterSwitch")));
     }
 }

@@ -19,9 +19,9 @@ internal class StepController {
     private StepKind userStepKind;
     // The last completed step left a filtered method behind and its continuation is running
     private bool isSkippingFilteredMethod;
-    // The last completed step stopped in a hidden finally and its continuation is running: hidden code it
-    // reaches next is still cleanup, even outside a handler (the plumbing between two nested finallys)
-    private bool isCrossingHiddenFinally;
+    // The last completed step stopped in a hidden region and its continuation is running: a stop back in the
+    // statement the step started from (at the leave that called a finally) is the same step still under way
+    private bool isCrossingHiddenRegion;
     // The statement the user's step started in, a filtered skip that returns into it resumes the step
     private ModuleInfo? stepStatementModule;
     private int stepStatementMethodToken;
@@ -51,7 +51,7 @@ internal class StepController {
 
         userStepKind = kind;
         isSkippingFilteredMethod = false;
-        isCrossingHiddenFinally = false;
+        isCrossingHiddenRegion = false;
         isStepSuspended = false;
         stepFrameDepth = thread.GetFrameDepth();
         RememberStepStatement(frame);
@@ -120,9 +120,9 @@ internal class StepController {
     public bool TryCompleteStep(ICorDebugThread thread, CorDebugStepReason reason, out SourceLocation? location) {
         location = null;
         var wasSkippingFilteredMethod = isSkippingFilteredMethod;
-        var wasCrossingHiddenFinally = isCrossingHiddenFinally;
+        var wasCrossingHiddenRegion = isCrossingHiddenRegion;
         isSkippingFilteredMethod = false;
-        isCrossingHiddenFinally = false;
+        isCrossingHiddenRegion = false;
         // An active async step means a breakpoint is waiting at the next yield/resume point and the plain step
         // got there first, so the method left before reaching the await
         asyncStepper.ClearActiveStep();
@@ -180,26 +180,25 @@ internal class StepController {
             ResumeStep(thread, StepKind.Over);
             return false;
         }
-        // A step that came to rest in a hidden region goes on when the region is cleanup between two
-        // statements: the finally a 'using' or a 'lock' compiles to (the runtime ends a range step at the
-        // handler even though its offsets lie inside the range), the plumbing between two nested finallys
-        // (which belongs to no handler, a crossing under way covers it), or the hoisted DisposeAsync of an
-        // 'await using' or 'await foreach' (recognized by its await still lying ahead in the hidden code).
-        // The step keeps the user's kind - a step into enters a Dispose call the region makes; a step
-        // out already left its frame and covers the region like a step over. Hidden
-        // code past its await's resume point is different: that is where a step out of an async method
-        // ends, the mapping reports the awaiting statement there, and such a stop stands
-        if (module.MetadataReader.IsInHiddenRegion(methodToken, ip.pnOffset)
-            && (wasCrossingHiddenFinally || module.MetadataReader.IsInFinallyHandler(methodToken, ip.pnOffset) || module.MetadataReader.HasAwaitAhead(methodToken, ip.pnOffset, nextStatementOffset))) {
+        // A step that came to rest in a hidden region goes on: the code the compiler generated between two
+        // statements belongs to no line, and a stop there would show the statement before it. That is the
+        // finally a 'using' or a 'lock' compiles to (the runtime ends a range step at the handler even though
+        // its offsets lie inside the range), the leave out of a try guarded by a finally once its catch blocks
+        // are passed, the plumbing between two nested finallys, the hoisted DisposeAsync of an 'await using',
+        // or the dispatch of a pattern switch after a failed 'when' clause. The step keeps the user's kind - a
+        // step into enters a Dispose call the region makes; a step out already left its frame and covers the
+        // region like a step over. The one hidden place a stop stands is the continuation of an await: that is
+        // where a step out of the awaited method ends, and the awaiting statement is the right line for it
+        if (module.MetadataReader.IsInHiddenRegion(methodToken, ip.pnOffset) && !module.MetadataReader.IsAwaitContinuation(methodToken, ip.pnOffset)) {
             location = null;
-            isCrossingHiddenFinally = true;
+            isCrossingHiddenRegion = true;
             ResumeStep(thread, userStepKind == StepKind.Out ? StepKind.Over : userStepKind);
             return false;
         }
-        // The step across a hidden finally may end at the leave that called the finally, back in the statement
+        // The step across a hidden region may end at the leave that called a finally, back in the statement
         // the user's step started from (the Mac Catalyst runtime stops there; a local runtime runs on to the next
-        // statement by itself): the rest of that statement remains, so the step goes on as it did across the finally
-        if (wasCrossingHiddenFinally && IsInStepStatement(module, methodToken, ip.pnOffset)) {
+        // statement by itself): the rest of that statement remains, so the step goes on as it did across the region
+        if (wasCrossingHiddenRegion && IsInStepStatement(module, methodToken, ip.pnOffset)) {
             location = null;
             ResumeStep(thread, userStepKind == StepKind.Out ? StepKind.Over : userStepKind);
             return false;
@@ -267,7 +266,7 @@ internal class StepController {
         CancelStep();
         asyncStepper.Disable();
         isSkippingFilteredMethod = false;
-        isCrossingHiddenFinally = false;
+        isCrossingHiddenRegion = false;
         isStepSuspended = false;
     }
     private void ReleaseHeldThread() {
