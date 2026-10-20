@@ -141,6 +141,8 @@ asks the builder for `SetNotificationForWaitCompletion(true)` and breaks in
 ## 6. Stops and exceptions
 
 `OnStopped(StopInfo)` reports breakpoints, steps, the entry stop, `Debugger.Break()` and `Pause`.
+`OnStopSkipped(StopInfo)` reports a breakpoint or `Debugger.Break()` reached while a function
+evaluation ran, which could not stop and was continued through ([breakpoints.md](breakpoints.md)).
 `Pause` is the one stop the engine raises itself: `ICorDebugProcess.Stop` produces no callback, so
 after stopping it reports `StopReason.Pause` for the requested thread. A pause is refused while
 the process is not running — including the moment right after an attach, when the runtime is

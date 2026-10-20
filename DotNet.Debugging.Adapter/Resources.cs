@@ -28,19 +28,14 @@ public static class Resources {
     public const string MsgBreakpointNoCode = "The breakpoint is not bound: no executable code is associated with this line.";
     public const string MsgBreakpointError = "The breakpoint could not be bound: {0}";
     public const string MsgBreakpointConditionFailed = "The breakpoint condition '{0}' could not be evaluated: {1}";
+    public const string MsgBreakpointSkipped = "The breakpoint was skipped: it was hit during a function evaluation";
 
     public const string MsgExceptionThrown = "Exception thrown: '{0}' in {1}";
     public const string MsgExceptionUnhandled = "An unhandled exception of type '{0}' occurred in {1}";
     public const string MsgExceptionUserUnhandled = "An exception of type '{0}' occurred in {1} but was not handled in user code";
-    // Appended to the exception description when the reported exception wraps another one
     public const string MsgExceptionInner = "\nInner exception: {0}: {1}";
 
-    // public const string MsgMissingRuntimeId = $"Missing required property: 'runtimeIdentifier'.";
     public const string MsgMissingAssets = "Missing required property: 'assets'.";
-    public const string MsgMissingCoreclrHost =
-        "Unable to find the CoreCLR remote debugging host (libremotemscordbihost). " +
-        "Please provide a compatible copy from the Microsoft .NET MAUI VS Code extension.";
-    public const string MsgMissingCoreclrTarget =
-        "Unable to find the CoreCLR remote debugging target (libvsdbgremotecoreclrtarget). " +
-        "Please provide a compatible copy from the Microsoft .NET MAUI VS Code extension.";
+    public const string MsgMissingCoreclrHost = "The remote CoreCLR debugging host was not found: 'remoteCoreclrHost' must point to the directory of its libraries.";
+    public const string MsgMissingCoreclrTarget = "The remote CoreCLR debugging target was not found: 'remoteCoreclrTarget' must point to the directory of its libraries.";
 }

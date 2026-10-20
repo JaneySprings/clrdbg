@@ -1,6 +1,7 @@
 using DotNet.Debugging.CorApi;
 using DotNet.Debugging.CorApi.Extensions;
 using DotNet.Debugging.Engine.Enums;
+using DotNet.Debugging.Engine.Logging;
 using DotNet.Debugging.Engine.Models;
 
 namespace DotNet.Debugging.Engine;
@@ -34,8 +35,11 @@ public partial class ManagedDebugger {
     }
     // Debugger.Break() in the debuggee
     private void HandleBreak(BreakCorDebugManagedCallbackEventArgs callbackEvent) {
-        // Reached by the evaluated code, or by any other thread while an evaluation runs: like a breakpoint it cannot stop then
+        // Reached by the evaluated code, or by any other thread while an evaluation runs: like a breakpoint it cannot
+        // stop then, and like a breakpoint it is reported as skipped
         if (IsEvaluating) {
+            DebuggerLoggingService.LogMessage("Debugger.Break() reached during an evaluation, skipped");
+            OnStopSkipped?.Invoke(new StopInfo(callbackEvent.Thread.GetId(), StopReason.Pause, GetSourceLocation(callbackEvent.Thread.GetActiveFrame())));
             ContinueProcess();
             return;
         }

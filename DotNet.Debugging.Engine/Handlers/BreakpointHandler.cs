@@ -18,6 +18,8 @@ public partial class ManagedDebugger {
 
     private async Task HandleBreakpointAsync(BreakpointCorDebugManagedCallbackEventArgs callbackEvent) {
         if (IsEvaluating) {
+            if (callbackEvent.Breakpoint is ICorDebugFunctionBreakpoint skippedBreakpoint)
+                ReportSkippedBreakpoint(callbackEvent.Thread, skippedBreakpoint);
             ContinueProcess();
             return;
         }
@@ -125,6 +127,14 @@ public partial class ManagedDebugger {
         }
         stepController.ResumeSuspendedStep(thread);
         ContinueProcess();
+    }
+    // A breakpoint of the debugger's own (the entry point's, the async stepper's) is nobody's loss and goes unreported
+    private void ReportSkippedBreakpoint(ICorDebugThread thread, ICorDebugFunctionBreakpoint functionBreakpoint) {
+        var hits = breakpointManager.FindByCorBreakpoint(functionBreakpoint);
+        if (hits.Count == 0)
+            return;
+        DebuggerLoggingService.LogMessage("Breakpoint hit during an evaluation, skipped");
+        OnStopSkipped?.Invoke(new StopInfo(thread.GetId(), StopReason.Breakpoint, GetSourceLocation(thread.GetActiveFrame()), hits.Select(it => it.Id).ToList()));
     }
     // The entry breakpoint is not tracked by the breakpoint manager, it is matched by identity or by exclusion
     private bool TryHandleEntryPointBreakpoint(ICorDebugThread thread, ICorDebugFunctionBreakpoint functionBreakpoint) {

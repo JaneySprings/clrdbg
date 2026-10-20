@@ -108,7 +108,17 @@ while nothing matched anywhere.
 `BreakpointHandler.HandleBreakpointAsync` runs these checks in order, each either continuing the
 debuggee or moving on:
 
-1. A function evaluation is running → continue (the hit belongs to evaluated code).
+1. A function evaluation is running → continue: the hit belongs to the evaluated code (a getter the
+   Variables view reads, a `DebuggerDisplay`, a `DebuggerTypeProxy` constructor, a condition), or to
+   another thread running while the evaluation does, and no stop can be taken until the evaluation
+   completes — it is what runs the debuggee. The user's breakpoints are reported through
+   `OnStopSkipped(StopInfo)` (the debugger's own — the entry point's, the async stepper's — are not),
+   which the adapter prints as "The breakpoint was skipped: it was hit during a function evaluation"
+   with the location to the debug console; the hit count is not incremented and a condition is not
+   evaluated. A `Debugger.Break()` reached during an evaluation is skipped and reported the same way
+   (`StepHandler.HandleBreak`, `StopReason.Pause`). vsdbg and Visual Studio pass both silently, with
+   the evaluation's side effects kept, which is what makes the missing stop hard to explain without
+   the console line.
 2. A step is in progress and already complete, and the breakpoint was hit by the stepping thread →
    continue: the `StepComplete` callback is queued right behind this one and reports the stop, so the
    breakpoint at the step destination is not reported twice. Another thread's breakpoint is never

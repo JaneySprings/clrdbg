@@ -81,6 +81,7 @@ public partial class ManagedDebugger {
     internal bool IsEvaluating => FuncEval.IsRunning;
 
     public event Action<StopInfo>? OnStopped;
+    public event Action<StopInfo>? OnStopSkipped;
     // The subscriber decides whether to stop (do nothing) or to 'Continue()' after an exception
     public event Action<ExceptionStopInfo>? OnExceptionThrown;
     public event Action<int>? OnExited;

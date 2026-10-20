@@ -111,7 +111,8 @@ runtime thread ──► CorDebugManagedCallback.OnAnyEvent ──► Channel<Co
   not leave the debuggee hung.
 - While a function evaluation runs (`IsEvaluating`), `WaitForEvalEventAsync` keeps dispatching the
   callbacks that arrive — module loads, thread creation, but also breakpoints and exceptions hit by
-  the evaluated code, which `BreakpointHandler`/`ExceptionHandler` continue straight away.
+  the evaluated code, which `BreakpointHandler`/`ExceptionHandler` continue straight away (a user's
+  breakpoint or a `Debugger.Break()` is reported as skipped through `OnStopSkipped` first).
 
 The lock is the only synchronization in the engine. The managers are plain dictionaries, and the
 rule that follows from "everything runs under the lock, sometimes across an `await`" is: objects

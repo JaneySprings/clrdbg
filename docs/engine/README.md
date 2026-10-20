@@ -67,7 +67,8 @@ formats only the requested page, and `VariablePage.TotalCount` tells the host ho
 
 **Events carry engine facts, not protocol verbs.** `OnStopped(StopInfo)` says *why* and *where*
 (`StopReason.Breakpoint` with the hit breakpoint ids, `Step`, `Pause`, `Entry`, plus the
-`SourceLocation`); `OnExceptionThrown(ExceptionStopInfo)` reports the kind
+`SourceLocation`); `OnStopSkipped(StopInfo)` reports a breakpoint or `Debugger.Break()` that could
+not stop because a function evaluation was running; `OnExceptionThrown(ExceptionStopInfo)` reports the kind
 (`FirstChance`, `UserUnhandled`, `Unhandled`) and type name and leaves the decision to the
 subscriber — it either does nothing (the debuggee stays stopped) or calls `Continue()`.
 `OnModuleLoaded(ModuleInfo)`, `OnBreakpointChanged(Breakpoint)`, `OnThreadStarted/Exited`,
@@ -103,7 +104,8 @@ Everything the engine does happens under one `SemaphoreSlim`:
 - A function evaluation continues the debuggee while a request holds the lock;
   `FuncEvalRunner` pumps the callbacks arriving meanwhile (`WaitForEvalEventAsync`) until the
   `EvalComplete`/`EvalException` one, and the handlers know to continue through any stop
-  that arrives while `IsEvaluating`.
+  that arrives while `IsEvaluating` (a user's breakpoint or `Debugger.Break()` reached then is
+  reported through `OnStopSkipped`).
 
 Two consequences shape the code: frames and non-handle values obtained before an `await`
 must not be used after it, and there is no inner lock anywhere else — the managers are plain

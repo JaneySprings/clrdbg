@@ -27,6 +27,7 @@ public partial class DebugSession : Session {
         session = new ManagedDebugger();
 
         session.OnStopped += TargetStopped;
+        session.OnStopSkipped += TargetStopSkipped;
         session.OnExceptionThrown += TargetExceptionThrown;
         session.OnExited += TargetExited;
         session.OnProcessStarted += TargetProcessStarted;
@@ -53,6 +54,12 @@ public partial class DebugSession : Session {
             AllThreadsStopped = true,
             HitBreakpointIds = stop.HitBreakpointIds,
         });
+    }
+    private void TargetStopSkipped(StopInfo stop) {
+        var message = Resources.MsgBreakpointSkipped;
+        if (stop.Location != null)
+            message += $" ({session.MapDocumentPath(stop.Location.FilePath)}:{stop.Location.Line})";
+        OnDebugDataReceived(message);
     }
     private void TargetExceptionThrown(ExceptionStopInfo exception) {
         ResetHandles();
