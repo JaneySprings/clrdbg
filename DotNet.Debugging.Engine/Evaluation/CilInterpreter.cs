@@ -19,6 +19,11 @@ internal class CilInterpreter {
         this.primitiveTypes = primitiveTypes;
     }
 
+    private void EnsureCallsAllowed() {
+        if (!debugger.AllowImplicitFuncEval)
+            throw new EvaluationException("Running code in the program is disabled by the debug configuration");
+    }
+
     public async Task<EvaluationResult> InterpretAsync(CompiledExpression compiled, EvaluationContext context) {
         using var handles = new EvaluationHandleScope();
         var body = compiled.GetMethodBody(compiled.EntryMethod);
@@ -523,6 +528,7 @@ internal class CilInterpreter {
         if (SpanEmulator.IsSpanType(constructor.DeclaringType.FullName))
             return CreateSpanEmulator(resolver, context, handles).Create(constructor, constructorArguments);
 
+        EnsureCallsAllowed();
         var byRefArguments = new List<ByRefArgument>();
         var argumentValues = await MaterializeArgumentsAsync(constructor, constructorArguments, receiverOffset: 0, resolver, context, handles, byRefArguments);
 
@@ -578,6 +584,7 @@ internal class CilInterpreter {
             return;
         }
 
+        EnsureCallsAllowed();
         var byRefArguments = new List<ByRefArgument>();
         var callArguments = await MaterializeArgumentsAsync(method, argumentValues, method.IsStatic ? 0 : 1, resolver, context, handles, byRefArguments);
         if (receiverValue != null) {
@@ -622,32 +629,32 @@ internal class CilInterpreter {
     private async Task ExecuteDebuggerIntrinsicAsync(string name, Stack<CilValue> stack, EvaluationState state, EvaluationMetadataResolver resolver, EvaluationContext context, EvaluationHandleScope handles) {
         switch (name) {
             case "CreateVariable": {
-                stack.Pop(); // custom type payload
-                stack.Pop(); // custom type payload id
-                var variableName = stack.Pop().Value as string ?? throw new InvalidOperationException("The synthetic variable name is unavailable");
-                var variableType = stack.Pop().Value as ResolvedCilType ?? throw new InvalidOperationException("The synthetic variable type is unavailable");
-                state.SyntheticVariables[variableName] = await CreateSyntheticVariableAsync(variableType, resolver, context, handles);
-                return;
-            }
+                    stack.Pop(); // custom type payload
+                    stack.Pop(); // custom type payload id
+                    var variableName = stack.Pop().Value as string ?? throw new InvalidOperationException("The synthetic variable name is unavailable");
+                    var variableType = stack.Pop().Value as ResolvedCilType ?? throw new InvalidOperationException("The synthetic variable type is unavailable");
+                    state.SyntheticVariables[variableName] = await CreateSyntheticVariableAsync(variableType, resolver, context, handles);
+                    return;
+                }
             case "GetVariableAddress": {
-                var variableName = stack.Pop().Value as string ?? throw new InvalidOperationException("The synthetic variable name is unavailable");
-                if (!state.SyntheticVariables.TryGetValue(variableName, out var location))
-                    throw new InvalidOperationException($"The synthetic variable '{variableName}' is unavailable");
-                stack.Push(CilValue.FromLocation(location));
-                return;
-            }
+                    var variableName = stack.Pop().Value as string ?? throw new InvalidOperationException("The synthetic variable name is unavailable");
+                    if (!state.SyntheticVariables.TryGetValue(variableName, out var location))
+                        throw new InvalidOperationException($"The synthetic variable '{variableName}' is unavailable");
+                    stack.Push(CilValue.FromLocation(location));
+                    return;
+                }
             case "GetObjectByAlias": {
-                var variableName = stack.Pop().Value as string ?? throw new InvalidOperationException("The synthetic variable name is unavailable");
-                if (!state.SyntheticVariables.TryGetValue(variableName, out var location))
-                    throw new InvalidOperationException($"The synthetic variable '{variableName}' is unavailable");
-                stack.Push(handles.Root(location.Read()));
-                return;
-            }
+                    var variableName = stack.Pop().Value as string ?? throw new InvalidOperationException("The synthetic variable name is unavailable");
+                    if (!state.SyntheticVariables.TryGetValue(variableName, out var location))
+                        throw new InvalidOperationException($"The synthetic variable '{variableName}' is unavailable");
+                    stack.Push(handles.Root(location.Read()));
+                    return;
+                }
             case "GetException": {
-                var exception = debugger.GetCurrentException(context.ThreadId) ?? throw new InvalidOperationException("No current exception is available");
-                stack.Push(handles.Root(CilValue.FromCorValue(exception)));
-                return;
-            }
+                    var exception = debugger.GetCurrentException(context.ThreadId) ?? throw new InvalidOperationException("No current exception is available");
+                    stack.Push(handles.Root(CilValue.FromCorValue(exception)));
+                    return;
+                }
             default:
                 throw new NotSupportedException($"Debugger intrinsic '{name}' is not supported");
         }
@@ -952,6 +959,7 @@ internal class CilInterpreter {
         if (stringText != null)
             return stringText;
 
+        EnsureCallsAllowed();
         var receiver = value.CorValue ?? throw new InvalidOperationException("The interpolated value is unavailable");
         if (receiver.GetExactType().GetElementType() == CorElementType.VALUETYPE)
             receiver = (await BoxAsync(value, receiver.GetExactType(), context, handles)).CorValue!;
@@ -1121,6 +1129,7 @@ internal class CilInterpreter {
         if (source.IsNull)
             throw new EvaluationThrewException("System.ArgumentNullException");
         if (source.CorValue?.UnwrapDebugValue() is not ICorDebugArrayValue array) {
+            EnsureCallsAllowed();
             var toArray = resolver.ResolveRuntimeMethod("System.Linq", "Enumerable", "ToArray", "System.Collections.Generic.IEnumerable`1<!!0>");
             var eval = context.Thread.CreateEval();
             var enumerated = handles.Track(await debugger.FuncEval.CallFunctionAsync(eval, toArray.Function, [resolver.GetCorDebugType(elementType)], [source.CorValue!], throwOnException: true));
@@ -1163,6 +1172,7 @@ internal class CilInterpreter {
         return await MaterializeForStoreAsync(value, resolver, context, handles);
     }
     private async Task<CilValue> CreateListAsync(HostSequence sequence, EvaluationMetadataResolver resolver, EvaluationContext context, EvaluationHandleScope handles) {
+        EnsureCallsAllowed();
         var array = await MaterializeSequenceAsync(sequence, resolver, context, handles);
         var constructor = resolver.ResolveRuntimeMethod("System.Collections.Generic", "List`1", ".ctor", "System.Collections.Generic.IEnumerable`1<!0>");
         var eval = context.Thread.CreateEval();

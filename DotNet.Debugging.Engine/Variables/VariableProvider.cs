@@ -125,6 +125,9 @@ internal class VariableProvider {
             case VariableReferenceKind.ResultsView:
                 await AddResultsViewItemsAsync(reference, result);
                 break;
+            case VariableReferenceKind.LazyValue:
+                result.Add(new VariableSlot(reference.LazyName!, reference.ReadLazyValueAsync!));
+                break;
             case VariableReferenceKind.NonPublicMembers:
                 await AddMembersAsync(reference.Value!, reference.Value!.UnwrapDebugValueToObject().GetExactType(), MemberFilter.NonPublic, listStatics: false, reference, result);
                 SortMembers(result);
@@ -227,8 +230,10 @@ internal class VariableProvider {
         if (formatted.TypeName.EndsWith('?'))
             displayValue = value.UnwrapDebugValueToObject().GetNullableValue() ?? value;
         if (formatted.RequiresDebuggerDisplay) {
-            if (IsImplicitEvalBudgetSpent || IsImplicitEvalRefused || depth >= MaxDisplayDepth) {
-                // The budget ran out (or the displays nest too deep), the value falls back to the display it would have without the override
+            // A ToString override is an implicit call, off with either option; a DebuggerDisplay still renders without
+            // implicit evaluation, a fragment of it that needs a call shows that in its place
+            var isToStringOff = formatted.Value == ValueFormatter.ToStringTemplate && !(debugger.AllowToString && debugger.AllowImplicitFuncEval);
+            if (isToStringOff || IsImplicitEvalBudgetSpent || IsImplicitEvalRefused || depth >= MaxDisplayDepth) {
                 text = $"{{{formatted.TypeName}}}";
             }
             else {
@@ -248,8 +253,9 @@ internal class VariableProvider {
             }
         }
 
+        // No proxy without implicit evaluation, its constructor is one
         ICorDebugValue? proxyValue = null;
-        if (createProxy && formatted.DebuggerProxyTypeName != null && !IsImplicitEvalRefused) {
+        if (createProxy && formatted.DebuggerProxyTypeName != null && !IsImplicitEvalRefused && debugger.AllowImplicitFuncEval) {
             try {
                 proxyValue = await CreateDebuggerProxyAsync(displayValue, formatted.DebuggerProxyTypeName, threadId);
             }
@@ -468,7 +474,7 @@ internal class VariableProvider {
         else if (unwrapped is ICorDebugObjectValue objectValue) {
             var type = objectValue.GetExactType();
             await AddMembersAndGroupsAsync(value, type, reference, result, includeNonPublicGroup: true);
-            if (includeResultsView && type.IsEnumerableType())
+            if (includeResultsView && debugger.AllowImplicitFuncEval && type.IsEnumerableType())
                 result.Add(CreateResultsViewNode(reference));
             SortMembers(result);
         }
@@ -655,11 +661,11 @@ internal class VariableProvider {
                     ICorDebugValue[] arguments = isStatic ? [] : [value];
                     return debugger.FuncEval.CallFunctionAsync(eval, getter, type.GetTypeParameters(), arguments, throwOnException: true);
                 };
-                if (browsable == DebuggerBrowsableState.RootHidden) {
+                if (browsable == DebuggerBrowsableState.RootHidden && debugger.AllowImplicitFuncEval) {
                     await AddRootHiddenMemberAsync(name, invokeGetterAsync, reference, result, evaluateName, VariableKind.Property, visibility);
                     continue;
                 }
-                result.Add(new VariableSlot(name, async () => {
+                Func<Task<VariableInfo?>> readPropertyAsync = async () => {
                     ICorDebugValue? propertyValue;
                     try {
                         propertyValue = await invokeGetterAsync();
@@ -684,12 +690,31 @@ internal class VariableProvider {
                         if (!keepHandle && propertyValue is ICorDebugHandleValue handle)
                             handle.TryDispose();
                     }
-                }));
+                };
+                // Without implicit evaluation the getter waits for the client to ask: the property is listed with its
+                // type alone and its variables reference runs the read (a RootHidden one goes the same way, what it
+                // holds cannot be known without the read)
+                if (!debugger.AllowImplicitFuncEval) {
+                    var lazy = new VariableInfo(name, string.Empty, GetPropertyTypeName(module, member.Token));
+                    lazy.Kind = VariableKind.Property;
+                    lazy.Visibility = visibility;
+                    lazy.EvaluateName = evaluateName;
+                    lazy.IsLazy = true;
+                    lazy.VariablesReference = variableManager.Create(new VariableReference(reference.ThreadId, reference.FrameDepth, name, readPropertyAsync));
+                    result.Add(new VariableSlot(lazy));
+                    continue;
+                }
+                result.Add(new VariableSlot(name, readPropertyAsync));
             }
             catch (Exception ex) {
                 result.Add(new VariableSlot(VariableInfo.CreateError(name, ex.Message)));
             }
         }
+    }
+    // The declared type of a property, from the module's metadata; null when it cannot be told
+    private string? GetPropertyTypeName(ICorDebugModule module, PropertyToken property) {
+        var reader = debugger.FindModule(module)?.MetadataReader.PeMetadataReader;
+        return reader?.GetPropertyTypeName((int)property.Value, DisplayNameSignatureProvider.Instance);
     }
     // A 'RootHidden' member is replaced in the listing by its own elements, so unlike the other members it is read
     // while the listing is built - what it holds decides how many entries the listing has and how they are named

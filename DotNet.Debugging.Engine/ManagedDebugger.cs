@@ -70,6 +70,11 @@ public partial class ManagedDebugger {
     }
     // 'Step over properties and operators': a step never stops inside an accessor or an operator method
     public bool EnableStepFiltering { get; set; } = true;
+    // Whether the debugger runs code in the debuggee on its own (getters, displays, ToString,
+    // proxies, calls in expressions); off, listed properties are lazy (VariableInfo.IsLazy) and calls are refused
+    public bool AllowImplicitFuncEval { get; set; } = true;
+    // 'allowToString': whether a ToString override formats a value; off, the value shows as its type name in braces
+    public bool AllowToString { get; set; } = true;
     // Whether ICorDebug reports the debuggee as executing. A state that cannot be read counts as not running
     public bool IsRunning => process != null && process.TryIsRunning(out var isRunning) == Cor.S_OK && isRunning;
     public int ProcessId { get; private set; }
@@ -82,7 +87,6 @@ public partial class ManagedDebugger {
 
     public event Action<StopInfo>? OnStopped;
     public event Action<StopInfo>? OnStopSkipped;
-    // The subscriber decides whether to stop (do nothing) or to 'Continue()' after an exception
     public event Action<ExceptionStopInfo>? OnExceptionThrown;
     public event Action<int>? OnExited;
     public event Action<int>? OnProcessStarted;
@@ -96,7 +100,6 @@ public partial class ManagedDebugger {
     // Output text of a launched debuggee, 'true' for stderr
     public event Action<string, bool>? OnOutput;
     public event Action<string>? OnLogPoint;
-    // A message the debuggee logs to the debugger: Debug.WriteLine, Trace.WriteLine, Debugger.Log
     public event Action<string>? OnDebugMessage;
     public event Action<Breakpoint>? OnBreakpointChanged;
 

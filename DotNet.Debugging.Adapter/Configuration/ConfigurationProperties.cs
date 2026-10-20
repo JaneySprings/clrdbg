@@ -98,6 +98,14 @@ public class SymbolOptions {
     // }
 }
 
+public class ExpressionEvaluationOptions {
+    [JsonPropertyName("allowImplicitFuncEval")]
+    public bool AllowImplicitFuncEval { get; set; } = true;
+
+    [JsonPropertyName("allowToString")]
+    public bool AllowToString { get; set; } = true;
+}
+
 public class LoggingOptions {
     [JsonPropertyName("traceResponse")]
     public bool TraceResponse { get; set; }

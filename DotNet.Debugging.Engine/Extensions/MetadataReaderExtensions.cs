@@ -20,6 +20,18 @@ internal static class MetadataReaderExtensions {
     public static string GetFullName(this MetadataReader reader, TypeReferenceHandle handle) {
         return GetQualifiedName(reader, handle, '+');
     }
+    // The type of a property as 'typeProvider' formats it; null when the signature cannot be read, or names a type
+    // parameter the provider has no name for
+    public static string? GetPropertyTypeName(this MetadataReader reader, int propertyToken, ISignatureTypeProvider<string, object?> typeProvider) {
+        try {
+            var property = reader.GetPropertyDefinition(MetadataTokens.PropertyDefinitionHandle(propertyToken));
+            var typeName = property.DecodeSignature(typeProvider, null).ReturnType;
+            return typeName.Contains('!') ? null : typeName;
+        }
+        catch {
+            return null;
+        }
+    }
     // 'string[] args, int count': the parameter types formatted by 'typeProvider', named after the Param rows
     public static string GetParameterList(this MetadataReader reader, int methodToken, ISignatureTypeProvider<string, object?> typeProvider) {
         try {

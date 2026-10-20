@@ -9,6 +9,7 @@ public abstract class BaseConfiguration {
     public bool EnableStepFiltering { get; }
     public Dictionary<string, SourceLinkOptions> SourceLinkOptions { get; }
     public Dictionary<string, string> SourceFileMap { get; }
+    public ExpressionEvaluationOptions ExpressionEvaluationOptions { get; }
     public SymbolOptions SymbolOptions { get; }
     public LoggingOptions Logging { get; }
 
@@ -18,6 +19,7 @@ public abstract class BaseConfiguration {
         EnableStepFiltering = properties.TryGetValue("enableStepFiltering").ToValue<bool>(true);
         Logging = properties.TryGetValue("logging").ToClass<LoggingOptions>() ?? new LoggingOptions();
         SymbolOptions = properties.TryGetValue("symbolOptions").ToClass<SymbolOptions>() ?? new SymbolOptions();
+        ExpressionEvaluationOptions = properties.TryGetValue("expressionEvaluationOptions").ToClass<ExpressionEvaluationOptions>() ?? new ExpressionEvaluationOptions();
         SourceFileMap = properties.TryGetValue("sourceFileMap").ToClass<Dictionary<string, string>>() ?? new Dictionary<string, string>();
         SourceLinkOptions = properties.TryGetValue("sourceLinkOptions").ToClass<Dictionary<string, SourceLinkOptions>>()
             ?? new Dictionary<string, SourceLinkOptions> { ["*"] = new SourceLinkOptions() };

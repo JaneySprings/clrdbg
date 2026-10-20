@@ -163,6 +163,7 @@ public static class ServerExtensions {
             Kind = variable.IsError ? null : variable.Kind.ToKindValue(),
             Attributes = variable.ToAttributesValue(),
             Visibility = variable.Visibility?.ToVisibilityValue(),
+            Lazy = variable.IsLazy ? true : null,
         };
     }
     public static DebugProtocol.VariablePresentationHint.KindValue ToKindValue(this VariableKind kind) {

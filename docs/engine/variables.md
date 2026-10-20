@@ -163,6 +163,20 @@ run code on (paused in native code or a wait, see the func-eval section of
 page shows that value as `{TypeName}`, creates no debugger proxy for it, and the rest of the page skips
 its implicit evaluations — the frame slots still list, and a property getter shows the refusal as its
 own error row.
+
+**Evaluation options** (`expressionEvaluationOptions` of the launch configuration, applied as
+`ManagedDebugger.AllowImplicitFuncEval` and `AllowToString`). With implicit function
+evaluation off nothing runs in the debuggee on the debugger's own initiative: a listed property is handed
+back without its value and marked lazy (`VariableInfo.IsLazy`, DAP `presentationHint.lazy`), with a
+variables reference (`VariableReferenceKind.LazyValue`) that runs the getter when the client asks and
+yields the evaluated property as the single entry of that listing — VS Code shows its "click to expand"
+eye for it, a client without the notion gets an expandable row with the value inside; a `DebuggerDisplay`
+still renders, but a fragment that needs a call shows `Running code in the program is disabled by the debug configuration` in its place,
+because the interpreter refuses every call, construction
+and enumeration before starting it (`CilInterpreter.EnsureCallsAllowed`) — an explicit expression making
+a call fails the same way; `ToString` overrides are not called (`{TypeName}`) and no `DebuggerTypeProxy` is
+constructed (the members themselves are listed), and no Results View is offered. `allowToString` off leaves
+only the `ToString` overrides out.
 `TypeNameFormatter` renders types as C#: keywords for primitives, `string[]`/`int[,]`, generic
 instantiations with the arguments consumed by arity along the nesting chain (`Outer<string>.Inner<int>`),
 `System.Nullable<T>` as `T?`, `System.String`/`System.Object`/`System.Decimal` and boxed primitives as

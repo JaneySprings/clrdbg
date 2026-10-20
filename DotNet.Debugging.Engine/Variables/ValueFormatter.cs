@@ -33,7 +33,7 @@ internal class FormattedValue {
 internal static class ValueFormatter {
     private const CorFieldAttr EnumMemberAttributes = CorFieldAttr.fdPublic | CorFieldAttr.fdStatic | CorFieldAttr.fdLiteral | CorFieldAttr.fdHasDefault;
     // A ToString result is shown in braces ('{Text}') and never quoted, written as a display string would write it
-    private const string ToStringTemplate = "\\{{ToString(),nq}\\}";
+    internal const string ToStringTemplate = "\\{{ToString(),nq}\\}";
 
     public static FormattedValue Format(ICorDebugValue value, bool escapeStrings) {
         switch (value) {

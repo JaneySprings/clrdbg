@@ -24,6 +24,8 @@ public partial class DebugSession {
                 session.RequireExactSource = configuration.RequireExactSource;
                 session.SourceFileMap = configuration.SourceFileMap;
                 session.EnableStepFiltering = configuration.EnableStepFiltering;
+                session.AllowImplicitFuncEval = configuration.ExpressionEvaluationOptions.AllowImplicitFuncEval;
+                session.AllowToString = configuration.ExpressionEvaluationOptions.AllowToString;
             });
             // Breakpoints arrive after this event, the attach itself is made on 'ConfigurationDone'
             Protocol.SendEvent(new InitializedEvent());

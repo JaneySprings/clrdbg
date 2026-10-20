@@ -14,6 +14,8 @@ public class VariableInfo {
     public int VariablesReference { get; set; }
     // 'Value' holds the error text
     public bool IsError { get; set; }
+    // The value is not read yet: the variables reference yields the variable evaluated, as the single entry of the listing
+    public bool IsLazy { get; set; }
 
     public VariableInfo(string name, string value, string? type) {
         Name = name;
