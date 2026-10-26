@@ -88,7 +88,7 @@ public partial class ManagedDebugger {
     public event Action<StopInfo>? OnStopped;
     public event Action<StopInfo>? OnStopSkipped;
     public event Action<ExceptionStopInfo>? OnExceptionThrown;
-    public event Action<int>? OnExited;
+    public event Action<int?>? OnExited;
     public event Action<int>? OnProcessStarted;
     public event Action<int>? OnThreadStarted;
     public event Action<int>? OnThreadExited;

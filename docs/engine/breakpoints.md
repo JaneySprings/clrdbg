@@ -33,7 +33,7 @@ the debuggee starts.
 
 Binding a source breakpoint (`TryBind`) asks every module with symbols to resolve it, and binds it in
 each one that does — a file compiled into several modules (a linked `<Compile>`, a byte-identical copy
-in another project) is hit in each of them, as it is in vsdbg:
+in another project) is hit in each of them:
 
 1. `ModuleMetadataReader.FindDocument` looks the document up by full path (case-insensitive, `\`
    normalized to `/`): each document's path is translated through `ManagedDebugger.SourceFileMap`
@@ -75,7 +75,7 @@ Then:
 | A whole line covered only by statements starting above it, and another method has a statement at or below the line inside one of them (a blank line in the body of a multi-line lambda: the delegate assignment's point spans the whole lambda text) | That method's `First` point — the lambda's next statement, where the user put the breakpoint, rather than up to the start of the spanning statement. |
 | Exactly one method covers it | Its `Covering` point. |
 | Several cover it, one `Covering` starts later than the others | That one — the innermost lambda, whose own statement starts after the enclosing statement (e.g. the delegate assignment) that spans it. |
-| Several `Covering` points start at the same position (`items.Select(i => i * 2)` on one line) | netcoredbg's containment rule: if the nested method's range lies inside the outer's first statement the call site wins; otherwise, if the outer's first statement ends after the nested's, the lambda body wins. |
+| Several `Covering` points start at the same position (`items.Select(i => i * 2)` on one line) | By containment: if the nested method's range lies inside the outer's first statement the call site wins; otherwise, if the outer's first statement ends after the nested's, the lambda body wins. |
 
 With a column the comparisons use (line, column) positions; without one, whole lines.
 
@@ -116,9 +116,8 @@ debuggee or moving on:
    which the adapter prints as "The breakpoint was skipped: it was hit during a function evaluation"
    with the location to the debug console; the hit count is not incremented and a condition is not
    evaluated. A `Debugger.Break()` reached during an evaluation is skipped and reported the same way
-   (`StepHandler.HandleBreak`, `StopReason.Pause`). vsdbg and Visual Studio pass both silently, with
-   the evaluation's side effects kept, which is what makes the missing stop hard to explain without
-   the console line.
+   (`StepHandler.HandleBreak`, `StopReason.Pause`). Passing both silently would leave the
+   evaluation's side effects without an explanation; the console line gives one.
 2. A step is in progress and already complete, and the breakpoint was hit by the stepping thread →
    continue: the `StepComplete` callback is queued right behind this one and reports the stop, so the
    breakpoint at the step destination is not reported twice. Another thread's breakpoint is never

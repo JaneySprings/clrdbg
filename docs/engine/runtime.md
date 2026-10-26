@@ -147,8 +147,11 @@ object. `ThreadInfo.IsMain` lets the host label an unnamed main thread.
 ## 5. Exit and disposal
 
 `ExitProcess` reports `OnExited` with the exit code of a launched process — the runtime is shutting
-down, so the engine waits up to two seconds for the OS process to finish before reading it; an
-attached process reports 0. Nothing is continued afterwards.
+down, so the engine waits up to two seconds for the OS process to finish before reading it. The code is
+null when the engine cannot read it: a process attached to or started in a terminal is not its child,
+and a remote debuggee's exit is its agent's connection dropping, which an app that crashed could not
+precede with anything. The adapter then reports the exit without an `exited` event, and a host that
+needs the code sees it is unknown rather than 0. Nothing is continued afterwards.
 
 `Terminate()` stops a running process first (`ICorDebugProcess.Terminate` requires a synchronized
 process), terminates it and disposes. `Disconnect(terminateDebuggee: false)` stops and detaches.

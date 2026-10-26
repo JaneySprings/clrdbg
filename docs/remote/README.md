@@ -115,7 +115,7 @@ folder listed in `symbolOptions.searchPaths`.
   adapter fast-deploys them to the app's `.__override__` folder, and the loader hands the runtime the core library
   as bytes (previous section).
 - **Signatures on Mac Catalyst.** A launch killed with `SIGKILL (Code Signature Invalid)` means one of the executable's
-  linked dylibs is refused by the kernel. Two causes met: a signed binary overwritten in place after it was mapped
+  linked dylibs is refused by the kernel. Two causes: a signed binary overwritten in place after it was mapped
   once, which leaves the kernel's cached signature stale, so replace files with `rm` + `cp` rather than copying over
   them; and a build that rewrote the install names of the runtime's dylibs without re-signing them. `cmp file file` on
   a suspect dylib exits 137 when the kernel refuses to map it. Re-signing a bundle with `codesign --force --sign -`
@@ -163,21 +163,15 @@ for that is not proxied; a Release build writes no log. `dotnet publish DotNet.D
 `remoteCoreclrHost` points there. The engine's own log shows the modules as they are mapped and every callback it
 handles.
 
-## What works, and what does not
+## Scope
 
-Verified through the adapter and the engine on the MAUI test app: a breakpoint in the page constructor binds and hits;
-the stack lists in 25 ms on Mac Catalyst and 190 ms on an Android device over `adb` (a page of 50 locals with
-their display strings takes 0.7 s and 3 s there); locals show `this` with its
-DebuggerDisplay and expand; arrays, structs and strings display and expand; assignments, property reads, function
-evaluations (`GetType().Name`, `ToString()`, `DateTime.Now`) and constructor calls run in the app; an exception thrown
-inside an evaluation is reported; step over lands on the next line; pause stops the running app and lists the threads
-with their stacks; a first-chance exception in user code stops with its type and message; disconnect ends the app
-through the device library. The iOS simulator, an iOS device and an Android device run the same session; the
-full case sweep (variables and formatting, member listing, set variable, evaluation, arrays, slow and throwing
-evaluations, stepping and step filtering, hidden regions, set next statement, debug output, conditions, hit counts,
-logpoints, function breakpoints, threads, exception stops with recorded traces, async stepping, pause, detach) passes
-on Mac Catalyst, the iOS simulator and the Android device. A host connecting after the app
-attached alone receives the replayed attach (1 process, 1 app domain, 49 assemblies and modules, 3 threads in 21 ms).
+A remote session offers what a local one does: breakpoints with conditions, hit counts and logpoints, function
+breakpoints, variables with their display strings and member listing, set variable, evaluation (property reads,
+function and constructor calls, with a thrown exception reported), arrays, stepping with step filtering and hidden
+regions, async stepping, set next statement, debug output, threads with their stacks, pause, exception stops with
+recorded traces, and detach; disconnect ends the app through the device library. Mac Catalyst, the iOS simulator,
+an iOS device and an Android device run the same session. A host connecting after the app attached alone receives
+the replayed attach.
 
 Not proxied, by design of the wire (the host log names each call): thread and chain contexts and register sets, the
 register values of native frames, value and module breakpoints, edit-and-continue snapshots, the raw rows, strings

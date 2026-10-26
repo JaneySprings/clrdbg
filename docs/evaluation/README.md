@@ -10,7 +10,7 @@ DotNet.Debugging.Engine ──ExpressionContext.Compile()──> DotNet.Debuggin
                                                           (Roslyn/src, verbatim + Shims/)
 ```
 
-## Why a project of our own
+## Why the sources are vendored
 
 - The compiler lives in the Roslyn repository (`src/ExpressionEvaluator/*/Source/ExpressionCompiler`)
   and is not published as a package. It is written against the `Microsoft.VisualStudio.Debugger.Engine`
@@ -116,8 +116,8 @@ Roslyn version — the build refuses a mismatch. To move to a new `Microsoft.Cod
    at that commit (a sparse, blobless, depth-1 fetch of about a megabyte), replaces `Roslyn/src` and
    `Roslyn/License.txt` and rewrites `Roslyn/Roslyn.props`. Running it again for the same version
    yields no diff, which is also how to check the copy is still pristine.
-3. Build. The expression compiler is stable — between 5.6.0 and 5.9.0 upstream touched 6 of its files,
-   27 lines — so an update usually builds as is. When it does not:
+3. Build. The expression compiler changes little between Roslyn versions, so an update usually builds
+   as is. When it does not:
    - a vendored file newly names a Dkm type: add a stand-in to `Shims/DkmContracts.cs` or, if the file
      is Dkm-facing through and through, add it to the `<Compile Remove>` list;
    - `ResultPropertiesHelper` no longer matches `GetResultProperties` in the excluded

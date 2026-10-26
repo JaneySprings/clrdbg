@@ -22,8 +22,8 @@ public partial class ManagedDebugger {
     }
     private void HandleProcessExited(ExitProcessCorDebugManagedCallbackEventArgs callbackEvent) {
         DebuggerLoggingService.LogMessage("Process exited");
-        var exitCode = 0;
-        // The runtime is shutting down, the OS process follows right after
+
+        int? exitCode = null;
         if (launchedProcess != null && launchedProcess.WaitForExit(2000))
             exitCode = launchedProcess.ExitCode;
         // ExitProcess is the runtime's final callback. Completing the queue fails a request stuck in

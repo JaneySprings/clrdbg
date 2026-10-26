@@ -7,7 +7,7 @@ into C#, plus the P/Invoke surface needed to bootstrap a debug session.
 
 | API family | Interfaces | Purpose |
 |---|---|---|
-| `ICorDebug*` | 136 | The CLR debugging API: processes, app domains, assemblies, modules, threads, chains, frames, code, breakpoints, steppers, values, evals, GC heap inspection, managed callbacks. The same API used by vsdbg and Visual Studio. |
+| `ICorDebug*` | 136 | The CLR debugging API: processes, app domains, assemblies, modules, threads, chains, frames, code, breakpoints, steppers, values, evals, GC heap inspection, managed callbacks. |
 | `IMetaData*` | 6 | Raw metadata reading/inspection for debuggee modules: `IMetaDataImport`/`2`, `IMetaDataAssemblyImport`, `IMetaDataTables`/`2`, `IMetaDataInfo`. |
 | `ICLR*` | 6 | Runtime discovery and out-of-process inspection entry points: `ICLRDebugging`, `ICLRMetaHost`, `ICLRRuntimeInfo`, `ICLRDebuggingLibraryProvider`/`2`/`3`. |
 | `DbgShim` | 16 functions | P/Invoke wrappers for the native `dbgshim` library — process launch, runtime-startup notification, and `ICorDebug` acquisition. |

@@ -92,8 +92,7 @@ object's address and size; thread and process ids): the answer of the first succ
 The session keeps the proxies of what lives as long as the process (app domains, assemblies, modules, importers,
 functions, classes, types, code) strongly, so those answers survive the debugger letting go of the object between two
 stops; everything else (values, frames, chains, steppers, evals) is held weakly and returns its handle when collected.
-On an Android device over `adb` this took the calls of a session with one locals page from 4,528 to 3,127 and the
-page of 50 locals from 4.4 to 3.0 seconds; what remains is mostly the function evaluations behind the displayed values.
+What remains of a locals page's round trips is mostly the function evaluations behind the displayed values.
 
 Names are asked for twice by the engine, once for the length and once with a buffer of that length. A call with a text
 buffer of capacity zero goes out with a buffer of 1024 characters instead, and its whole response is kept by the call

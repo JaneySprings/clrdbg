@@ -84,8 +84,9 @@ it in every module that resolves it (a file compiled into several modules is hit
   file) is passed over and reported as `BreakpointStatus.SourceMismatch`; a document without code at
   the line is `BreakpointStatus.NoCode`;
 - `SequencePointResolver` picks the sequence point: the one covering the position with the latest
-  start (which naturally selects the innermost lambda), netcoredbg's containment rule when several
-  start at the same position, and the next line with code when none covers it;
+  start (which naturally selects the innermost lambda), the containment rule of
+  [breakpoints.md](breakpoints.md) when several start at the same position, and the next line with
+  code when none covers it;
 - the `ICorDebugFunctionBreakpoint` is created at that IL offset and the `Breakpoint` gets the
   resolved `Line`/`Column`/`EndLine`/`EndColumn` and a `Location` carrying the document's Source Link.
 
@@ -184,7 +185,14 @@ compiler records that handler's IL offset in the PDB's async stepping informatio
 methods (`GetAsyncCatchHandlerOffset`), and a `CATCH_HANDLER_FOUND` notification whose handler offset is
 that one is the signal; the catch of any other async method stays a user handler — the awaiting code
 sees the exception again at its await and may handle it, and if it does not, the chain ends in one of the
-recorded handlers anyway. In every case the host applies its
+recorded handlers anyway. One exception the runtime never reports as unhandled is one leaving managed code
+into native frames (an `[UnmanagedCallersOnly]` callback that UIKit, GCD or libc called) in an app that
+registered the Objective-C propagation hook (`ObjectiveCMarshal.Initialize`, which .NET for iOS and Mac Catalyst
+do at startup): the runtime asks the hook in the first pass, unwinds to the boundary and calls the native function
+the hook named — in .NET for iOS one that ends in `abort()` — and sends no unhandled, catch-handler or unwind
+callback, only the first-chance ones. The engine does not stop there: the one place it could is the hook's
+call in the core library, a stop in optimized code at no GC-safe point, where the runtime refuses
+evaluations. In every case the host applies its
 filters and calls `Continue()` when it does not want the stop — inside the callback, which the engine
 records: a stop the host took abandons any step in flight, a continued exception leaves it running.
 The engine does not read that back from `ICorDebugProcess.IsRunning`, which can still report the

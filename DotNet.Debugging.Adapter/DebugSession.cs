@@ -85,9 +85,15 @@ public partial class DebugSession : Session {
             StartMethod = debugAgent is AttachDebugAgent ? ProcessEvent.StartMethodValue.Attach : ProcessEvent.StartMethodValue.Launch,
         });
     }
-    private void TargetExited(int exitCode) {
-        OnDebugDataReceived($"The program '{debugAgent.Configuration.GetApplicationName()}' has exited with code {exitCode} (0x{exitCode:x}).");
-        Protocol.SendEvent(new ExitedEvent(exitCode));
+    private void TargetExited(int? exitCode) {
+        var applicationName = debugAgent.Configuration.GetApplicationName();
+        if (exitCode.HasValue) {
+            OnDebugDataReceived($"The program '{applicationName}' has exited with code {exitCode} (0x{exitCode:x}).");
+            Protocol.SendEvent(new ExitedEvent(exitCode.Value));
+        }
+        else {
+            OnDebugDataReceived($"The program '{applicationName}' has exited.");
+        }
         Protocol.SendEvent(new TerminatedEvent());
     }
     private void TargetThreadStarted(int threadId) {
